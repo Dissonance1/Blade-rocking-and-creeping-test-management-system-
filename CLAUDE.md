@@ -30,7 +30,8 @@ frontend/src/
   stores/              Zustand state
 
 scripts/
-  weighing_bridge.py   Serial port → backend WebSocket bridge
+  weighing_bridge.py   iScale i-04 RS-232 → backend WebSocket bridge
+  dti_bridge.py        Sylvac BT DTI RS-232 → backend WebSocket bridge
   seed_data.py         Dev data seeder
 ```
 
@@ -127,7 +128,9 @@ OCR_PROVIDER=mock
 - **Notifications:** `NotificationManager` holds WebSocket connections in memory. On server restart, in-flight connections drop; clients should reconnect. Persisted notifications in DB survive restarts.
 - **Reports are async:** POST to `/reports/` returns immediately with `status=PENDING`. Poll `GET /reports/{id}` or wait for WebSocket push when `status=READY`.
 - **OCR provider:** Controlled by `OCR_PROVIDER` env var. Default is `mock` — safe for dev. Switch to `tesseract` or `paddleocr` only on servers with those system packages installed.
-- **Weighing bridge:** `scripts/weighing_bridge.py` is a standalone process, not part of the Docker Compose stack. Run it on the workstation physically connected to the scale.
+- **Two-station deployment:** OH PC (701 Hanger) hosts the database. Assembly PC (720 Hanger) sets `DATABASE_URL` to point at the OH PC's PostgreSQL over LAN. No central server.
+- **Batch size:** 90 LPTR + 90 HPTR = 180 blades per batch. Enforced per blade type via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`.
+- **Hardware bridges:** `scripts/weighing_bridge.py` (iScale i-04) and `scripts/dti_bridge.py` (Sylvac BT) are standalone processes, not part of the Docker Compose stack. Run on the workstation connected to the instruments.
 - **Soft deletes:** `User` and `Blade` use `deleted_at` timestamp. Always filter `WHERE deleted_at IS NULL` — SQLAlchemy mixins in `models/base.py` handle this automatically.
 - **Migrations:** Alembic autogenerate is used. After any model change, run `alembic revision --autogenerate` and review the generated script before applying.
 

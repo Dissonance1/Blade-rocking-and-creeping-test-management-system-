@@ -1,7 +1,7 @@
 # Technical Design Document
 ## Blade Rocking & Creep Test Management System
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Owner:** Meridian Data Labs  
 **Contact:** amit@meridiandatalabs.com
 
@@ -32,6 +32,17 @@
 
 The Blade Rocking & Creep Test Management System tracks turbine blades through their complete overhaul (OH) lifecycle: incoming inspection, dimensional measurement (rocking/creep tests), assembly slot allocation, dynamic balancing, and final quality verification before return to service.
 
+### Physical Deployment
+
+The system runs across **two independent workstations** connected over a LAN. There is no dedicated central server.
+
+| Station | Location | Role |
+|---------|----------|------|
+| **OH Station** | 701 Hanger — Measurement Station | Blade inspection, OCR, weighing, DTI, IRS generation |
+| **Assembly Station** | 720 Hanger — Set-Making & Balancing | Receipt verification, set-making (HAL algo), balancing, slot allocation |
+
+The OH PC hosts the shared PostgreSQL database. The Assembly PC application connects to it over the LAN. Both stations continue to function independently if the network is temporarily unavailable (read-only degrades gracefully; writes queue).
+
 ### Business Problem
 
 Turbine blades undergo periodic overhaul cycles. Each blade must be individually measured (weight, static moment, rocking value, creep value, height positions), grouped into compatible sets for a given engine, allocated to assembly slots, balanced, and re-verified before dispatch. Paper-based tracking and spreadsheets create traceability gaps and audit failures. This system replaces that process with a digital workflow that enforces sequencing, captures measurements directly from instruments, and produces exportable traceability reports.
@@ -40,21 +51,65 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 
 - Blade registration and identity verification (serial number, melt number, part number)
 - Multi-stage dimensional measurement capture with automated static moment calculation
-- Batch-level tracking when blades move between OH and Assembly departments (max 90 blades per batch)
+- Batch-level tracking: **180 blades per batch** (90 LPTR + 90 HPTR) moving between OH and Assembly
+- OCR camera capture of blade markings (serial, melt number) with mismatch detection
+- Live weight capture from Adam Equipment iScale i-04 (0.1 g) via serial bridge
+- Live DTI readings from Sylvac BT gauge (0.001 mm) via serial bridge
+- Assembly verification loop: scan → validate vs OH records → accept / modify / reject
+- Set-making with HAL descending-sort algorithm (2–3 balancing iterations)
 - Slot allocation and dynamic balancing record-keeping
 - Rejection workflow with reason classification and SUPER_ADMIN-controlled reopening
-- Async PDF/Excel report generation for compliance and shipping packages
+- Async PDF/Excel IRS report generation for compliance and shipping packages
 - Real-time WebSocket notifications across operator workstations
 - QR code generation per blade for mobile scanning
-- OCR scanning of blade markings to cross-check manual entry
-- Serial-port bridge to digital weighing scales
 - Full immutable audit trail at both HTTP and domain-event levels
 
 ---
 
 ## 2. Architecture
 
-### High-Level Stack
+### Physical Topology
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │  701 Hanger — OH Measurement Station                         │
+  │                                                              │
+  │  Hardware: iScale i-04 · Sylvac BT DTI · OCR Camera · QR    │
+  │                                                              │
+  │  ┌───────────────┐   ┌─────────────────────────────────┐    │
+  │  │  React 18 SPA │   │  FastAPI + Celery + NGINX        │    │
+  │  │  OH operator  │   │                                  │    │
+  │  │  interface    │   │  ┌────────────┐  ┌───────────┐  │    │
+  │  └───────────────┘   │  │ PostgreSQL │  │  Redis 7  │  │    │
+  │                      │  │  (shared)  │  │  (cache)  │  │    │
+  │  Bridge scripts:     │  └────────────┘  └───────────┘  │    │
+  │  weighing_bridge.py  └─────────────────────────────────┘    │
+  │  dti_bridge.py                                               │
+  └──────────────────────────────┬───────────────────────────────┘
+                                 │
+                          LAN (TCP/IP)
+                     bidirectional REST + WS
+                                 │
+  ┌──────────────────────────────┴───────────────────────────────┐
+  │  720 Hanger — Assembly Set-Making & Balancing Station        │
+  │                                                              │
+  │  Hardware: OCR Camera · QR Scanner · Balancing Machine       │
+  │                                                              │
+  │  ┌───────────────┐   ┌───────────────────────────────────┐  │
+  │  │  React 18 SPA │   │  FastAPI (lightweight)            │  │
+  │  │  Assembly op. │   │  Connects to OH PC database       │  │
+  │  │  interface    │   │  over LAN (same PostgreSQL)       │  │
+  │  └───────────────┘   └───────────────────────────────────┘  │
+  │                                                              │
+  │  Bridge scripts:                                             │
+  │  weighing_bridge.py  (--server https://<OH-PC-IP>)          │
+  │  dti_bridge.py       (--server https://<OH-PC-IP>)          │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+**Single shared database:** PostgreSQL runs only on the OH PC. The Assembly PC's backend points its `DATABASE_URL` to `postgresql+asyncpg://blade_user:pass@<OH-PC-LAN-IP>:5432/blade_rocking`. No replication or sync is required.
+
+### Software Stack
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -74,7 +129,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
    ┌──────────────────┐  ┌─────────────────┐  ┌───────────────────┐
    │  PostgreSQL 15   │  │   Redis 7        │  │  Celery Worker    │
    │  Primary store   │  │  JWT blacklist   │  │  Report gen tasks │
-   │  (async SQLAlch) │  │  Celery broker   │  │  (openpyxl /      │
+   │  (OH PC only)    │  │  Celery broker   │  │  (openpyxl /      │
    └──────────────────┘  │  Result backend  │  │   ReportLab)      │
                          └─────────────────┘  └───────────────────┘
 ```
@@ -92,7 +147,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 | State Machine | Custom (workflows/state_machine.py) | Blade status transition enforcement |
 | Notifications | WebSocket (in-memory pool) + DB | Real-time push + persistent unread count |
 | OCR | Pluggable (mock / Tesseract / PaddleOCR) | Blade marking extraction |
-| Hardware | pyserial | Weighing scale + DTI gauge serial bridges |
+| Hardware | pyserial | iScale i-04 weighing + Sylvac BT DTI serial bridges |
 
 ### Request Lifecycle
 
@@ -298,7 +353,7 @@ Stores metadata associated with a batch number, populated automatically or via t
 | `nomenclature` | VARCHAR(128) | |
 | `created_at` | TIMESTAMP | |
 
-Batch size is capped at **90 blades per batch number** (enforced at the API layer, constant `BATCH_MAX_BLADES = 90` in `endpoints/blades.py`).
+Batch size is capped at **90 LPTR + 90 HPTR = 180 blades total per batch number** (enforced at the API layer via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`). The per-type count is validated independently — you can have 90 LPTR and 0 HPTR, 45+45, or any combination up to 90 of each type.
 
 ### WorkflowLog (Immutable Audit Trail)
 
@@ -634,30 +689,34 @@ Max tasks per child: 50 (memory protection against leak accumulation).
 
 ## 9. Hardware Integration
 
-Three physical instruments feed live readings directly into the measurement form via standalone bridge scripts running on the Windows workstation. Each bridge follows the same pattern: read from serial/USB → POST to backend HTTP endpoint → backend broadcasts over WebSocket → browser auto-fills form field.
+Physical instruments are connected to the Windows workstation at each hangar station. Each instrument uses a standalone bridge script that forwards readings to the backend over HTTP/WebSocket.
 
 ```
-Instrument              Bridge script           Backend push endpoint     WebSocket endpoint
-──────────────────────  ──────────────────────  ────────────────────────  ─────────────────────
-Weighing Scale          weighing_bridge.py      POST /weighing/push       WS /weighing/ws
-DTI Gauge               dti_bridge.py           POST /dti/push            WS /dti/ws
-OCR Camera              ocr_camera_bridge.py*   POST /ocr/scan/blade-serial  (HTTP response)
+Instrument                  Model                 Bridge script         Push endpoint
+──────────────────────────  ────────────────────  ──────────────────    ────────────────────────
+Weighing Scale (OH + Assy)  iScale i-04, 0.1 g   weighing_bridge.py    POST /weighing/push
+DTI Gauge (OH + Assy)       Sylvac BT, 0.001 mm  dti_bridge.py         POST /dti/push
+OCR Camera (OH + Assy)      USB/UVC camera        ocr_camera_bridge.py  POST /ocr/scan/*
+QR Scanner (OH + Assy)      USB HID barcode gun   (keyboard emulation)  Browser reads directly
+Balancing Machine (Assy)    Turbine disc (HAL)    Manual entry UI       POST /slots/assign
 ```
 
-\* OCR camera bridge is described below; it calls the existing HTTP endpoint directly (no separate WebSocket needed because OCR results are one-shot).
-
-None of these scripts are part of the Docker Compose stack. Each runs on the workstation physically connected to the respective instrument.
+Bridge scripts are **not** part of the Docker Compose stack. Run each on the workstation physically connected to the instrument.
 
 ---
 
 ### 9.1 Weighing Scale (scripts/weighing_bridge.py)
 
-Reads blade weight from a digital weighing scale over RS-232/USB and forwards readings to the backend, where they are broadcast to all open browser tabs.
+**Model: Adam Equipment iScale i-04, resolution 0.1 g**
+
+Reads blade weight from the iScale i-04 over RS-232/USB and forwards readings to the backend, where they are broadcast to all open browser tabs.
 
 **Hardware interface:**
 
 | Parameter | Value |
 |-----------|-------|
+| Model | Adam Equipment iScale i-04 |
+| Resolution | 0.1 g |
 | Interface | RS-232 (DB-9) or USB-to-serial adapter |
 | Baud rate | 9600 (auto-detected; tries 4800, 2400, 19200, 38400) |
 | Data bits | 8 |
@@ -692,25 +751,29 @@ The bridge handles serial port auto-discovery, reconnection on disconnect, and d
 
 ### 9.2 DTI Gauge (scripts/dti_bridge.py)
 
-Reads height-position measurements (H1 … Hn) from a Dial Test Indicator gauge over RS-232. The bridge cycles through positions automatically: the operator moves the probe tip to each position and presses the gauge's DATA/SEND button; the bridge assigns each incoming reading to the next position in sequence and broadcasts it.
+**Model: Sylvac BT, resolution 0.001 mm (Bluetooth RS-232 adapter)**
+
+Reads height-position measurements (H1 … Hn) from the Sylvac BT dial gauge. The bridge cycles through positions automatically: the operator moves the probe tip to each position and presses the gauge's DATA/SEND button; the bridge assigns each incoming reading to the next position in sequence and broadcasts it.
 
 **Hardware interface:**
 
 | Parameter | Value |
 |-----------|-------|
-| Interface | RS-232 (DB-9) or USB-to-serial adapter |
+| Model | Sylvac BT |
+| Resolution | 0.001 mm |
+| Interface | Bluetooth RS-232 adapter (presents as virtual COM port) |
 | Baud rate | 9600 (auto-detected) |
 | Data bits | 8 |
 | Parity | None |
 | Stop bits | 1 |
-| Flow control | None (hardware flow on some Mitutoyo models) |
+| Flow control | None |
 | Default port | COM7 |
 | Data format | ASCII, e.g. `+012.345\r\n` (signed mm, 3 d.p.) |
 
-**Compatible gauges:**
+**Compatible gauges (drop-in replacement):**
 
+- Sylvac BT (primary — this deployment)
 - Mitutoyo 543 series (absolute digimatic indicator)
-- Mitutoyo 293 series (micrometer with SPC output)
 - Mahr MarCator 1086 R / 810 SW
 - Sylvac S_Dial Work / Smart
 - Any gauge producing a plain ASCII numeric reading per line

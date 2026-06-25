@@ -170,8 +170,10 @@ async def create_blade(
         HTTP 409 — a blade with the given serial number already exists.
     """
     from app.models.blade import Blade
+    from app.models.enums import BladeType
 
-    BATCH_MAX_BLADES = 90
+    # Each batch holds up to 90 LPTR blades + 90 HPTR blades = 180 total.
+    BATCH_MAX_PER_TYPE = 90
 
     # Uniqueness check
     existing = await db.execute(
@@ -186,21 +188,29 @@ async def create_blade(
             detail=f"Blade with serial number '{body.serial_number}' already exists",
         )
 
-    # Batch size limit
-    if body.batch_number:
-        batch_count_result = await db.execute(
+    # Batch size limit — per blade type (90 LPTR + 90 HPTR per batch)
+    if body.batch_number and body.blade_type is not None:
+        blade_type_val = (
+            body.blade_type
+            if isinstance(body.blade_type, BladeType)
+            else BladeType(body.blade_type)
+        )
+        type_label = blade_type_val.value.upper()
+        type_count_result = await db.execute(
             select(func.count(Blade.id)).where(
                 Blade.batch_number == body.batch_number,
+                Blade.blade_type == blade_type_val,
                 Blade.deleted_at.is_(None),
             )
         )
-        current_batch_size = batch_count_result.scalar_one()
-        if current_batch_size >= BATCH_MAX_BLADES:
+        current_type_count = type_count_result.scalar_one()
+        if current_type_count >= BATCH_MAX_PER_TYPE:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    f"Batch '{body.batch_number}' already has {current_batch_size} blades. "
-                    f"A batch cannot exceed {BATCH_MAX_BLADES} blades."
+                    f"Batch '{body.batch_number}' already has {current_type_count} {type_label} blades. "
+                    f"Each batch allows up to {BATCH_MAX_PER_TYPE} LPTR + {BATCH_MAX_PER_TYPE} HPTR "
+                    f"blades (180 total)."
                 ),
             )
 

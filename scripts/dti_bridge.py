@@ -19,9 +19,13 @@ Usage:
 Requirements (install once):
     pip install pyserial requests
 
-Supported gauges (RS-232 output):
-    Mitutoyo 543 series, Mitutoyo 293 series, Mahr MarCator, Sylvac S_Dial,
-    any gauge producing a plain ASCII numeric reading per line.
+Primary gauge (this deployment):
+    Sylvac BT, 0.001 mm resolution (Bluetooth RS-232 adapter) — default COM7
+
+Supported gauges (RS-232 / Bluetooth output):
+    Sylvac BT, Mitutoyo 543 series, Mitutoyo 293 series, Mahr MarCator,
+    Sylvac S_Dial Work / Smart, or any gauge producing a plain ASCII numeric
+    reading per line.
 """
 
 from __future__ import annotations

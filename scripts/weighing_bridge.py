@@ -4,6 +4,9 @@ Weighing machine bridge — run this on Windows (NOT in Docker/WSL).
 Reads weight from a serial COM port and POSTs each reading to the
 Blade Rocking backend so every open browser tab auto-fills the weight field.
 
+Primary scale (this deployment):
+    Adam Equipment iScale i-04, 0.1 g resolution, RS-232 output — default COM6
+
 Usage:
     python weighing_bridge.py                          # COM6, server = https://localhost
     python weighing_bridge.py --port COM3              # different port
