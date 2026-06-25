@@ -1,0 +1,63 @@
+import api from "./api";
+import type { Report, ReportType, PaginatedResponse } from "@/types";
+
+export interface GenerateReportPayload {
+  name: string;
+  report_type: ReportType;
+  filter_params?: {
+    blade_ids?: string[];
+    status?: string[];
+    station_id?: string;
+    date_from?: string;
+    date_to?: string;
+    include_rejected?: boolean;
+  };
+}
+
+export const reportService = {
+  list: async (params?: { skip?: number; limit?: number }): Promise<PaginatedResponse<Report>> => {
+    const { data } = await api.get<PaginatedResponse<Report>>("/reports/", { params });
+    return data;
+  },
+
+  get: async (id: string): Promise<Report> => {
+    const { data } = await api.get<Report>(`/reports/${id}`);
+    return data;
+  },
+
+  generate: async (payload: GenerateReportPayload): Promise<Report> => {
+    const { data } = await api.post<Report>("/reports/generate", payload);
+    return data;
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/reports/${id}`);
+  },
+
+  /** Trigger a browser download for a completed report (uses Authorization header). */
+  download: async (id: string, filename?: string): Promise<void> => {
+    const { data, headers } = await api.get(`/reports/${id}/download`, {
+      responseType: "blob",
+    });
+    const contentDisp = (headers["content-disposition"] as string) ?? "";
+    const nameMatch = contentDisp.match(/filename="?([^";\n]+)"?/);
+    const downloadName = nameMatch?.[1] ?? filename ?? `report_${id}`;
+
+    const blob = new Blob([data as BlobPart]);
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = downloadName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(url);
+  },
+
+  exportBlades: async (params?: { status?: string; skip?: number; limit?: number }): Promise<Blob> => {
+    const { data } = await api.post("/reports/export/blades", params ?? {}, {
+      responseType: "blob",
+    });
+    return data as Blob;
+  },
+};

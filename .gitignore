@@ -1,0 +1,78 @@
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+.env
+!.env.example
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# ─── Node / Frontend ─────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/build/
+.eslintcache
+*.tsbuildinfo
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+.docker/
+
+# ─── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── Uploads & generated reports ─────────────────────────────────────────────
+backend/uploads/
+backend/reports/
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ─── Secrets / local config ──────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+secrets/
+ssl/
+
+# ─── Claude Code session data ────────────────────────────────────────────────
+.claude/
+
+# ─── Windows alternate data streams ─────────────────────────────────────────
+*:Zone.Identifier

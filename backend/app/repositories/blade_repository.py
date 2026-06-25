@@ -1,0 +1,232 @@
+"""
+BladeRepository — all database operations for the Blade entity.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import structlog
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.models.blade import Blade
+from app.models.enums import BladeStatus
+from app.repositories.base import BaseRepository
+from app.schemas.blade import BladeCreate, BladeSearchParams, BladeUpdate
+
+log = structlog.get_logger(__name__)
+
+
+class BladeRepository(BaseRepository[Blade, BladeCreate, BladeUpdate]):
+    """Async repository for the ``blades`` table."""
+
+    model = Blade
+
+    def __init__(self, db: AsyncSession) -> None:
+        super().__init__(db)
+
+    # ------------------------------------------------------------------
+    # Lookup helpers
+    # ------------------------------------------------------------------
+
+    async def get_by_serial(self, serial_number: str) -> Blade | None:
+        """Return the active blade matching *serial_number* (case-sensitive)."""
+        stmt = select(Blade).where(
+            Blade.serial_number == serial_number.upper(),
+            Blade.deleted_at.is_(None),
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_status(
+        self,
+        status: BladeStatus,
+        station_id: uuid.UUID | None,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[Blade], int]:
+        """Return blades in *status*, optionally filtered to *station_id*."""
+        conditions: list[Any] = [
+            Blade.status == status,
+            Blade.deleted_at.is_(None),
+        ]
+        if station_id is not None:
+            conditions.append(Blade.current_station_id == station_id)
+
+        base_stmt = select(Blade).where(*conditions)
+
+        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total: int = (await self.db.execute(count_stmt)).scalar_one()
+
+        page_stmt = base_stmt.offset(skip).limit(limit)
+        rows = (await self.db.execute(page_stmt)).scalars().all()
+
+        return list(rows), total
+
+    # ------------------------------------------------------------------
+    # Status transition
+    # ------------------------------------------------------------------
+
+    async def update_status(
+        self,
+        blade_id: uuid.UUID,
+        new_status: BladeStatus,
+        updated_by: uuid.UUID,
+    ) -> Blade:
+        """
+        Directly set ``blade.status`` without going through the workflow engine.
+
+        Prefer :meth:`WorkflowEngine.transition` in service code; this method
+        exists as the low-level DB primitive used by the engine itself.
+
+        Raises :class:`ValueError` when the blade is not found.
+        """
+        blade = await self.get(blade_id)
+        if blade is None:
+            raise ValueError(f"Blade {blade_id} not found")
+
+        old_status = blade.status
+        blade.status = new_status
+        self.db.add(blade)
+        await self.db.flush()
+        await self.db.refresh(blade)
+
+        log.info(
+            "blade.status_updated",
+            blade_id=str(blade_id),
+            from_status=old_status.value,
+            to_status=new_status.value,
+            updated_by=str(updated_by),
+        )
+        return blade
+
+    # ------------------------------------------------------------------
+    # Rich search
+    # ------------------------------------------------------------------
+
+    async def search(
+        self,
+        params: BladeSearchParams,
+    ) -> tuple[list[Blade], int]:
+        """
+        Full-featured search supporting:
+
+        * Partial ILIKE match on ``serial_number``, ``melt_number``,
+          ``work_order_number``, ``part_number``
+        * Exact match on ``status``, ``station_id``, ``assigned_to_id``,
+          ``created_by_id``
+        * Date-range filter on ``created_at``
+        * ``ocr_mismatch_only`` flag
+        * Pagination and sort order
+        """
+        conditions: list[Any] = [Blade.deleted_at.is_(None)]
+
+        # --- text filters (ILIKE) ---
+        if params.serial_number:
+            conditions.append(
+                Blade.serial_number.ilike(f"%{params.serial_number}%")
+            )
+        if params.melt_number:
+            conditions.append(Blade.melt_number.ilike(f"%{params.melt_number}%"))
+        if params.work_order_number:
+            conditions.append(
+                Blade.work_order_number.ilike(f"%{params.work_order_number}%")
+            )
+        if params.part_number:
+            conditions.append(Blade.part_number.ilike(f"%{params.part_number}%"))
+
+        # --- exact filters ---
+        if params.status is not None:
+            conditions.append(Blade.status == params.status)
+        if params.station_id is not None:
+            conditions.append(Blade.current_station_id == params.station_id)
+        if params.assigned_to_id is not None:
+            conditions.append(Blade.assigned_to_id == params.assigned_to_id)
+        if params.created_by_id is not None:
+            conditions.append(Blade.created_by_id == params.created_by_id)
+        if params.ocr_mismatch_only:
+            conditions.append(Blade.ocr_mismatch_flag.is_(True))
+
+        # --- date range (created_at) ---
+        if params.date_from is not None:
+            from_dt = datetime(
+                params.date_from.year,
+                params.date_from.month,
+                params.date_from.day,
+                tzinfo=timezone.utc,
+            )
+            conditions.append(Blade.created_at >= from_dt)
+        if params.date_to is not None:
+            to_dt = datetime(
+                params.date_to.year,
+                params.date_to.month,
+                params.date_to.day,
+                23, 59, 59,
+                tzinfo=timezone.utc,
+            )
+            conditions.append(Blade.created_at <= to_dt)
+
+        base_stmt = select(Blade).where(and_(*conditions))
+
+        # --- sorting ---
+        sort_column = getattr(Blade, params.sort_by, None)
+        if sort_column is None:
+            sort_column = Blade.created_at
+        base_stmt = base_stmt.order_by(
+            sort_column.desc() if params.sort_desc else sort_column.asc()
+        )
+
+        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total: int = (await self.db.execute(count_stmt)).scalar_one()
+
+        skip = (params.page - 1) * params.page_size
+        page_stmt = base_stmt.offset(skip).limit(params.page_size)
+        rows = (await self.db.execute(page_stmt)).scalars().all()
+
+        return list(rows), total
+
+    # ------------------------------------------------------------------
+    # Eager-load relationships
+    # ------------------------------------------------------------------
+
+    async def get_with_measurements(self, blade_id: uuid.UUID) -> Blade | None:
+        """
+        Return the blade with ``measurements``, ``slot_allocation``, and
+        ``workflow_logs`` eagerly loaded in a single round-trip.
+        """
+        stmt = (
+            select(Blade)
+            .options(
+                selectinload(Blade.measurements),
+                selectinload(Blade.slot_allocation),
+                selectinload(Blade.workflow_logs),
+            )
+            .where(
+                Blade.id == blade_id,
+                Blade.deleted_at.is_(None),
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # Station helpers
+    # ------------------------------------------------------------------
+
+    async def get_pending_at_station(self, station_id: uuid.UUID) -> list[Blade]:
+        """
+        Return all non-deleted blades currently assigned to *station_id*
+        that are in a "work in progress" status (not COMPLETED or REJECTED).
+        """
+        terminal_statuses = {BladeStatus.COMPLETED, BladeStatus.REJECTED}
+        stmt = select(Blade).where(
+            Blade.current_station_id == station_id,
+            Blade.deleted_at.is_(None),
+            Blade.status.not_in(terminal_statuses),
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return list(rows)
