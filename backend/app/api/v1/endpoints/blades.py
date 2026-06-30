@@ -377,6 +377,7 @@ async def list_blades(
                 Measurement.blade_id,
                 Measurement.weight_grams,
                 Measurement.static_moment_gcm,
+                Measurement.height_data,
             )
             .join(
                 subq,
@@ -388,6 +389,7 @@ async def list_blades(
             meas_by_blade[str(row.blade_id)] = {
                 "weight_grams": float(row.weight_grams) if row.weight_grams else None,
                 "static_moment_gcm": float(row.static_moment_gcm) if row.static_moment_gcm else None,
+                "height_data": row.height_data or {},
             }
 
     # Build list items enriched with measurement data
@@ -412,6 +414,7 @@ async def list_blades(
             "updated_at": b.updated_at,
             "weight_grams": m.get("weight_grams"),
             "static_moment_gcm": m.get("static_moment_gcm"),
+            "height_data": m.get("height_data", {}),
         }
         items.append(item)
 
@@ -566,8 +569,13 @@ async def get_blade(
     current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Any:
-    """Return the complete record for a single blade, including OCR and rejection data."""
-    return await _get_blade_or_404(blade_id, db)
+    """Return the complete record for a single blade, including measurements and OCR data."""
+    from app.repositories.blade_repository import BladeRepository
+    repo = BladeRepository(db)
+    blade = await repo.get_with_measurements(blade_id)
+    if blade is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Blade {blade_id} not found")
+    return blade
 
 
 # ---------------------------------------------------------------------------
@@ -696,16 +704,8 @@ async def send_to_assembly(
     await db.commit()
     await db.refresh(blade)
 
-    # Notify assembly operators that a blade is ready for slot allocation
-    async def _notify_sent_to_assembly() -> None:
-        from app.notifications.service import NotificationService
-        try:
-            svc = NotificationService(db)
-            await svc.dispatch_blade_event("blade_received", blade, current_user)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("notification_dispatch_failed", error=str(exc))
-
-    background_tasks.add_task(_notify_sent_to_assembly)
+    # Batch-level notification is sent by POST /batches/{batch}/send-to-assembly.
+    # No per-blade notification here — that would spam 90 messages per batch.
 
     logger.info("blade_sent_to_assembly", blade_id=str(blade_id))
     return blade
@@ -769,6 +769,41 @@ async def return_to_oh(
     await db.commit()
     await db.refresh(blade)
 
+    # When every blade in the batch is back at OH, send one batch-level notification.
+    batch_number = blade.batch_number
+    if batch_number:
+        async def _notify_batch_returned(_batch: str) -> None:
+            from app.notifications.service import NotificationService
+            from app.models.notification import NotificationType
+            from app.db.session import AsyncSessionLocal
+            try:
+                async with AsyncSessionLocal() as _db:
+                    remaining = (await _db.execute(
+                        select(func.count(Blade.id)).where(
+                            Blade.batch_number == _batch,
+                            Blade.deleted_at.is_(None),
+                            Blade.status.notin_([
+                                BladeStatus.RETURNED_TO_OH,
+                                BladeStatus.FINAL_VERIFICATION,
+                                BladeStatus.COMPLETED,
+                                BladeStatus.REJECTED,
+                            ]),
+                        )
+                    )).scalar_one()
+                    if remaining == 0:
+                        svc = NotificationService(_db)
+                        await svc.notify_roles(
+                            roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                            title=f"Batch {_batch} returned to OH",
+                            body=f"All blades in batch {_batch} have been returned from Assembly. Final verification can begin.",
+                            notification_type=NotificationType.WORKFLOW_UPDATED,
+                            metadata={"batch_number": _batch},
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("notify_batch_returned_failed", error=str(exc))
+
+        background_tasks.add_task(_notify_batch_returned, batch_number)
+
     logger.info("blade_returned_to_oh", blade_id=str(blade_id))
     return blade
 
@@ -829,6 +864,37 @@ async def complete_blade(
 
     await db.commit()
     await db.refresh(blade)
+
+    # When every blade in the batch is COMPLETED, notify Assembly + Super Admin.
+    batch_number = blade.batch_number
+    if batch_number:
+        async def _notify_batch_completed(_batch: str) -> None:
+            from app.notifications.service import NotificationService
+            from app.models.notification import NotificationType
+            from app.db.session import AsyncSessionLocal
+            try:
+                async with AsyncSessionLocal() as _db:
+                    remaining = (await _db.execute(
+                        select(func.count(Blade.id)).where(
+                            Blade.batch_number == _batch,
+                            Blade.deleted_at.is_(None),
+                            Blade.status != BladeStatus.COMPLETED,
+                            Blade.status != BladeStatus.REJECTED,
+                        )
+                    )).scalar_one()
+                    if remaining == 0:
+                        svc = NotificationService(_db)
+                        await svc.notify_roles(
+                            roles=["ASSEMBLY_OPERATOR", "SUPER_ADMIN"],
+                            title=f"Batch {_batch} — Final verification complete",
+                            body=f"All blades in batch {_batch} have passed final OH verification and are marked COMPLETED.",
+                            notification_type=NotificationType.GENERAL,
+                            metadata={"batch_number": _batch},
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("notify_batch_completed_failed", error=str(exc))
+
+        background_tasks.add_task(_notify_batch_completed, batch_number)
 
     logger.info("blade_completed", blade_id=str(blade_id))
     return blade
@@ -910,16 +976,30 @@ async def reject_blade(
     await db.commit()
     await db.refresh(blade)
 
-    # Notify relevant users that blade was rejected
-    async def _notify_rejected() -> None:
+    # Notify OH + Super Admin that a blade (and therefore its batch) is rejected.
+    async def _notify_blade_rejected() -> None:
         from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
         try:
-            svc = NotificationService(db)
-            await svc.dispatch_blade_event("blade_rejected", blade, current_user)
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                batch_ref = f" (Batch {blade.batch_number})" if blade.batch_number else ""
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Blade {blade.serial_number} rejected{batch_ref}",
+                    body=(
+                        f"Blade {blade.serial_number}{batch_ref} has been rejected. "
+                        f"Reason: {body.rejection_notes or 'No notes provided'}. "
+                        f"The batch requires review."
+                    ),
+                    notification_type=NotificationType.BLADE_REJECTED,
+                    metadata={"batch_number": blade.batch_number, "blade_serial": blade.serial_number},
+                )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("notification_dispatch_failed", error=str(exc))
+            logger.warning("notify_blade_rejected_failed", error=str(exc))
 
-    background_tasks.add_task(_notify_rejected)
+    background_tasks.add_task(_notify_blade_rejected)
 
     logger.info("blade_rejected", blade_id=str(blade_id), reason_id=str(body.rejection_reason_id))
     return blade

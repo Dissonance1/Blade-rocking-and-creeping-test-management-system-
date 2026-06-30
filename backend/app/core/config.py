@@ -66,6 +66,16 @@ class Settings(BaseSettings):
         return list(value)
 
     # ------------------------------------------------------------------
+    # Station identity (two-station deployment)
+    # ------------------------------------------------------------------
+    STATION_ROLE: Literal["OH", "ASSEMBLY"] = "OH"
+    STATION_NAME: str = "OH Station — 701 Hanger"
+    # Assembly PC only: base URL of the OH PC application on the LAN
+    OH_SYNC_URL: str = ""
+    # Shared API key for OH → Assembly sync endpoints (leave empty in dev)
+    OH_SYNC_API_KEY: str = ""
+
+    # ------------------------------------------------------------------
     # OCR
     # ------------------------------------------------------------------
     OCR_PROVIDER: str = "paddleocr"  # mock | tesseract | paddleocr

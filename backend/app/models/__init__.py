@@ -13,6 +13,8 @@ from app.models.notification import Notification
 from app.models.report import Report
 from app.models.batch_group import BatchGroup
 from app.models.batch_event import BatchEvent
+from app.models.assembly_receipt import AssemblyBatchReceipt
+from app.models.assembly_blade_record import AssemblyBladeRecord
 
 __all__ = [
     "User",
@@ -29,4 +31,6 @@ __all__ = [
     "Report",
     "BatchGroup",
     "BatchEvent",
+    "AssemblyBatchReceipt",
+    "AssemblyBladeRecord",
 ]

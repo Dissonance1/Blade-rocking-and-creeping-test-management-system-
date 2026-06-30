@@ -1,0 +1,192 @@
+version: "3.9"
+
+# =============================================================================
+# Blade Rocking & Creep Test System — Assembly Station (720 Hanger)
+#
+# Run this compose file on the Assembly PC.
+# This station has its own local database and syncs blade reference data
+# from the OH PC over the LAN via the sync REST API.
+#
+# First-time setup:
+#   1. cp .env.assembly.example .env.assembly
+#      → Set OH_SYNC_URL to the OH PC LAN IP, e.g. http://192.168.1.50
+#      → Set OH_SYNC_API_KEY to the same value as on the OH PC
+#   2. docker-compose -f docker-compose.assembly.yml build
+#   3. docker-compose -f docker-compose.assembly.yml up -d
+#   4. docker-compose -f docker-compose.assembly.yml exec assembly_backend alembic upgrade head
+#
+# Local UI:  http://localhost/
+# =============================================================================
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+    target: production
+  env_file: .env.assembly
+  environment:
+    STATION_ROLE: "ASSEMBLY"
+  depends_on:
+    assembly_postgres:
+      condition: service_healthy
+    assembly_redis:
+      condition: service_healthy
+  networks:
+    - assembly_network
+  restart: unless-stopped
+
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL 15 — local Assembly database
+  # --------------------------------------------------------------------------
+  assembly_postgres:
+    image: postgres:15-alpine
+    container_name: assembly_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-blade_rocking_assembly}
+      POSTGRES_USER: ${POSTGRES_USER:-blade_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      - assembly_postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-blade_user} -d ${POSTGRES_DB:-blade_rocking_assembly}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - assembly_network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Redis 7
+  # --------------------------------------------------------------------------
+  assembly_redis:
+    image: redis:7-alpine
+    container_name: assembly_redis
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD:-changeme_redis_assembly}
+    volumes:
+      - assembly_redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_redis_assembly}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - assembly_network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # FastAPI Backend
+  # --------------------------------------------------------------------------
+  assembly_backend:
+    <<: *backend-common
+    container_name: assembly_backend
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/assembly/backend:/app/logs
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # Celery Worker
+  # --------------------------------------------------------------------------
+  assembly_celery:
+    <<: *backend-common
+    container_name: assembly_celery
+    command: >
+      celery -A app.worker worker
+      --loglevel=info
+      -Q reports,celery
+      --concurrency=2
+      --max-tasks-per-child=50
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/assembly/celery:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  # --------------------------------------------------------------------------
+  # React Frontend
+  # --------------------------------------------------------------------------
+  assembly_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: assembly_frontend
+    depends_on:
+      - assembly_backend
+    expose:
+      - "80"
+    networks:
+      - assembly_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # NGINX
+  # --------------------------------------------------------------------------
+  assembly_nginx:
+    image: nginx:1.27-alpine
+    container_name: assembly_nginx
+    depends_on:
+      assembly_backend:
+        condition: service_healthy
+      assembly_frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs/assembly/nginx:/var/log/nginx
+    networks:
+      - assembly_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sfk", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  assembly_network:
+    driver: bridge
+    name: assembly_blade_rocking_net
+
+volumes:
+  assembly_postgres_data:
+    name: assembly_blade_postgres_data
+  assembly_redis_data:
+    name: assembly_blade_redis_data

@@ -246,7 +246,7 @@ class NotificationService:
             "balancing_done": ([ROLE_SUPER_ADMIN, ROLE_ASSEMBLY_OPERATOR], False),
             "blade_rejected": ([ROLE_SUPER_ADMIN, ROLE_OH_OPERATOR], True),
             "verification_pending": ([ROLE_SUPER_ADMIN], False),
-            "workflow_updated": ([ROLE_SUPER_ADMIN], True),
+            "workflow_updated": ([ROLE_SUPER_ADMIN], False),
         }
 
         if event_type in routing:
@@ -311,3 +311,53 @@ class NotificationService:
                 blade_id=blade.id,
                 metadata={**payload, **(extra_data or {})},
             )
+
+    async def notify_roles(
+        self,
+        roles: list[str],
+        title: str,
+        body: str,
+        notification_type: NotificationType = NotificationType.GENERAL,
+        metadata: dict | None = None,
+    ) -> None:
+        """Send one notification to every active user that has any of *roles*."""
+        from app.models.user import User as UserModel, UserRole as UserRoleModel, Role
+
+        result = await self._db.execute(
+            select(UserModel)
+            .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
+            .join(Role, Role.id == UserRoleModel.role_id)
+            .where(
+                Role.name.in_(roles),
+                UserModel.is_active.is_(True),
+                UserModel.deleted_at.is_(None),
+            )
+            .distinct()
+        )
+        for user in result.scalars().all():
+            await self.create_notification(
+                user_id=user.id,
+                title=title,
+                body=body,
+                notification_type=notification_type,
+                blade_id=None,
+                metadata=metadata or {},
+            )
+
+    async def notify_batch_received(
+        self,
+        batch_number: str,
+        blade_count: int,
+        operator_display: str,
+    ) -> None:
+        """ONE notification to OH + Super Admin when Assembly marks a batch received."""
+        await self.notify_roles(
+            roles=[ROLE_OH_OPERATOR, ROLE_SUPER_ADMIN],
+            title=f"Batch {batch_number} received at Assembly",
+            body=(
+                f"Batch {batch_number} ({blade_count} blade{'s' if blade_count != 1 else ''}) "
+                f"has been received at Assembly by {operator_display}."
+            ),
+            notification_type=NotificationType.BLADE_RECEIVED,
+            metadata={"batch_number": batch_number, "blade_count": blade_count},
+        )

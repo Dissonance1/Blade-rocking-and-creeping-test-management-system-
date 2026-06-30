@@ -20,6 +20,8 @@ class BladeStatus(str, enum.Enum):
     OH_INSPECTION = "OH_INSPECTION"
     MEASUREMENTS_RECORDED = "MEASUREMENTS_RECORDED"
     SENT_TO_ASSEMBLY = "SENT_TO_ASSEMBLY"
+    ASSEMBLY_RECEIVED = "ASSEMBLY_RECEIVED"   # batch marked received at 720 Hanger
+    ASSEMBLY_VERIFIED = "ASSEMBLY_VERIFIED"   # blade scanned & accepted at Assembly
     SLOT_ASSIGNED = "SLOT_ASSIGNED"
     BALANCING_IN_PROGRESS = "BALANCING_IN_PROGRESS"
     BALANCING_COMPLETED = "BALANCING_COMPLETED"
@@ -84,3 +86,10 @@ class BatchEventType(str, enum.Enum):
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
     MODIFIED = "MODIFIED"
+
+
+class AssemblyVerificationStatus(str, enum.Enum):
+    PENDING = "PENDING"       # blade arrived at Assembly, not yet scanned
+    ACCEPTED = "ACCEPTED"     # readings match OH; accepted as-is
+    MODIFIED = "MODIFIED"     # accepted with operator-overridden readings
+    REJECTED = "REJECTED"     # rejected at Assembly (out of tolerance / damage)

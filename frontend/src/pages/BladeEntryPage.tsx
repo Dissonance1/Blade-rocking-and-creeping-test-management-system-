@@ -39,6 +39,7 @@ import { ocrService, type OcrScanResult } from "@/services/ocrService";
 import { extractApiError } from "@/services/api";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/utils/cn";
+import { useDTISocket } from "@/hooks/useDTISocket";
 
 // ─── Weighing machine hook ────────────────────────────────────────────────────
 
@@ -737,6 +738,27 @@ export default function BladeEntryPage() {
 
   const { status: scaleStatus, locked: scaleLocked, toggleLock } = useWeighingScale(applyWeight);
 
+  // ── DTI gauge ─────────────────────────────────────────────────────────────
+  const [dtiStation, setDtiStation] = useState<string>(
+    () => localStorage.getItem("dti_station") ?? "1"
+  );
+  const { lastReading: dtiReading, connected: dtiConn } = useDTISocket(dtiStation);
+
+  // Which row is receiving live gauge readings (null = all locked / gauge off)
+  const [activeRowIdx, setActiveRowIdx] = useState<number | null>(0);
+  // Per-row locked state — locked rows are frozen and won't be overwritten by gauge
+  const [lockedRows, setLockedRows] = useState<boolean[]>(() => heightRows.map(() => false));
+
+  // Fill the active row with the latest gauge reading (if not locked)
+  useEffect(() => {
+    if (!dtiReading || activeRowIdx === null) return;
+    if (lockedRows[activeRowIdx]) return;
+    setHeightRows(rows =>
+      rows.map((r, i) => i === activeRowIdx ? { ...r, val: dtiReading.value } : r)
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dtiReading]);
+
   const batchNumber = watch("batch_number");
 
   // Batch lookup — debounced API call to PostgreSQL batch_groups table
@@ -1271,73 +1293,156 @@ export default function BladeEntryPage() {
               {/* Height data */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">
+                  <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium flex items-center gap-2">
                     Height Positions (mm)
+                    {dtiConn ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                        <Wifi className="w-3 h-3" />
+                        DTI Live
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400">
+                        <WifiOff className="w-3 h-3" />
+                        DTI offline
+                      </span>
+                    )}
                   </Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="border-2 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-                    onClick={() =>
-                      setHeightRows((rows) => [
-                        ...rows,
-                        { pos: (rows[rows.length - 1]?.pos ?? 0) + 1, val: 0 },
-                      ])
-                    }
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Position
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                      <span>Rig:</span>
+                      {["1", "2"].map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => { setDtiStation(s); localStorage.setItem("dti_station", s); }}
+                          className={cn(
+                            "px-1.5 py-0.5 rounded font-mono text-xs border transition-colors",
+                            dtiStation === s
+                              ? "bg-orange-500 border-orange-500 text-white"
+                              : "border-slate-300 dark:border-slate-600 hover:border-orange-400"
+                          )}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-2 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      onClick={() => {
+                        setHeightRows((rows) => [
+                          ...rows,
+                          { pos: (rows[rows.length - 1]?.pos ?? 0) + 1, val: 0 },
+                        ]);
+                        setLockedRows((prev) => [...prev, false]);
+                      }}
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Position
+                    </Button>
+                  </div>
                 </div>
                 <div className="space-y-2">
-                  {heightRows.map((row, idx) => (
-                    <div key={idx} className="flex items-center gap-3">
-                      <span className="text-slate-500 dark:text-slate-400 text-sm w-20">
-                        Position {idx + 1}
-                      </span>
-                      <Input
-                        type="number"
-                        value={row.pos}
-                        onChange={(e) =>
-                          setHeightRows((rows) =>
-                            rows.map((r, i) =>
-                              i === idx ? { ...r, pos: Number(e.target.value) } : r
+                  {heightRows.map((row, idx) => {
+                    const isActive = dtiConn && activeRowIdx === idx;
+                    const isLocked = lockedRows[idx] ?? false;
+                    return (
+                      <div
+                        key={idx}
+                        className={cn(
+                          "flex items-center gap-3 p-1.5 rounded-lg transition-colors",
+                          dtiConn && !isLocked && "cursor-pointer",
+                          isActive && !isLocked && "bg-emerald-50/40 dark:bg-emerald-900/10 ring-1 ring-emerald-400",
+                          isLocked && dtiConn && "bg-amber-50/30 dark:bg-amber-900/10",
+                        )}
+                        onClick={() => { if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
+                      >
+                        <span className="text-slate-500 dark:text-slate-400 text-sm w-20 shrink-0">
+                          Position {idx + 1}
+                        </span>
+                        <Input
+                          type="number"
+                          value={row.pos}
+                          onChange={(e) =>
+                            setHeightRows((rows) =>
+                              rows.map((r, i) => i === idx ? { ...r, pos: Number(e.target.value) } : r)
                             )
-                          )
-                        }
-                        className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white w-32"
-                      />
-                      <span className="text-slate-500 dark:text-slate-400 text-sm">→</span>
-                      <Input
-                        type="number"
-                        step="0.001"
-                        value={row.val}
-                        onChange={(e) =>
-                          setHeightRows((rows) =>
-                            rows.map((r, i) =>
-                              i === idx ? { ...r, val: Number(e.target.value) } : r
-                            )
-                          )
-                        }
-                        placeholder="Value (mm)"
-                        className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white flex-1"
-                      />
-                      {idx > 0 && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() =>
-                            setHeightRows((rows) => rows.filter((_, i) => i !== idx))
                           }
-                          className="text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+                          className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white w-32"
+                        />
+                        <span className="text-slate-500 dark:text-slate-400 text-sm">→</span>
+                        <Input
+                          type="number"
+                          step="0.001"
+                          value={row.val}
+                          readOnly={isLocked && dtiConn}
+                          onChange={(e) =>
+                            setHeightRows((rows) =>
+                              rows.map((r, i) => i === idx ? { ...r, val: Number(e.target.value) } : r)
+                            )
+                          }
+                          onClick={(e) => { e.stopPropagation(); if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
+                          placeholder="Value (mm)"
+                          className={cn(
+                            "bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white flex-1 transition-colors",
+                            isActive && !isLocked
+                              ? "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10"
+                              : isLocked && dtiConn
+                              ? "border-amber-400 bg-amber-50/40 dark:bg-amber-900/10"
+                              : "border-slate-300 dark:border-slate-600",
+                          )}
+                        />
+                        {dtiConn && (
+                          <button
+                            type="button"
+                            title={isLocked ? "Unlock: resume live reading" : "Lock: freeze this reading"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isLocked) {
+                                setLockedRows((prev) => { const n = [...prev]; n[idx] = false; return n; });
+                                setActiveRowIdx(idx);
+                              } else {
+                                setLockedRows((prev) => { const n = [...prev]; n[idx] = true; return n; });
+                                const next = heightRows.findIndex((_, i) => i > idx && !(lockedRows[i] ?? false));
+                                setActiveRowIdx(next === -1 ? null : next);
+                              }
+                            }}
+                            className={cn(
+                              "shrink-0 flex items-center justify-center w-9 h-9 rounded-lg border-2 transition-colors",
+                              isLocked
+                                ? "border-amber-400 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+                                : "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                            )}
+                          >
+                            {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                          </button>
+                        )}
+                        {idx > 0 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHeightRows((rows) => rows.filter((_, i) => i !== idx));
+                              setLockedRows((prev) => prev.filter((_, i) => i !== idx));
+                              setActiveRowIdx((prev) => {
+                                if (prev === null) return null;
+                                if (prev === idx) return Math.max(0, idx - 1);
+                                if (prev > idx) return prev - 1;
+                                return prev;
+                              });
+                            }}
+                            className="text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

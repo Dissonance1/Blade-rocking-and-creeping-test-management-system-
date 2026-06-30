@@ -10,8 +10,19 @@ The operator physically moves the probe tip to each position, then presses the
 gauge's DATA/SEND button.  The bridge associates each incoming reading with the
 next position in sequence and broadcasts it to the backend.
 
+Two-station deployment (two gauges, two blades simultaneously):
+    Station 1 (e.g. OH Rig 1):
+        python dti_bridge.py --port COM1 --station 1
+    Station 2 (e.g. OH Rig 2):
+        python dti_bridge.py --port COM2 --station 2
+
+    Each browser tab connects to the DTI WebSocket with ?station=1 or ?station=2
+    so readings from each gauge only reach the matching measurement form.
+
 Usage:
-    python dti_bridge.py                                          # COM7, H1-H4
+    python dti_bridge.py                                          # COM7, station 1, H1-H4
+    python dti_bridge.py --port COM1 --station 1                 # rig 1
+    python dti_bridge.py --port COM2 --station 2                 # rig 2
     python dti_bridge.py --port COM4                             # different port
     python dti_bridge.py --port COM7 --positions H1 H2 H3 H4 H5 # five positions
     python dti_bridge.py --port COM7 --server https://192.168.1.50
@@ -34,7 +45,6 @@ import argparse
 import logging
 import re
 import time
-from itertools import cycle
 
 import requests
 import serial
@@ -50,11 +60,12 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_PORT      = "COM7"
-DEFAULT_SERVER    = "https://localhost"
-DEFAULT_POSITIONS = ["H1", "H2", "H3", "H4"]
-PUSH_PATH         = "/api/v1/dti/push"
-BAUD_RATES        = [9600, 4800, 2400, 19200, 38400]
+DEFAULT_PORT    = "COM1"
+DEFAULT_SERVER  = "https://localhost"
+DEFAULT_STATION = "1"
+PUSH_PATH       = "/api/v1/dti/push"
+POSITIONS_PATH  = "/api/v1/dti/positions"
+BAUD_RATES      = [9600, 4800, 2400, 19200, 38400]
 
 # Many DTI gauges output: "+012.345\r\n" or "12.345\r\n" or "  12.345 mm\r\n"
 _DTI_RE = re.compile(r"[+-]?\d+\.?\d*")
@@ -74,7 +85,7 @@ def _parse_reading(raw: str) -> float | None:
 
 
 def _open_port(port: str, baud: int) -> serial.Serial | None:
-    """Try one baud rate; return an open Serial or None."""
+    """Open the port at the given baud rate; return Serial or None on error."""
     try:
         ser = serial.Serial(
             port=port,
@@ -83,27 +94,29 @@ def _open_port(port: str, baud: int) -> serial.Serial | None:
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
             timeout=2,
+            xonxoff=False,
+            rtscts=False,
+            dsrdtr=False,
         )
-        line = ser.readline()
-        if line:
-            log.info("[serial] connected to %s @ %d baud", port, baud)
-            return ser
-        ser.close()
+        ser.reset_input_buffer()  # discard any data buffered before we connected
+        log.info("[serial] connected to %s @ %d baud", port, baud)
+        return ser
     except serial.SerialException as exc:
         log.debug("[serial] %d baud failed: %s", baud, exc)
     return None
 
 
 def _connect(port: str) -> serial.Serial | None:
-    """Try every baud rate in order. Return open Serial or None."""
+    """Open the port; for virtual COM ports (VMux2) just open at 9600."""
     log.info("[serial] opening %s …", port)
+    # Try 9600 first (VMux2 virtual ports work at any baud — just need to open)
     for baud in BAUD_RATES:
         ser = _open_port(port, baud)
         if ser:
             return ser
     log.error(
-        "[serial] could not open %s at any baud rate.\n"
-        "  • Is the DTI gauge powered on and plugged in?\n"
+        "[serial] could not open %s.\n"
+        "  • Is VMux2 running and configured with this COM port?\n"
         "  • Is the COM port correct?  (Run: python -m serial.tools.list_ports)\n"
         "  • Is another application using the port?",
         port,
@@ -113,11 +126,12 @@ def _connect(port: str) -> serial.Serial | None:
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def run(port: str, server: str, positions: list[str]) -> None:
+def run(port: str, server: str, station: str) -> None:
     push_url = server.rstrip("/") + PUSH_PATH
+    positions_url = server.rstrip("/") + POSITIONS_PATH
     log.info("[http ] push URL → %s", push_url)
     log.info("[http ] SSL verification disabled (self-signed cert)")
-    log.info("[dti  ] position sequence: %s (cycling)", " → ".join(positions))
+    log.info("[dti  ] station: %s", station)
 
     session = requests.Session()
     session.verify = False
@@ -138,14 +152,16 @@ def run(port: str, server: str, positions: list[str]) -> None:
     if ser is None:
         return
 
-    pos_cycle = cycle(positions)
-    current_pos = next(pos_cycle)
+    current_pos = "H1"  # position label sent with every reading (frontend ignores it)
+    last_accepted = 0.0          # monotonic timestamp of last accepted reading
+    DEBOUNCE_S    = 0.35         # ignore duplicate sends within 350 ms
+
     log.info("[ready] waiting for DTI reading at position %s — Ctrl+C to stop", current_pos)
 
     try:
         while True:
             try:
-                raw = ser.readline()
+                raw = ser.read_until(b'\r')
             except serial.SerialException as exc:
                 log.error("[serial] read error: %s — reconnecting in 5 s …", exc)
                 try:
@@ -171,16 +187,23 @@ def run(port: str, server: str, positions: list[str]) -> None:
                 log.debug("[dti  ] unparseable line: %r", decoded)
                 continue
 
-            log.info("[dti  ] %s = %.4f mm  →  posting …", current_pos, value)
+            # Debounce: Sylvac BT can emit the same frame twice on one DATA press
+            now = time.monotonic()
+            if now - last_accepted < DEBOUNCE_S:
+                log.debug("[dti  ] debounced (%.0f ms since last) — skipping %r", (now - last_accepted) * 1000, decoded)
+                continue
+            last_accepted = now
+
+            log.info("[dti  ] %s = %.4f mm  →  posting (station %s) …", current_pos, value, station)
 
             try:
                 resp = session.post(
                     push_url,
-                    json={"position": current_pos, "value": value},
+                    json={"station": station, "position": current_pos, "value": value},
                     timeout=3,
                 )
                 if resp.status_code == 200:
-                    log.info("[http ] ✓ accepted  %s = %.4f", current_pos, value)
+                    log.info("[http ] ✓ accepted  value = %.4f", value)
                 else:
                     log.warning(
                         "[http ] server returned %d: %s",
@@ -189,8 +212,7 @@ def run(port: str, server: str, positions: list[str]) -> None:
             except requests.RequestException as exc:
                 log.warning("[http ] POST failed: %s", exc)
 
-            current_pos = next(pos_cycle)
-            log.info("[dti  ] ready for next reading at position %s", current_pos)
+            log.info("[dti  ] ready for next reading — press DATA")
 
     except KeyboardInterrupt:
         log.info("Stopped.")
@@ -212,9 +234,13 @@ def main() -> None:
         epilog="""
 Examples:
   python dti_bridge.py
+  python dti_bridge.py --port COM1 --station 1   # rig 1
+  python dti_bridge.py --port COM2 --station 2   # rig 2  (separate terminal)
   python dti_bridge.py --port COM4
-  python dti_bridge.py --port COM7 --positions H1 H2 H3 H4 H5
   python dti_bridge.py --port COM7 --server https://192.168.1.50
+
+Position count is read from the server automatically — it matches however
+many rows are in the measurement form at the time of each reading.
 
 To list available COM ports:
   python -m serial.tools.list_ports
@@ -234,15 +260,15 @@ Typical DTI gauge RS-232 settings:
         help=f"Server base URL (default: {DEFAULT_SERVER})",
     )
     parser.add_argument(
-        "--positions", nargs="+", default=DEFAULT_POSITIONS,
-        metavar="Hn",
+        "--station", default=DEFAULT_STATION,
         help=(
-            f"Ordered height positions to cycle through (default: {' '.join(DEFAULT_POSITIONS)}). "
-            "Supply as space-separated list: --positions H1 H2 H3 H4 H5"
+            f"Station identifier for this rig (default: {DEFAULT_STATION}). "
+            "Use --station 1 for rig 1 (COM1) and --station 2 for rig 2 (COM2). "
+            "The browser measurement form must connect with the matching ?station= value."
         ),
     )
     args = parser.parse_args()
-    run(args.port, args.server, args.positions)
+    run(args.port, args.server, args.station)
 
 
 if __name__ == "__main__":

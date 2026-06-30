@@ -30,6 +30,8 @@ const STATUS_CFG: Record<BladeStatus, { label: string; color: string; ring: stri
   OH_INSPECTION: { label: "OH Inspection", color: "bg-amber-500", ring: "ring-amber-200 dark:ring-amber-500/30" },
   MEASUREMENTS_RECORDED: { label: "Measurements Recorded", color: "bg-blue-500", ring: "ring-blue-200 dark:ring-blue-500/30" },
   SENT_TO_ASSEMBLY: { label: "Sent to Assembly", color: "bg-violet-500", ring: "ring-violet-200 dark:ring-violet-500/30" },
+  ASSEMBLY_RECEIVED: { label: "Received at Assembly", color: "bg-blue-500", ring: "ring-blue-200 dark:ring-blue-500/30" },
+  ASSEMBLY_VERIFIED: { label: "Assembly Verified", color: "bg-emerald-600", ring: "ring-emerald-200 dark:ring-emerald-600/30" },
   SLOT_ASSIGNED: { label: "Slot Assigned", color: "bg-cyan-500", ring: "ring-cyan-200 dark:ring-cyan-500/30" },
   BALANCING_IN_PROGRESS: { label: "Balancing In Progress", color: "bg-orange-500", ring: "ring-orange-200 dark:ring-orange-500/30" },
   BALANCING_COMPLETED: { label: "Balancing Completed", color: "bg-emerald-500", ring: "ring-emerald-200 dark:ring-emerald-500/30" },

@@ -15,6 +15,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useAuthStore } from "@/store/authStore";
 import { authService } from "@/services/authService";
 import { extractApiError } from "@/services/api";
+import { getRoleHomePath } from "@/routes";
 
 // ─── Validation schema ────────────────────────────────────────────────────────
 
@@ -44,7 +45,7 @@ export default function LoginPage() {
     mutationFn: (values: LoginFormValues) => authService.login(values),
     onSuccess: ({ user, tokens }) => {
       setAuth(user, tokens);
-      navigate("/batch-tracking", { replace: true });
+      navigate(getRoleHomePath(user.roles), { replace: true });
     },
   });
 

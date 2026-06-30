@@ -44,6 +44,8 @@ const STATUS_CFG: Record<
   OH_INSPECTION: { label: "OH Inspection", variant: "bg-amber-500 text-white", dot: "bg-amber-500" },
   MEASUREMENTS_RECORDED: { label: "Measurements Recorded", variant: "bg-blue-500 text-white", dot: "bg-blue-500" },
   SENT_TO_ASSEMBLY: { label: "Sent to Assembly", variant: "bg-violet-500 text-white", dot: "bg-violet-500" },
+  ASSEMBLY_RECEIVED: { label: "Received at Assembly", variant: "bg-sky-500 text-white", dot: "bg-sky-500" },
+  ASSEMBLY_VERIFIED: { label: "Assembly Verified", variant: "bg-emerald-600 text-white", dot: "bg-emerald-600" },
   SLOT_ASSIGNED: { label: "Slot Assigned", variant: "bg-cyan-500 text-white", dot: "bg-cyan-500" },
   BALANCING_IN_PROGRESS: { label: "Balancing In Progress", variant: "bg-orange-500 text-white", dot: "bg-orange-500" },
   BALANCING_COMPLETED: { label: "Balancing Completed", variant: "bg-emerald-500 text-white", dot: "bg-emerald-500" },

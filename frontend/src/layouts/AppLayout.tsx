@@ -72,9 +72,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Notifications", href: "/notifications", icon: Bell },
   {
     label: "Dashboard",
-    href: "/",
+    href: "/dashboard",
     icon: LayoutDashboard,
-    roles: ["SUPER_ADMIN", "QA_VIEWER"],
+    roles: ["SUPER_ADMIN"],
   },
   {
     label: "Blade Entry",
@@ -151,7 +151,7 @@ function useBreadcrumb(): { label: string; href?: string }[] {
   const location = useLocation();
   const segments = location.pathname.split("/").filter(Boolean);
 
-  if (segments.length === 0) return [{ label: "Dashboard" }];
+  if (segments.length === 0) return [{ label: "Home" }];
 
   const labelMap: Record<string, string> = {
     blades: "Blades",

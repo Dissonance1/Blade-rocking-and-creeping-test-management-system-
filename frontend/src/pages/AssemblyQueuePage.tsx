@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
+import { assemblyService } from "@/services/assemblyService";
 import type { BladeStatus } from "@/types";
 import { cn } from "@/utils/cn";
 import { toast } from "sonner";
@@ -33,6 +34,8 @@ import { toast } from "sonner";
 
 const STATUS_CLS: Partial<Record<BladeStatus, string>> = {
   SENT_TO_ASSEMBLY: "bg-violet-500 text-white",
+  ASSEMBLY_RECEIVED: "bg-blue-500 text-white",
+  ASSEMBLY_VERIFIED: "bg-emerald-600 text-white",
   SLOT_ASSIGNED: "bg-cyan-500 text-white",
   BALANCING_IN_PROGRESS: "bg-orange-500 text-white",
   BALANCING_COMPLETED: "bg-emerald-500 text-white",
@@ -87,6 +90,12 @@ const ASSEMBLY_TABS = [
     statuses: ["SENT_TO_ASSEMBLY"] as BladeStatus[],
   },
   {
+    id: "verifying",
+    label: "Verifying",
+    icon: <Wrench className="w-4 h-4" />,
+    statuses: ["ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED"] as BladeStatus[],
+  },
+  {
     id: "in_progress",
     label: "In Progress",
     icon: <Clock className="w-4 h-4" />,
@@ -118,20 +127,25 @@ export default function AssemblyQueuePage() {
     refetchInterval: 30_000,
   });
 
-  // Per-batch blade fetch — only runs when a batch is selected from the filter
+  // Blade fetch — when a batch is selected, scoped to that batch; otherwise all assembly blades
   const { data: batchBladesData, isLoading } = useQuery({
     queryKey: ["blades", "assembly-blades", batchFilter],
-    queryFn: () => bladeService.list({ batch_number: batchFilter!, limit: 200 }),
-    enabled: !!batchFilter,
+    queryFn: () =>
+      bladeService.list({ batch_number: batchFilter || undefined, limit: 500 }),
     staleTime: 0,
   });
 
   const receiveMutation = useMutation({
-    mutationFn: (batchNumber: string) => batchService.receive(batchNumber),
+    mutationFn: async (batchNumber: string) => {
+      // Update batch-level event (ignore if already received)
+      try { await batchService.receive(batchNumber); } catch { /* already received */ }
+      // Create AssemblyBatchReceipt + transition blades → ASSEMBLY_RECEIVED (ignore if already done)
+      try { await assemblyService.receiveBatch(batchNumber, {}); } catch { /* receipt exists */ }
+    },
     onSuccess: (_, batchNumber) => {
       queryClient.invalidateQueries({ queryKey: ["batches"] });
       queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", batchNumber] });
-      toast.success(`Batch ${batchNumber} marked as received — OH has been notified`);
+      toast.success(`Batch ${batchNumber} received — blades are ready for verification`);
     },
     onError: (err: unknown) => {
       const msg =
@@ -193,19 +207,12 @@ export default function AssemblyQueuePage() {
     [assemblyBatches]
   );
 
-  // Blade rows — only populated when a batch is selected
-  const allBlades = batchFilter ? (batchBladesData?.items ?? []) : [];
+  const allBlades = batchBladesData?.items ?? [];
 
   const currentTab = ASSEMBLY_TABS.find((t) => t.id === activeTab) ?? ASSEMBLY_TABS[0];
 
-  const tabCount = (statuses: BladeStatus[]) => {
-    if (batchFilter) return allBlades.filter((b) => statuses.includes(b.status)).length;
-    // When no batch selected, derive from batch-level summaries
-    const batchStatus = statuses.includes("SENT_TO_ASSEMBLY") ? "SENT_TO_ASSEMBLY"
-      : statuses.includes("SLOT_ASSIGNED") ? "RECEIVED_BY_ASSEMBLY"
-      : "ACCEPTED";
-    return assemblyBatches.filter((b) => b.current_status === batchStatus).reduce((s, b) => s + b.blade_count, 0);
-  };
+  const tabCount = (statuses: BladeStatus[]) =>
+    allBlades.filter((b) => statuses.includes(b.status)).length;
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -322,6 +329,16 @@ export default function AssemblyQueuePage() {
                                   <PackageCheck className="w-3 h-3 mr-1" />
                                 )}
                                 Mark Received
+                              </Button>
+                            )}
+                            {batch.current_status === "RECEIVED_BY_ASSEMBLY" && (
+                              <Button
+                                size="sm"
+                                className="bg-blue-600 hover:bg-blue-500 text-white text-xs h-8"
+                                onClick={() => navigate(`/assembly/verify/${batch.batch_number}`)}
+                              >
+                                <PackageCheck className="w-3 h-3 mr-1" />
+                                Verify Blades
                               </Button>
                             )}
                             <Button
@@ -449,12 +466,7 @@ export default function AssemblyQueuePage() {
             <TabsContent key={tab.id} value={tab.id}>
               <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                 <CardContent className="p-0">
-                  {!batchFilter ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
-                      <PackageSearch className="w-12 h-12 mb-3 opacity-30" />
-                      <p className="font-medium">Select a batch from the filter above to view its blades</p>
-                    </div>
-                  ) : isLoading ? (
+                  {isLoading ? (
                     <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500">
                       <Loader2 className="w-6 h-6 animate-spin mr-2" />
                       Loading…

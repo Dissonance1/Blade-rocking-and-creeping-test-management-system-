@@ -52,6 +52,8 @@ Thumbs.db
 desktop.ini
 
 # ─── Uploads & generated reports ─────────────────────────────────────────────
+uploads/
+reports/
 backend/uploads/
 backend/reports/
 
@@ -70,9 +72,14 @@ pip-delete-this-directory.txt
 *.p12
 secrets/
 ssl/
+.env.oh
+.env.assembly
+!.env.oh.example
+!.env.assembly.example
 
 # ─── Claude Code session data ────────────────────────────────────────────────
 .claude/
 
 # ─── Windows alternate data streams ─────────────────────────────────────────
 *:Zone.Identifier
+*Zone.Identifier

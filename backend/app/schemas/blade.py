@@ -12,6 +12,7 @@ from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import BladeStatus, BladeType
 from app.schemas.base import BaseSchema
+from app.schemas.measurement import MeasurementResponse
 from app.schemas.user import UserListItem
 
 
@@ -270,9 +271,10 @@ class BladeListItem(BaseSchema):
     created_at: datetime
     updated_at: datetime
     batch_number: str | None = None
-    # Latest measurement values (for weight-based sorting on dashboard)
+    # Latest INITIAL measurement values (populated by list endpoint)
     weight_grams: float | None = None
     static_moment_gcm: float | None = None
+    height_data: dict[str, float] | None = None
 
 
 class BladeResponse(BaseSchema):
@@ -306,6 +308,8 @@ class BladeResponse(BaseSchema):
     # Rejection
     rejection_reason: RejectionReasonSummary | None = None
     rejection_notes: str | None = None
+
+    measurements: list[MeasurementResponse] | None = None
 
     created_at: datetime
     updated_at: datetime

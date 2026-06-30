@@ -23,6 +23,14 @@ const STATUS_MAP: Record<BladeStatus, StatusConfig> = {
     label: "Sent to Assembly",
     classes: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800",
   },
+  ASSEMBLY_RECEIVED: {
+    label: "Received at Assembly",
+    classes: "bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-800",
+  },
+  ASSEMBLY_VERIFIED: {
+    label: "Assembly Verified",
+    classes: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800",
+  },
   SLOT_ASSIGNED: {
     label: "Slot Assigned",
     classes: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800",

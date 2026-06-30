@@ -337,64 +337,45 @@ async def update_balancing(
     await db.commit()
     await db.refresh(allocation)
 
-    # Send notification to SUPER_ADMINs and OH_OPERATORs when slot is unbalanced
-    if not body.is_balanced:
-        async def _notify_unbalanced() -> None:
+    # When this blade is balanced, check if ALL blades in the batch are done.
+    if body.is_balanced and blade.batch_number:
+        _batch_num = blade.batch_number
+        _blade_serial = blade.serial_number
+        async def _notify_batch_balanced(_batch: str, _serial: str) -> None:
             from app.notifications.service import NotificationService
-            from app.models.enums import NotificationType
+            from app.models.notification import NotificationType
+            from app.models.blade import Blade as _Blade
+            from app.models.enums import BladeStatus as _BS
+            from app.db.session import AsyncSessionLocal
+            from sqlalchemy import select as _sel, func as _func
             try:
-                svc = NotificationService(db)
-                # Notify SUPER_ADMIN and OH_OPERATOR roles
-                from app.models.user import User, UserRole as UserRoleModel, Role
-                from sqlalchemy import select as sa_select
-                result = await db.execute(
-                    sa_select(User)
-                    .join(UserRoleModel, UserRoleModel.user_id == User.id)
-                    .join(Role, Role.id == UserRoleModel.role_id)
-                    .where(
-                        Role.name.in_(["SUPER_ADMIN", "OH_OPERATOR"]),
-                        User.is_active.is_(True),
-                        User.deleted_at.is_(None),
-                    )
-                    .distinct()
-                )
-                target_users = list(result.scalars().all())
-                unbalance_info = (
-                    f" (imbalance: {body.unbalance_value})" if body.unbalance_value else ""
-                )
-                title = f"⚠ Slot {allocation.slot_number} — Unbalanced"
-                body_text = (
-                    f"Blade {blade.serial_number} in slot {allocation.slot_number} "
-                    f"is unbalanced{unbalance_info}. "
-                    f"Remarks: {body.balancing_remarks or 'none'}. "
-                    f"Assembly correction required."
-                )
-                for user in target_users:
-                    await svc.create_notification(
-                        user_id=user.id,
-                        title=title,
-                        body=body_text,
-                        notification_type=NotificationType.SLOT_PENDING,
-                        blade_id=allocation.blade_id,
-                    )
-                # Also send a broadcast so all roles with the notification page see it
-                await svc.create_notification(
-                    user_id=None,   # null = system broadcast visible to everyone
-                    title=title,
-                    body=body_text,
-                    notification_type=NotificationType.SLOT_PENDING,
-                    blade_id=allocation.blade_id,
-                )
-                logger.info(
-                    "unbalanced_notification_sent",
-                    slot=allocation.slot_number,
-                    blade=blade.serial_number,
-                    recipients=len(target_users),
-                )
+                async with AsyncSessionLocal() as _db:
+                    unbalanced = (await _db.execute(
+                        _sel(_func.count(_Blade.id)).where(
+                            _Blade.batch_number == _batch,
+                            _Blade.deleted_at.is_(None),
+                            _Blade.status.notin_([
+                                _BS.BALANCING_COMPLETED,
+                                _BS.RETURNED_TO_OH,
+                                _BS.FINAL_VERIFICATION,
+                                _BS.COMPLETED,
+                                _BS.REJECTED,
+                            ]),
+                        )
+                    )).scalar_one()
+                    if unbalanced == 0:
+                        svc = NotificationService(_db)
+                        await svc.notify_roles(
+                            roles=["OH_OPERATOR", "ASSEMBLY_OPERATOR", "SUPER_ADMIN"],
+                            title=f"Batch {_batch} — Balancing complete",
+                            body=f"All blades in batch {_batch} have been balanced and are ready to return to OH for final verification.",
+                            notification_type=NotificationType.BALANCING_DONE,
+                            metadata={"batch_number": _batch},
+                        )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("unbalanced_notification_failed", error=str(exc))
+                logger.warning("notify_batch_balanced_failed", error=str(exc))
 
-        background_tasks.add_task(_notify_unbalanced)
+        background_tasks.add_task(_notify_batch_balanced, _batch_num, _blade_serial)
 
     logger.info(
         "balancing_updated",
@@ -420,30 +401,51 @@ async def list_slots(
     current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=500),
     is_balanced: bool | None = Query(default=None),
+    batch_number: str | None = Query(default=None),
 ) -> Any:
     """
     Return all currently active slot allocations, optionally filtered by
-    balancing status.  Results are ordered by allocation time (newest first).
+    balancing status and/or batch number.  Results are ordered by slot number.
     """
+    from app.models.blade import Blade as _Blade
     from app.models.slot_allocation import SlotAllocation
 
-    conditions = [SlotAllocation.is_active.is_(True)]
-    if is_balanced is not None:
-        conditions.append(SlotAllocation.is_balanced.is_(is_balanced))
-
-    total: int = (
-        await db.execute(
-            select(func.count()).select_from(SlotAllocation).where(*conditions)
+    if batch_number:
+        stmt_base = (
+            select(SlotAllocation)
+            .join(_Blade, _Blade.id == SlotAllocation.blade_id)
+            .where(
+                SlotAllocation.is_active.is_(True),
+                _Blade.batch_number == batch_number,
+                _Blade.deleted_at.is_(None),
+            )
         )
-    ).scalar_one()
+        count_stmt = (
+            select(func.count())
+            .select_from(SlotAllocation)
+            .join(_Blade, _Blade.id == SlotAllocation.blade_id)
+            .where(
+                SlotAllocation.is_active.is_(True),
+                _Blade.batch_number == batch_number,
+                _Blade.deleted_at.is_(None),
+            )
+        )
+    else:
+        stmt_base = select(SlotAllocation).where(SlotAllocation.is_active.is_(True))
+        count_stmt = select(func.count()).select_from(SlotAllocation).where(SlotAllocation.is_active.is_(True))
+
+    if is_balanced is not None:
+        stmt_base = stmt_base.where(SlotAllocation.is_balanced.is_(is_balanced))
+        count_stmt = count_stmt.where(SlotAllocation.is_balanced.is_(is_balanced))
+
+    total: int = (await db.execute(count_stmt)).scalar_one()
 
     items = list(
         (
             await db.execute(
-                select(SlotAllocation)
-                .where(*conditions)
+                stmt_base
                 .order_by(SlotAllocation.allocated_at.desc())
                 .offset(skip)
                 .limit(limit)

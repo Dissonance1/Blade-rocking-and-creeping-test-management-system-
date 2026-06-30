@@ -326,7 +326,11 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
 export default function BatchTrackingPage() {
   const queryClient = useQueryClient();
   const hasRole = useAuthStore((s) => s.hasRole);
-  const isOH = hasRole(["OH_OPERATOR", "SUPER_ADMIN"]);
+
+  // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) batch view.
+  // Assembly Operator sees only batches that have been sent/received at assembly.
+  const isOHView = hasRole(["OH_OPERATOR", "QA_VIEWER", "SUPER_ADMIN"]);
+  const isAssemblyView = hasRole(["ASSEMBLY_OPERATOR"]) && !hasRole(["SUPER_ADMIN"]);
 
   const { data: batches = [], isLoading, isError } = useQuery({
     queryKey: ["batches"],
@@ -335,13 +339,14 @@ export default function BatchTrackingPage() {
   });
 
   const statusOrder: Record<BatchStatus, number> = {
-    SENT_TO_ASSEMBLY: 0,
-    RECEIVED_BY_ASSEMBLY: 1,
-    MODIFIED: 2,
-    CREATED: 3,
+    CREATED: 0,
+    SENT_TO_ASSEMBLY: 1,
+    RECEIVED_BY_ASSEMBLY: 2,
+    MODIFIED: 3,
     ACCEPTED: 4,
     REJECTED: 5,
   };
+
   const ASSEMBLY_STATUSES: BatchStatus[] = [
     "SENT_TO_ASSEMBLY",
     "RECEIVED_BY_ASSEMBLY",
@@ -350,9 +355,10 @@ export default function BatchTrackingPage() {
     "REJECTED",
   ];
 
-  // OH users see all their batches; Assembly users see only batches sent to them
+  // OH view: all batches regardless of status
+  // Assembly view: only batches that crossed into assembly
   const sorted = [...batches]
-    .filter((b) => isOH || ASSEMBLY_STATUSES.includes(b.current_status))
+    .filter((b) => isOHView || ASSEMBLY_STATUSES.includes(b.current_status))
     .sort((a, b) => (statusOrder[a.current_status] ?? 99) - (statusOrder[b.current_status] ?? 99));
 
   const total = sorted.length;
@@ -360,14 +366,19 @@ export default function BatchTrackingPage() {
   const accepted = sorted.filter((b) => b.current_status === "ACCEPTED").length;
   const rejected = sorted.filter((b) => b.current_status === "REJECTED").length;
 
+  const pageTitle = isAssemblyView ? "Assembly Batch Overview" : "OH Batch Overview";
+  const pageSubtitle = isAssemblyView
+    ? "Batches received at 720 Hanger (Assembly)"
+    : "Batches created and managed at 701 Hanger (OH)";
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Batch Overview</h1>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{pageTitle}</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Monitor batch status across OH and Assembly
+            {pageSubtitle}
           </p>
         </div>
         <Button

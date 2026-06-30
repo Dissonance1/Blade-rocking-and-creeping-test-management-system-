@@ -11,6 +11,8 @@ export type BladeStatus =
   | "OH_INSPECTION"
   | "MEASUREMENTS_RECORDED"
   | "SENT_TO_ASSEMBLY"
+  | "ASSEMBLY_RECEIVED"
+  | "ASSEMBLY_VERIFIED"
   | "SLOT_ASSIGNED"
   | "BALANCING_IN_PROGRESS"
   | "BALANCING_COMPLETED"
@@ -97,6 +99,7 @@ export interface Blade {
   batch_number?: string | null;
   engine_hours?: string | null;
   component_hours?: string | null;
+  blade_type?: "LPTR" | "HPTR" | null;
   status: BladeStatus;
   current_station_id?: string | null;
   created_by_id: string;
@@ -132,6 +135,7 @@ export interface BladeListItem {
   batch_number?: string | null;
   weight_grams?: number | null;
   static_moment_gcm?: number | null;
+  height_data?: Record<string, number> | null;
 }
 
 export interface BladeCreateRequest {

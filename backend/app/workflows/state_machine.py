@@ -55,10 +55,21 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
         BladeStatus.REJECTED,
         BladeStatus.ON_HOLD,
     },
+    # Assembly receipt flow (720 Hanger)
     BladeStatus.SENT_TO_ASSEMBLY: {
-        BladeStatus.SLOT_ASSIGNED,
+        BladeStatus.ASSEMBLY_RECEIVED,   # batch marked received at Assembly
         BladeStatus.REJECTED,
     },
+    BladeStatus.ASSEMBLY_RECEIVED: {
+        BladeStatus.ASSEMBLY_VERIFIED,   # per-blade: scan → accept/modify
+        BladeStatus.REJECTED,            # per-blade: reject at Assembly
+        BladeStatus.ON_HOLD,
+    },
+    BladeStatus.ASSEMBLY_VERIFIED: {
+        BladeStatus.SLOT_ASSIGNED,       # set-making complete → assign slot
+        BladeStatus.REJECTED,
+    },
+    # Balancing & return flow
     BladeStatus.SLOT_ASSIGNED: {
         BladeStatus.BALANCING_IN_PROGRESS,
         BladeStatus.RETURNED_TO_OH,
@@ -80,6 +91,7 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     BladeStatus.ON_HOLD: {
         BladeStatus.OH_INSPECTION,
         BladeStatus.MEASUREMENTS_RECORDED,
+        BladeStatus.ASSEMBLY_RECEIVED,
     },
     BladeStatus.REOPENED: {BladeStatus.OH_INSPECTION},
     BladeStatus.COMPLETED: set(),
@@ -142,7 +154,7 @@ class WorkflowEngine:
         blade: "Blade",
         to_status: BladeStatus,
         user: "User",
-        station_id: uuid.UUID,
+        station_id: uuid.UUID | None,
         remarks: str | None = None,
     ) -> tuple["Blade", "WorkflowLog"]:
         """
@@ -192,7 +204,7 @@ class WorkflowEngine:
             from_status=from_status.value,
             to_status=to_status.value,
             user_id=str(user.id),
-            station_id=str(station_id),
+            station_id=str(station_id) if station_id else None,
         )
 
         # 1. Update blade status
@@ -275,7 +287,8 @@ class WorkflowEngine:
 
             # Map transitions to notification types
             _transition_to_notification: dict[BladeStatus, NotificationType] = {
-                BladeStatus.OH_INSPECTION: NotificationType.BLADE_RECEIVED,
+                # ASSEMBLY_RECEIVED omitted — assembly_service fires one batch-level notification instead
+                BladeStatus.ASSEMBLY_VERIFIED: NotificationType.WORKFLOW_UPDATED,
                 BladeStatus.SLOT_ASSIGNED: NotificationType.SLOT_PENDING,
                 BladeStatus.BALANCING_COMPLETED: NotificationType.BALANCING_DONE,
                 BladeStatus.REJECTED: NotificationType.BLADE_REJECTED,

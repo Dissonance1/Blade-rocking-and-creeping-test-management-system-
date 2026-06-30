@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    assembly,
     audit_logs,
     auth,
     batches,
@@ -22,6 +23,7 @@ from app.api.v1.endpoints import (
     reports,
     slots,
     stations,
+    sync,
     users,
     weighing,
     workflows,
@@ -153,4 +155,22 @@ api_router.include_router(
     dti.router,
     prefix="/dti",
     tags=["dti"],
+)
+
+# ---------------------------------------------------------------------------
+# Assembly station workflow (720 Hanger)
+# ---------------------------------------------------------------------------
+api_router.include_router(
+    assembly.router,
+    prefix="/assembly",
+    tags=["assembly"],
+)
+
+# ---------------------------------------------------------------------------
+# LAN sync — OH PC exposes blade data for Assembly to pull over LAN
+# ---------------------------------------------------------------------------
+api_router.include_router(
+    sync.router,
+    prefix="/sync",
+    tags=["sync"],
 )

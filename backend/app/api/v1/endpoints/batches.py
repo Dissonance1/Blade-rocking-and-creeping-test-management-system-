@@ -607,6 +607,7 @@ async def send_batch_to_assembly(
 async def assign_batch_slot(
     batch_number: str,
     body: dict,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
@@ -622,6 +623,7 @@ async def assign_batch_slot(
     """
     import math
     from app.models.blade import Blade
+    from app.models.batch_event import BatchEvent as BatchEventModel
     from app.models.slot_allocation import SlotAllocation
     from app.models.workflow import WorkflowLog
 
@@ -634,11 +636,38 @@ async def assign_batch_slot(
             detail=f"imbalance_slot must be between 1 and {total_slots}",
         )
 
+    # Gate: batch must have been accepted by Assembly before slots can be assigned
+    latest_event = (
+        await db.execute(
+            select(BatchEventModel)
+            .where(BatchEventModel.batch_number == batch_number)
+            .order_by(BatchEventModel.timestamp.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    batch_status = latest_event.event_type.value if latest_event else "CREATED"
+    _ACCEPTED_STATUSES = {BatchEventType.ACCEPTED.value, BatchEventType.MODIFIED.value}
+    if batch_status not in _ACCEPTED_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Batch '{batch_number}' must be accepted by Assembly before slot assignment. "
+                f"Current status: {batch_status}. "
+                f"Please accept the batch first."
+            ),
+        )
+
+    _ELIGIBLE_FOR_SLOT = [
+        BladeStatus.SENT_TO_ASSEMBLY,
+        BladeStatus.ASSEMBLY_RECEIVED,
+        BladeStatus.ASSEMBLY_VERIFIED,
+    ]
     blades = (
         await db.execute(
             select(Blade).where(
                 Blade.batch_number == batch_number,
-                Blade.status == BladeStatus.SENT_TO_ASSEMBLY,
+                Blade.status.in_(_ELIGIBLE_FOR_SLOT),
                 Blade.deleted_at.is_(None),
             )
         )
@@ -647,7 +676,7 @@ async def assign_batch_slot(
     if not blades:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No incoming (SENT_TO_ASSEMBLY) blades found in batch '{batch_number}'",
+            detail=f"No eligible blades found in batch '{batch_number}' — all blades may already have slots assigned.",
         )
 
     # Fetch latest INITIAL measurement static_moment_gcm for each blade
@@ -729,6 +758,27 @@ async def assign_batch_slot(
         db.add(log)
 
     await db.commit()
+
+    # Notify Super Admin that all slots in the batch are now assigned.
+    blade_count_assigned = len(sorted_blades)
+    async def _notify_slots_assigned(_batch: str, _count: int) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Batch {_batch} — All slots assigned",
+                    body=f"Assembly has assigned disc slots to all {_count} blade(s) in batch {_batch}.",
+                    notification_type=NotificationType.SLOT_PENDING,
+                    metadata={"batch_number": _batch, "blades_assigned": _count},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_slots_assigned_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_slots_assigned, batch_number, blade_count_assigned)
 
     logger.info(
         "batch_slots_assigned",

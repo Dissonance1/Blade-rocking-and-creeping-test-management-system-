@@ -10,6 +10,8 @@
         test test-coverage test-backend test-unit test-api \
         lint lint-backend format \
         up down logs build \
+        oh-build oh-up oh-down oh-logs oh-migrate oh-shell oh-db \
+        assembly-build assembly-up assembly-down assembly-logs assembly-migrate assembly-shell \
         clean
 
 # ---------------------------------------------------------------------------
@@ -156,6 +158,58 @@ shell-backend:  ## Open a shell in the running backend container
 
 shell-db:  ## Open psql in the running postgres container
 	docker-compose exec postgres psql -U $${POSTGRES_USER:-blade_user} -d $${POSTGRES_DB:-blade_rocking}
+
+# =============================================================================
+# OH Station (701 Hanger) — docker-compose.oh.yml
+# =============================================================================
+
+oh-build:  ## Build Docker images for OH station
+	@echo ">>> Building OH station images …"
+	docker-compose -f docker-compose.oh.yml build
+
+oh-up:  ## Start OH station services (requires .env.oh)
+	@echo ">>> Starting OH station …"
+	docker-compose -f docker-compose.oh.yml up -d
+
+oh-down:  ## Stop OH station services
+	docker-compose -f docker-compose.oh.yml down
+
+oh-logs:  ## Tail OH station logs
+	docker-compose -f docker-compose.oh.yml logs -f
+
+oh-migrate:  ## Run Alembic migrations on OH station
+	docker-compose -f docker-compose.oh.yml exec oh_backend alembic upgrade head
+
+oh-shell:  ## Open shell in OH backend container
+	docker-compose -f docker-compose.oh.yml exec oh_backend /bin/bash
+
+oh-db:  ## Open psql on OH station
+	docker-compose -f docker-compose.oh.yml exec oh_postgres \
+	  psql -U $${POSTGRES_USER:-blade_user} -d $${POSTGRES_DB:-blade_rocking_oh}
+
+# =============================================================================
+# Assembly Station (720 Hanger) — docker-compose.assembly.yml
+# =============================================================================
+
+assembly-build:  ## Build Docker images for Assembly station
+	@echo ">>> Building Assembly station images …"
+	docker-compose -f docker-compose.assembly.yml build
+
+assembly-up:  ## Start Assembly station services (requires .env.assembly)
+	@echo ">>> Starting Assembly station …"
+	docker-compose -f docker-compose.assembly.yml up -d
+
+assembly-down:  ## Stop Assembly station services
+	docker-compose -f docker-compose.assembly.yml down
+
+assembly-logs:  ## Tail Assembly station logs
+	docker-compose -f docker-compose.assembly.yml logs -f
+
+assembly-migrate:  ## Run Alembic migrations on Assembly station
+	docker-compose -f docker-compose.assembly.yml exec assembly_backend alembic upgrade head
+
+assembly-shell:  ## Open shell in Assembly backend container
+	docker-compose -f docker-compose.assembly.yml exec assembly_backend /bin/bash
 
 # =============================================================================
 # Housekeeping
