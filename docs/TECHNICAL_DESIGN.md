@@ -1,7 +1,7 @@
 # Technical Design Document
 ## Blade Rocking & Creep Test Management System
 
-**Version:** 1.2  
+**Version:** 1.3  
 **Owner:** Meridian Data Labs  
 **Contact:** amit@meridiandatalabs.com
 
@@ -14,17 +14,18 @@
 3. [Directory Structure](#3-directory-structure)
 4. [Data Model](#4-data-model)
 5. [Blade Workflow State Machine](#5-blade-workflow-state-machine)
-6. [API Reference](#6-api-reference)
-7. [Authentication & RBAC](#7-authentication--rbac)
-8. [Real-Time & Async Processing](#8-real-time--async-processing)
-9. [Hardware Integration](#9-hardware-integration)
-10. [OCR Integration](#10-ocr-integration)
-11. [Report Generation](#11-report-generation)
-12. [IRS (Inspection Record Sheet) Format](#12-irs-inspection-record-sheet-format)
-13. [Infrastructure & Deployment](#13-infrastructure--deployment)
-14. [Security](#14-security)
-15. [Testing](#15-testing)
-16. [Configuration Reference](#16-configuration-reference)
+6. [Assembly Verification & Set-Making](#6-assembly-verification--set-making)
+7. [API Reference](#7-api-reference)
+8. [Authentication & RBAC](#8-authentication--rbac)
+9. [Real-Time & Async Processing](#9-real-time--async-processing)
+10. [Hardware Integration](#10-hardware-integration)
+11. [OCR Integration](#11-ocr-integration)
+12. [Report Generation](#12-report-generation)
+13. [IRS (Inspection Record Sheet) Format](#13-irs-inspection-record-sheet-format)
+14. [Infrastructure & Deployment](#14-infrastructure--deployment)
+15. [Security](#15-security)
+16. [Testing](#16-testing)
+17. [Configuration Reference](#17-configuration-reference)
 
 ---
 
@@ -52,11 +53,11 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 - Blade registration and identity verification (serial number, melt number, part number)
 - Multi-stage dimensional measurement capture with automated static moment calculation
 - Batch-level tracking: **180 blades per batch** (90 LPTR + 90 HPTR) moving between OH and Assembly
-- OCR camera capture of blade markings (serial, melt number) with mismatch detection
+- OCR scan of blade markings (serial, melt number) with mismatch detection — backend-only, no camera bridge script
 - Live weight capture from Adam Equipment iScale i-04 (0.1 g) via serial bridge
 - Live DTI readings from Sylvac BT gauge (0.001 mm) via serial bridge
-- Assembly verification loop: scan → validate vs OH records → accept / modify / reject
-- Set-making with HAL descending-sort algorithm (2–3 balancing iterations)
+- Assembly verification loop: receive batch → scan/validate vs OH records → accept / modify / reject per blade
+- Set-making with HAL (Heavy-light Alternating Layout) descending-sort algorithm, 2–3 balancing iterations
 - Slot allocation and dynamic balancing record-keeping
 - Rejection workflow with reason classification and SUPER_ADMIN-controlled reopening
 - Async PDF/Excel IRS report generation for compliance and shipping packages
@@ -74,14 +75,14 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
   ┌──────────────────────────────────────────────────────────────┐
   │  701 Hanger — OH Measurement Station                         │
   │                                                              │
-  │  Hardware: iScale i-04 · Sylvac BT DTI · OCR Camera · QR    │
+  │  Hardware: iScale i-04 · Sylvac BT DTI · OCR Camera (USB)   │
   │                                                              │
   │  ┌───────────────┐   ┌─────────────────────────────────┐    │
   │  │  React 18 SPA │   │  FastAPI + Celery + NGINX        │    │
   │  │  OH operator  │   │                                  │    │
   │  │  interface    │   │  ┌────────────┐  ┌───────────┐  │    │
   │  └───────────────┘   │  │ PostgreSQL │  │  Redis 7  │  │    │
-  │                      │  │  (shared)  │  │  (cache)  │  │    │
+  │                      │  │  (shared)  │  │  (local)  │  │    │
   │  Bridge scripts:     │  └────────────┘  └───────────┘  │    │
   │  weighing_bridge.py  └─────────────────────────────────┘    │
   │  dti_bridge.py                                               │
@@ -89,25 +90,26 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
                                  │
                           LAN (TCP/IP)
                      bidirectional REST + WS
+                         /api/v1/sync/*
                                  │
   ┌──────────────────────────────┴───────────────────────────────┐
   │  720 Hanger — Assembly Set-Making & Balancing Station        │
   │                                                              │
-  │  Hardware: OCR Camera · QR Scanner · Balancing Machine       │
+  │  Hardware: OCR Camera (USB) · QR Scanner (HID) · Balancing  │
   │                                                              │
   │  ┌───────────────┐   ┌───────────────────────────────────┐  │
   │  │  React 18 SPA │   │  FastAPI (lightweight)            │  │
-  │  │  Assembly op. │   │  Connects to OH PC database       │  │
-  │  │  interface    │   │  over LAN (same PostgreSQL)       │  │
+  │  │  Assembly op. │   │  DATABASE_URL → OH PC PostgreSQL  │  │
+  │  │  interface    │   │  OH_SYNC_URL → https://<OH-PC-IP> │  │
   │  └───────────────┘   └───────────────────────────────────┘  │
   │                                                              │
-  │  Bridge scripts:                                             │
-  │  weighing_bridge.py  (--server https://<OH-PC-IP>)          │
-  │  dti_bridge.py       (--server https://<OH-PC-IP>)          │
+  │  Bridge scripts (target OH PC API):                          │
+  │  weighing_bridge.py  --server https://<OH-PC-IP>            │
+  │  dti_bridge.py       --server https://<OH-PC-IP>            │
   └──────────────────────────────────────────────────────────────┘
 ```
 
-**Single shared database:** PostgreSQL runs only on the OH PC. The Assembly PC's backend points its `DATABASE_URL` to `postgresql+asyncpg://blade_user:pass@<OH-PC-LAN-IP>:5432/blade_rocking`. No replication or sync is required.
+**Single shared database:** PostgreSQL runs only on the OH PC. The Assembly PC's backend points its `DATABASE_URL` to `postgresql+asyncpg://blade_user:pass@<OH-PC-LAN-IP>:5432/blade_rocking`. No replication is required — both stations write directly to the same Postgres instance.
 
 ### Software Stack
 
@@ -146,7 +148,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 | Task Queue | Celery 5.4 + Redis | Background report generation |
 | State Machine | Custom (workflows/state_machine.py) | Blade status transition enforcement |
 | Notifications | WebSocket (in-memory pool) + DB | Real-time push + persistent unread count |
-| OCR | Pluggable (mock / Tesseract / PaddleOCR) | Blade marking extraction |
+| OCR | Pluggable backend (mock / Tesseract / PaddleOCR) | Blade marking extraction — no camera bridge script |
 | Hardware | pyserial | iScale i-04 weighing + Sylvac BT DTI serial bridges |
 
 ### Request Lifecycle
@@ -189,10 +191,28 @@ blead_rocking/
 │   │   ├── models/                  # SQLAlchemy ORM entities (20 files)
 │   │   ├── schemas/                 # Pydantic I/O schemas (10 files)
 │   │   ├── api/v1/
-│   │   │   ├── router.py            # Top-level router, 12 sub-routers
-│   │   │   └── endpoints/           # One module per domain (12 files)
+│   │   │   ├── router.py            # Top-level router; 16 sub-routers
+│   │   │   └── endpoints/           # 16 endpoint modules:
+│   │   │       ├── assembly.py      #   Assembly verification + set-making
+│   │   │       ├── audit_logs.py    #   Audit trail (SUPER_ADMIN)
+│   │   │       ├── auth.py          #   Login, refresh, logout
+│   │   │       ├── batches.py       #   Batch lifecycle + HAL slot assignment
+│   │   │       ├── blades.py        #   Blade CRUD + workflow transitions
+│   │   │       ├── dti.py           #   DTI gauge WebSocket + push
+│   │   │       ├── measurements.py  #   Measurement CRUD + QA approval
+│   │   │       ├── notifications.py #   Notification list + WebSocket
+│   │   │       ├── ocr.py           #   OCR scan + verify
+│   │   │       ├── reports.py       #   Async report generation
+│   │   │       ├── slots.py         #   Slot allocation + balancing
+│   │   │       ├── stations.py      #   Station management
+│   │   │       ├── sync.py          #   LAN sync (OH PC → Assembly)
+│   │   │       ├── users.py         #   User management (SUPER_ADMIN)
+│   │   │       └── weighing.py      #   Weighing scale WebSocket + push
 │   │   ├── repositories/            # Data access layer (5 files)
-│   │   ├── services/                # Business logic (blade, weighing)
+│   │   ├── services/                # Business logic
+│   │   │   ├── blade_service.py     #   Blade lifecycle
+│   │   │   ├── assembly_service.py  #   Assembly verification logic
+│   │   │   └── weighing_service.py  #   Weighing scale data
 │   │   ├── workflows/
 │   │   │   └── state_machine.py     # ALLOWED_TRANSITIONS + WorkflowEngine
 │   │   ├── notifications/           # WebSocket manager + persistence
@@ -208,8 +228,10 @@ blead_rocking/
 │   ├── src/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
+│   │   ├── routes/
+│   │   │   └── index.tsx            # All 17 application routes
 │   │   ├── components/              # Reusable UI (Radix UI + Tailwind)
-│   │   ├── pages/                   # Route-level views
+│   │   ├── pages/                   # Route-level views (17 pages)
 │   │   ├── hooks/                   # Custom React hooks
 │   │   ├── services/                # Axios API client + React Query
 │   │   ├── stores/                  # Zustand state
@@ -218,14 +240,18 @@ blead_rocking/
 │   ├── vite.config.ts
 │   └── Dockerfile
 ├── scripts/
-│   ├── seed_data.py                 # Dev/demo data seeder
-│   ├── seed_demo_data.py
+│   ├── deploy.sh                    # Production deployment helper
+│   ├── dti_bridge.py               # DTI gauge RS-232 → API bridge
 │   ├── manage_batches.py            # Batch management CLI
-│   ├── weighing_bridge.py          # Weighing scale RS-232 → API bridge
-│   └── dti_bridge.py               # DTI gauge RS-232 → API bridge
+│   ├── reset_and_seed_full.py       # Full DB reset + re-seed
+│   ├── seed_data.py                 # Dev data seeder
+│   ├── seed_demo_data.py            # Demo data for presentations
+│   └── weighing_bridge.py          # Weighing scale RS-232 → API bridge
 ├── nginx/
 │   └── nginx.conf
-├── docker-compose.yml
+├── docker-compose.yml               # Unified single-machine deployment
+├── docker-compose.oh.yml            # OH Station (701 Hanger) only
+├── docker-compose.assembly.yml      # Assembly Station (720 Hanger) only
 ├── Makefile
 └── .github/workflows/ci.yml
 ```
@@ -261,8 +287,6 @@ User ◄──► Role (user_roles junction)                         ◄┘
 
 ### Blade (Central Entity)
 
-The `blades` table is the system's primary entity. Key fields:
-
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | UUID PK | |
@@ -291,28 +315,26 @@ The `blades` table is the system's primary entity. Key fields:
 
 ### Measurement
 
-Stores each physical measurement session against a blade:
-
 | Field | Type | Notes |
 |-------|------|-------|
 | `measurement_type` | ENUM | `INITIAL`, `INTERIM`, `FINAL` |
 | `weight_grams` | NUMERIC(12,4) | |
 | `static_moment_gcm` | NUMERIC(12,4) | Auto-calculated: weight × 1.57 × 20 |
-| `rocking_value` | NUMERIC(12,6) | Core rocking test result |
-| `creep_value` | NUMERIC(12,6) | LPTR blades only |
+| `rocking_value` | NUMERIC(12,6) | Required for all blade types |
+| `creep_value` | NUMERIC(12,6) | LPTR blades only; must be null for HPTR |
 | `height_data` | JSONB | `{"H1": 12.3, "H2": 11.9, ...}` |
 | `station_id` | UUID FK → stations | Station where measured |
 | `is_approved` | BOOLEAN | QA sign-off |
 | `approved_by_id` | UUID FK → users | |
 | `approved_at` | TIMESTAMP | |
 
-**Auto-transition:** When a measurement is recorded on a blade in `OH_INSPECTION`, the blade automatically transitions to `MEASUREMENTS_RECORDED`.
+**Auto-transition:** Recording a measurement on a blade in `OH_INSPECTION` automatically transitions it to `MEASUREMENTS_RECORDED`.
+
+**Type rules enforced at the API layer:**
+- `LPTR`: both `rocking_value` AND `creep_value` are mandatory.
+- `HPTR`: only `rocking_value` is mandatory; `creep_value` must be null.
 
 ### Users & RBAC
-
-```
-users ──► user_roles ──► roles ──► role_permissions ──► permissions
-```
 
 Four built-in roles:
 
@@ -327,11 +349,9 @@ User fields include `last_login` timestamp (updated on each successful authentic
 
 ### SlotAllocation
 
-Tracks assembly slot assignments with full reassignment history:
-
 | Field | Type | Notes |
 |-------|------|-------|
-| `slot_number` | VARCHAR(32) | e.g. "A1", "B2" |
+| `slot_number` | VARCHAR(32) | e.g. "1" – "80" (integer slot around disk) |
 | `position` | INTEGER | Numeric position within group |
 | `group_id` | VARCHAR(64) | Grouping identifier for related slots |
 | `is_active` | BOOLEAN | Only one active allocation per blade at any time |
@@ -342,7 +362,7 @@ Tracks assembly slot assignments with full reassignment history:
 
 ### BatchGroup
 
-Stores metadata associated with a batch number, populated automatically or via the batch-lookup API. Used to auto-fill blade fields when a known batch number is entered at registration.
+Stores metadata associated with a batch number. Used to auto-fill blade fields when a known batch number is entered at registration.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -353,7 +373,7 @@ Stores metadata associated with a batch number, populated automatically or via t
 | `nomenclature` | VARCHAR(128) | |
 | `created_at` | TIMESTAMP | |
 
-Batch size is capped at **90 LPTR + 90 HPTR = 180 blades total per batch number** (enforced at the API layer via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`). The per-type count is validated independently — you can have 90 LPTR and 0 HPTR, 45+45, or any combination up to 90 of each type.
+**Batch size cap:** 90 LPTR + 90 HPTR = **180 blades total per batch number**. Enforced at the API layer via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`. Per-type counts are validated independently.
 
 ### WorkflowLog (Immutable Audit Trail)
 
@@ -394,8 +414,6 @@ Batch size is capped at **90 LPTR + 90 HPTR = 180 blades total per batch number*
 
 ### AuditLog (HTTP & Business Action Trail)
 
-Dual-purpose audit table capturing both HTTP traffic and domain events:
-
 ```json
 {
   "method": "POST",
@@ -412,8 +430,8 @@ Dual-purpose audit table capturing both HTTP traffic and domain events:
 
 ### Attachment (File Storage Metadata)
 
-Files stored on disk under `/app/uploads/attachments/{blade_id}/{sanitized_filename}`.  
-OCR scan images stored under `/app/uploads/ocr_scans/`.
+Files stored at `/app/uploads/attachments/{blade_id}/{sanitized_filename}`.  
+OCR scan images stored at `/app/uploads/ocr_scans/`.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -459,10 +477,10 @@ Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORD
 | OH_INSPECTION | MEASUREMENTS_RECORDED | OH_OPERATOR | Auto on first measurement |
 | OH_INSPECTION | REJECTED | Any operator | |
 | OH_INSPECTION | ON_HOLD | Any operator | |
-| MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | Batches only if batch_number set |
+| MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | |
 | MEASUREMENTS_RECORDED | REJECTED | Any operator | |
 | MEASUREMENTS_RECORDED | ON_HOLD | Any operator | |
-| SENT_TO_ASSEMBLY | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | |
+| SENT_TO_ASSEMBLY | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | Via HAL batch assign |
 | SLOT_ASSIGNED | BALANCING_IN_PROGRESS | ASSEMBLY_OPERATOR | |
 | BALANCING_IN_PROGRESS | BALANCING_COMPLETED | ASSEMBLY_OPERATOR | |
 | BALANCING_COMPLETED | RETURNED_TO_OH | ASSEMBLY_OPERATOR | |
@@ -489,9 +507,120 @@ await engine.transition(blade, to_status=BladeStatus.SENT_TO_ASSEMBLY, user=curr
 
 ---
 
-## 6. API Reference
+## 6. Assembly Verification & Set-Making
 
-Base path: `/api/v1`
+This section describes the end-to-end workflow that the **Assembly Station (720 Hanger)** runs after receiving a batch from OH. Implemented in `backend/app/api/v1/endpoints/assembly.py` and `backend/app/services/assembly_service.py`.
+
+### Step 1 — Receive Batch
+
+```
+POST /assembly/batches/{batch_number}/receive
+→ Marks batch as RECEIVED
+→ Creates BatchEvent(event_type=RECEIVED_BY_ASSEMBLY)
+→ Notifies OH_OPERATORs
+
+GET /assembly/batches/{batch_number}/progress
+→ Returns per-blade verification status (verified / pending / rejected count)
+```
+
+### Step 2 — Verify Each Blade
+
+The operator QR-scans each blade's barcode or manually selects it, then the system compares Assembly measurements against the original OH records:
+
+```
+POST /assembly/blades/{blade_id}/verify
+body: { weight_grams, height_data, serial_number_scan }
+
+AssemblyService.verify_blade():
+  1. Fetch OH FINAL measurement (weight, DTI H1–Hn)
+  2. Compare weight: tolerance ±0.5 g
+  3. Compare height positions: tolerance ±0.010 mm per position
+  4. Check serial_number_scan matches blade.serial_number (QR/OCR)
+  5. Return suggested action: ACCEPT | REVIEW | REJECT
+```
+
+### Step 3 — Accept, Modify, or Reject
+
+```
+POST /assembly/blades/{blade_id}/accept
+  → Optional field overrides (weight, height_data) if within tolerance
+  → If overrides present: creates BatchEvent(event_type=MODIFIED)
+  → Transitions blade: SENT_TO_ASSEMBLY → ASSEMBLY_VERIFIED (internal sub-state)
+
+POST /assembly/blades/{blade_id}/reject
+  → body: { rejection_reason_id, remarks }
+  → Transitions blade → REJECTED
+  → Creates BatchEvent(event_type=REJECTED)
+  → Notifies OH_OPERATORs
+
+POST /batches/{batch_number}/accept   (bulk accept remaining)
+POST /batches/{batch_number}/reject   (bulk reject)
+POST /batches/{batch_number}/modify   (batch-level field modifications)
+```
+
+### Step 4 — Start Set-Making
+
+Once all blades are verified, the ASSEMBLY_OPERATOR triggers set-making:
+
+```
+POST /assembly/batches/{batch_number}/start-setmaking
+→ Validates: all blades in batch are ASSEMBLY_VERIFIED
+→ Transitions all blades to SLOT_ASSIGNED (via HAL algorithm)
+→ Creates SlotAllocation records
+→ Notifies OH that slot assignment is complete
+```
+
+### HAL Algorithm (Heavy-light Alternating Layout)
+
+Implemented in `backend/app/api/v1/endpoints/batches.py` at the `assign_batch_slot` endpoint.
+
+**Purpose:** Distribute turbine blades around the disc such that heavy blades are placed opposite lighter blades, minimising first-order imbalance before dynamic balancing.
+
+**Algorithm:**
+
+```python
+# 1. Sort blades by static_moment_gcm descending (heaviest first)
+sorted_blades = sorted(blades, key=lambda b: -sm_map[str(b.id)])
+
+# 2. Interleave: first half (heavy) + reversed second half (light → heavy)
+half = len(sorted_blades) // 2
+interleaved = sorted_blades[:half] + list(reversed(sorted_blades[half:]))
+# Net effect: alternates heavy–light–heavy–light around disc circumference
+
+# 3. Assign slot numbers starting from the known imbalance position
+# K = imbalance_slot (1–80, the heavy spot identified by the balancing machine)
+# N = total_slots (80 for a full-ring turbine disc)
+for i, blade in enumerate(interleaved):
+    computed_slot = str(((K - 1 + i) % N) + 1)
+    create SlotAllocation(blade_id=blade.id, slot_number=computed_slot)
+    transition blade → SLOT_ASSIGNED
+```
+
+**Inputs required:**
+- `imbalance_slot` (1–80): the slot number identified as the current heavy spot by the balancing machine from the previous run
+- `total_slots` (default 80): total positions on the disc
+
+**Outcome:** Each blade gets a `SlotAllocation` with a computed `slot_number`. The operator then physically places each blade in its assigned slot and records the dynamic balancing result.
+
+### Assembly Endpoint Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/assembly/batches/{batch_number}/receive` | Mark batch received at Assembly |
+| GET | `/assembly/batches/{batch_number}/receipt` | Get receipt details |
+| GET | `/assembly/batches/{batch_number}/progress` | Verification progress (counts) |
+| GET | `/assembly/batches/{batch_number}/blades` | List blades with verification status |
+| POST | `/assembly/blades/{blade_id}/verify` | Scan + validate vs OH records |
+| POST | `/assembly/blades/{blade_id}/accept` | Accept blade (optional field overrides) |
+| POST | `/assembly/blades/{blade_id}/reject` | Reject blade |
+| POST | `/assembly/batches/{batch_number}/start-setmaking` | Trigger HAL slot assignment |
+
+---
+
+## 7. API Reference
+
+Base path: `/api/v1`  
+**16 sub-routers** registered in `backend/app/api/v1/router.py`.
 
 ### Authentication
 
@@ -507,10 +636,10 @@ Base path: `/api/v1`
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | POST | `/blades/` | OH_OPERATOR | Register new blade |
-| GET | `/blades/` | Any | Paginated list with filters (see below) |
+| GET | `/blades/` | Any | Paginated list (see filters below) |
 | GET | `/blades/{id}` | Any | Full blade detail |
 | PUT | `/blades/{id}` | OH_OPERATOR | Update metadata |
-| DELETE | `/blades/{id}` | OH_OPERATOR / SUPER_ADMIN | Delete blade (see deletion rules) |
+| DELETE | `/blades/{id}` | OH_OPERATOR / SUPER_ADMIN | Hard delete (see deletion rules) |
 | GET | `/blades/rejection-reasons/` | Any | List active rejection reason options |
 | GET | `/blades/batch-lookup` | Any | Fetch BatchGroup metadata by batch number |
 | POST | `/blades/batch-groups` | OH_OPERATOR | Create or update a BatchGroup record |
@@ -526,29 +655,27 @@ Base path: `/api/v1`
 | GET | `/blades/{id}/attachments` | Any | List attachments |
 | POST | `/blades/{id}/attach-ocr-scan` | OH_OPERATOR | Attach a previously scanned OCR image |
 
-#### Blade List Filters
-
+**Blade List Filters:**
 ```
 GET /blades/?page=1&page_size=20
-  &status=OH_INSPECTION                    # single status
-  &blade_statuses=OH_INSPECTION,SLOT_ASSIGNED  # multiple statuses (comma-separated)
+  &status=OH_INSPECTION
+  &blade_statuses=OH_INSPECTION,SLOT_ASSIGNED   # comma-separated multi-status
   &blade_type=LPTR
   &batch_number=B2026-01
-  &sort_by=created_at                      # field to sort on
-  &sort_desc=true                          # descending order
+  &sort_by=created_at
+  &sort_desc=true
 ```
 
-#### Blade Deletion Rules
-
-- `SUPER_ADMIN` can delete any blade regardless of status.
-- `OH_OPERATOR` can only delete blades in statuses they own (e.g. `CREATED`, `OH_INSPECTION`) — not blades that have progressed to assembly.
-- Deletion is a **hard delete** (row removed), not a soft delete via `deleted_at`. Use with caution; `WorkflowLog` entries for the blade are cascade-deleted.
+**Blade Deletion Rules:**
+- `SUPER_ADMIN`: can delete any blade regardless of status.
+- `OH_OPERATOR`: can only delete blades in their own statuses (`CREATED`, `OH_INSPECTION`).
+- Deletion is a **hard delete** — rows are removed and `WorkflowLog` entries cascade-delete.
 
 ### Measurements
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/blades/{id}/measurements` | OH_OPERATOR | Record measurement; auto-transitions blade to MEASUREMENTS_RECORDED |
+| POST | `/blades/{id}/measurements` | OH_OPERATOR | Record; auto-transitions to MEASUREMENTS_RECORDED |
 | GET | `/blades/{id}/measurements` | Any | Measurement history |
 | GET | `/measurements/{id}` | Any | Single measurement |
 | PUT | `/measurements/{id}` | OH_OPERATOR | Update (pre-approval only) |
@@ -558,10 +685,41 @@ GET /blades/?page=1&page_size=20
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/slots/assign` | ASSEMBLY_OPERATOR | Assign blade to slot |
-| GET | `/slots/` | Any | List allocations |
-| GET | `/slots/{id}` | Any | Allocation detail |
-| PUT | `/slots/{id}` | ASSEMBLY_OPERATOR | Update balancing data |
+| POST | `/slots/assign` | ASSEMBLY_OPERATOR | Assign blade to a slot |
+| POST | `/slots/reassign` | ASSEMBLY_OPERATOR | Reassign blade to a new slot (updates previous_slot_number) |
+| PUT | `/slots/{slot_id}/balancing` | ASSEMBLY_OPERATOR | Record balancing result |
+| GET | `/slots/` | Any | List active slot allocations (paginated, filterable) |
+| GET | `/slots/blade/{blade_id}` | Any | Get current active slot for a blade |
+
+### Batches
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/batches/` | Any | List all batches with current status |
+| GET | `/batches/{batch_number}` | Any | Batch detail + full event history |
+| POST | `/batches/{batch_number}/send-to-assembly` | OH_OPERATOR | Bulk-send all eligible blades in batch |
+| POST | `/batches/{batch_number}/assign-slot` | ASSEMBLY_OPERATOR | Run HAL algorithm + assign all slots |
+| GET | `/batches/{batch_number}/rocking-creep` | Any | Rocking/creep values for all blades in batch |
+| POST | `/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Mark batch received |
+| POST | `/batches/{batch_number}/accept` | ASSEMBLY_OPERATOR | Bulk-accept remaining unverified blades |
+| POST | `/batches/{batch_number}/reject` | ASSEMBLY_OPERATOR | Bulk-reject batch |
+| POST | `/batches/{batch_number}/modify` | ASSEMBLY_OPERATOR | Apply blade-level field modifications |
+| POST | `/batches/{batch_number}/events` | ASSEMBLY_OPERATOR | Log a raw batch event |
+
+### Assembly (Section 6 for detail)
+
+See [Section 6](#6-assembly-verification--set-making) for the full assembly verification workflow.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch |
+| GET | `/assembly/batches/{batch_number}/receipt` | Any | Receipt details |
+| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress |
+| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with verification status |
+| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Scan + validate vs OH |
+| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept blade |
+| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject blade |
+| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Trigger HAL |
 
 ### Reports
 
@@ -572,6 +730,35 @@ GET /blades/?page=1&page_size=20
 | GET | `/reports/{id}` | Any | Status + metadata |
 | GET | `/reports/{id}/download` | Any | StreamingResponse download |
 
+### DTI Gauge
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/dti/push` | Internal (bridge script) | Receive height-position reading |
+| GET | `/dti/positions` | OH_OPERATOR | Get current position count (how many H positions) |
+| POST | `/dti/positions` | OH_OPERATOR | Set position count for next blade |
+| POST | `/dti/reset` | OH_OPERATOR | Force cycle reset to H1 |
+| WS | `/dti/ws?station=1` | OH_OPERATOR | Stream live DTI readings to browser |
+
+DTI endpoints support a `?station=1` or `?station=2` parameter for two-station deployments.
+
+### Weighing Scale
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/weighing/push` | Internal (bridge script) | Receive weight reading |
+| WS | `/weighing/ws` | OH_OPERATOR | Stream live weight readings to browser |
+
+### Sync (LAN Data Export)
+
+The `/sync` router exposes read-only endpoints that the Assembly PC backend calls to pull data from the OH PC when the Assembly station needs to operate with a local cache.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/sync/blades` | ASSEMBLY_OPERATOR | Export blades for sync |
+| GET | `/sync/measurements` | ASSEMBLY_OPERATOR | Export measurements for sync |
+| GET | `/sync/batches` | ASSEMBLY_OPERATOR | Export batch events for sync |
+
 ### Other Endpoints
 
 | Endpoint | Auth | Description |
@@ -580,19 +767,13 @@ GET /blades/?page=1&page_size=20
 | GET `/workflows/dashboard` | Any | Summary statistics |
 | GET/POST `/notifications/` | Authenticated | Unread list, mark-read |
 | WS `/notifications/ws` | Authenticated | Real-time notification stream |
-| WS `/weighing/ws` | OH_OPERATOR | Live scale data stream |
-| POST `/dti/push` | Internal (localhost) | Receive DTI reading from bridge script |
-| WS `/dti/ws` | OH_OPERATOR | Live DTI height-position readings stream |
 | POST `/ocr/scan` | OH_OPERATOR | Scan blade markings image |
-| POST `/ocr/verify-numbers` | OH_OPERATOR | Compare OCR result vs manual entry |
+| POST `/ocr/verify-numbers` | OH_OPERATOR | Compare OCR vs manual entry |
 | GET/POST `/stations/` | Any/Admin | Station management |
-| GET/POST `/batches/` | ASSEMBLY_OPERATOR | Batch event tracking |
 | GET `/audit-logs/` | SUPER_ADMIN | Full HTTP + domain audit trail |
 | GET `/health` | Public | Liveness check |
 
 ### Pagination Envelope
-
-All list endpoints use:
 
 ```json
 {
@@ -606,7 +787,7 @@ All list endpoints use:
 
 ---
 
-## 7. Authentication & RBAC
+## 8. Authentication & RBAC
 
 ### JWT Token Structure
 
@@ -623,13 +804,11 @@ All list endpoints use:
 ```
 
 - Access tokens expire in 30 minutes (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
-- Refresh tokens expire in 7 days (configurable via `REFRESH_TOKEN_EXPIRE_DAYS`)
+- Refresh tokens expire in 7 days (`REFRESH_TOKEN_EXPIRE_DAYS`)
 - Logout blacklists the `jti` in Redis; all middleware checks the blacklist on every request
 - `last_login` on the `users` row is updated on each successful `/auth/login`
 
 ### RBAC Enforcement
-
-Roles are checked at the endpoint level:
 
 ```python
 @router.post("/{blade_id}/send-to-assembly")
@@ -642,11 +821,11 @@ SUPER_ADMIN bypasses most role checks and has exclusive access to user managemen
 
 ---
 
-## 8. Real-Time & Async Processing
+## 9. Real-Time & Async Processing
 
 ### WebSocket Notifications
 
-`NotificationManager` (in-memory) holds a mapping of `user_id → List[WebSocket]`.
+`NotificationManager` (in-memory) holds `user_id → List[WebSocket]`.
 
 ```
 Client opens WebSocket: /api/v1/notifications/ws?token=<JWT>
@@ -664,7 +843,7 @@ Clients must reconnect and poll GET /notifications/ for missed messages.
 
 ### Celery Task Queue
 
-Used exclusively for report generation (CPU/IO-intensive):
+Used exclusively for report generation:
 
 ```
 POST /reports/ → create Report(status=PENDING) → enqueue task
@@ -675,55 +854,45 @@ Celery worker:
   → Write file to /app/reports/
   → Report(status=READY, file_path=..., file_size_bytes=..., completed_at=...)
   → Push SYSTEM notification to requesting user
-  
+
 On failure:
   → Report(status=FAILED, error_message=...)
-  → No notification (client must poll or re-request)
 ```
 
-Queues: `reports` (report generation), `celery` (default).  
-Worker concurrency: 2.  
-Max tasks per child: 50 (memory protection against leak accumulation).
+Queues: `reports`, `celery`.  Worker concurrency: 2.  Max tasks per child: 50.
 
 ---
 
-## 9. Hardware Integration
+## 10. Hardware Integration
 
-Physical instruments are connected to the Windows workstation at each hangar station. Each instrument uses a standalone bridge script that forwards readings to the backend over HTTP/WebSocket.
+Physical instruments connect to the Windows workstation at each hangar station via RS-232 or USB-to-serial adapter. Two bridge scripts forward readings to the backend.
+
+> **Important:** There is no `ocr_camera_bridge.py`. OCR is handled entirely within the backend via the `/ocr` endpoints. The operator uses the browser UI to upload or capture images.
 
 ```
-Instrument                  Model                 Bridge script         Push endpoint
-──────────────────────────  ────────────────────  ──────────────────    ────────────────────────
-Weighing Scale (OH + Assy)  iScale i-04, 0.1 g   weighing_bridge.py    POST /weighing/push
-DTI Gauge (OH + Assy)       Sylvac BT, 0.001 mm  dti_bridge.py         POST /dti/push
-OCR Camera (OH + Assy)      USB/UVC camera        ocr_camera_bridge.py  POST /ocr/scan/*
-QR Scanner (OH + Assy)      USB HID barcode gun   (keyboard emulation)  Browser reads directly
-Balancing Machine (Assy)    Turbine disc (HAL)    Manual entry UI       POST /slots/assign
+Instrument          Model               Bridge script       Push endpoint
+──────────────────  ──────────────────  ──────────────────  ─────────────────
+Weighing Scale      iScale i-04, 0.1g   weighing_bridge.py  POST /weighing/push
+DTI Gauge           Sylvac BT, 0.001mm  dti_bridge.py       POST /dti/push
+QR Scanner          USB HID barcode gun  (keyboard emul.)   Browser reads directly
+Balancing Machine   Turbine disc        Manual entry UI     POST /batches/assign-slot
 ```
 
 Bridge scripts are **not** part of the Docker Compose stack. Run each on the workstation physically connected to the instrument.
 
 ---
 
-### 9.1 Weighing Scale (scripts/weighing_bridge.py)
+### 10.1 Weighing Scale (scripts/weighing_bridge.py)
 
 **Model: Adam Equipment iScale i-04, resolution 0.1 g**
 
-Reads blade weight from the iScale i-04 over RS-232/USB and forwards readings to the backend, where they are broadcast to all open browser tabs.
-
-**Hardware interface:**
-
 | Parameter | Value |
 |-----------|-------|
-| Model | Adam Equipment iScale i-04 |
-| Resolution | 0.1 g |
-| Interface | RS-232 (DB-9) or USB-to-serial adapter |
-| Baud rate | 9600 (auto-detected; tries 4800, 2400, 19200, 38400) |
+| Default port | COM6 |
+| Baud rates tried | 9600, 4800, 2400, 19200, 38400 (auto-detect) |
 | Data bits | 8 |
 | Parity | None |
 | Stop bits | 1 |
-| Flow control | None |
-| Default port | COM6 |
 | Data format | ASCII, e.g. `0450.25\r\n` (grams) |
 
 **Data flow:**
@@ -731,13 +900,8 @@ Reads blade weight from the iScale i-04 over RS-232/USB and forwards readings to
 ```
 Scale → RS-232 → weighing_bridge.py
   → POST /api/v1/weighing/push  {"value": 450.25}
-  → backend _broadcast() → all WS /weighing/ws subscribers
-  → browser auto-fills weight_grams field
-```
-
-**Push payload:**
-```json
-{"value": 450.25}
+  → backend broadcast → all WS /weighing/ws subscribers
+  → browser auto-fills weight_grams field in measurement form
 ```
 
 **WebSocket message to browser:**
@@ -745,51 +909,43 @@ Scale → RS-232 → weighing_bridge.py
 {"type": "weight", "value": 450.25}
 ```
 
-The bridge handles serial port auto-discovery, reconnection on disconnect, and duplicate-reading suppression (unchanged readings are not re-posted).
+CLI usage:
+```bash
+python weighing_bridge.py --port COM6
+python weighing_bridge.py --port COM6 --server https://192.168.1.50
+```
 
 ---
 
-### 9.2 DTI Gauge (scripts/dti_bridge.py)
+### 10.2 DTI Gauge (scripts/dti_bridge.py)
 
 **Model: Sylvac BT, resolution 0.001 mm (Bluetooth RS-232 adapter)**
 
-Reads height-position measurements (H1 … Hn) from the Sylvac BT dial gauge. The bridge cycles through positions automatically: the operator moves the probe tip to each position and presses the gauge's DATA/SEND button; the bridge assigns each incoming reading to the next position in sequence and broadcasts it.
-
-**Hardware interface:**
-
 | Parameter | Value |
 |-----------|-------|
-| Model | Sylvac BT |
-| Resolution | 0.001 mm |
-| Interface | Bluetooth RS-232 adapter (presents as virtual COM port) |
-| Baud rate | 9600 (auto-detected) |
+| Default port | COM1 |
+| Baud rates tried | 9600, 4800, 2400, 19200, 38400 (auto-detect) |
 | Data bits | 8 |
 | Parity | None |
 | Stop bits | 1 |
-| Flow control | None |
-| Default port | COM7 |
 | Data format | ASCII, e.g. `+012.345\r\n` (signed mm, 3 d.p.) |
 
-**Compatible gauges (drop-in replacement):**
+**Position cycling:** The bridge fetches the current position count from `GET /api/v1/dti/positions` on startup and after each blade reset. The operator moves the probe to each position and presses the gauge's DATA/SEND button; the bridge assigns each incoming reading to the next position (H1 → H2 → H3 → …) then cycles back. Use `POST /dti/reset` to force reset to H1 for a new blade.
 
-- Sylvac BT (primary — this deployment)
+**Compatible gauges:**
+- Sylvac BT (this deployment)
 - Mitutoyo 543 series (absolute digimatic indicator)
 - Mahr MarCator 1086 R / 810 SW
-- Sylvac S_Dial Work / Smart
 - Any gauge producing a plain ASCII numeric reading per line
 
 **Data flow:**
 
 ```
-DTI Gauge → RS-232 → dti_bridge.py (cycles H1 → H2 → H3 → H4)
-  → POST /api/v1/dti/push  {"position": "H1", "value": 12.345}
-  → backend _broadcast() → all WS /dti/ws subscribers
-  → browser auto-fills height_data.H1 field
-```
-
-**Push payload:**
-```json
-{"position": "H1", "value": 12.345}
+DTI Gauge → RS-232 → dti_bridge.py
+  → POST /api/v1/dti/push  {"station": "1", "position": "H1", "value": 12.345}
+  → response includes next_position to advance cycle
+  → backend broadcast → all WS /dti/ws?station=1 subscribers
+  → browser auto-fills height_data.H1 in measurement form
 ```
 
 **WebSocket message to browser:**
@@ -797,102 +953,50 @@ DTI Gauge → RS-232 → dti_bridge.py (cycles H1 → H2 → H3 → H4)
 {"type": "dti", "position": "H1", "value": 12.345}
 ```
 
-**Command-line usage:**
+CLI usage:
 ```bash
-# Default: COM7, positions H1-H4
-python dti_bridge.py
-
-# Custom port and 5-position sequence
-python dti_bridge.py --port COM4 --positions H1 H2 H3 H4 H5
-
-# Remote server
-python dti_bridge.py --port COM7 --server https://192.168.1.50
+python dti_bridge.py                                          # COM1, station 1
+python dti_bridge.py --port COM4 --station 2                 # COM4, station 2
+python dti_bridge.py --port COM1 --server https://192.168.1.50
 ```
 
 ---
 
-### 9.3 OCR Camera System (scripts/ocr_camera_bridge.py)
-
-The OCR camera captures blade markings (serial number, melt/heat number, part number stamps) and submits the image to the backend OCR pipeline for extraction and cross-check against manually entered values.
-
-**Hardware interface:**
-
-| Parameter | Value |
-|-----------|-------|
-| Interface | USB Video Class (UVC) — plug-and-play on Windows 10/11 |
-| Alternatively | GigE / USB3 Vision industrial camera via OpenCV |
-| Resolution | Minimum 4 MP recommended for small etched markings |
-| Lighting | Integrated ring light or external coaxial illumination |
-| Trigger | Software trigger via OpenCV `VideoCapture.read()` or hardware trigger via GPIO |
-
-**Protocol: USB/UVC direct capture (recommended)**
-
-The bridge uses OpenCV (`cv2.VideoCapture`) to grab a frame from the camera, saves it to a JPEG in memory, and POSTs it to the backend OCR endpoint. No separate serial connection is required.
-
-**Data flow:**
-
-```
-Camera (USB/UVC) → OpenCV VideoCapture → ocr_camera_bridge.py
-  → POST /api/v1/ocr/scan/blade-serial  (multipart image)
-  → OCR provider extracts serial_number + confidence
-  → Response returned to operator UI
-  → POST /api/v1/ocr/verify-numbers  (manual vs OCR comparison)
-  → Sets blade.ocr_mismatch_flag if discrepancy detected
-  → OCR scan image saved to /app/uploads/ocr_scans/
-```
-
-**Protocol: GigE Vision / network camera (alternative)**
-
-For industrial cameras with a network interface:
-```
-Camera (GigE) → LAN → ocr_camera_bridge.py (aravis / harvesters library)
-  → Same POST to /api/v1/ocr/scan/* as above
-```
-
-**Required Python packages (camera bridge only):**
-```
-opencv-python>=4.9.0    # UVC capture + image encode
-requests                # HTTP POST to backend
-```
-
-For GigE Vision cameras add: `harvesters` (or `aravis` bindings).
-
----
-
-## 10. OCR Integration
+## 11. OCR Integration
 
 ### Provider Registry (backend/app/ocr/registry.py)
 
 Three providers available via `OCR_PROVIDER` environment variable:
 
-| Provider | Description | Dependencies | Default? |
-|----------|-------------|-------------|---------|
-| `mock` | Returns stub data; for dev/test | None | No |
-| `tesseract` | Traditional OCR via pytesseract | `tesseract-ocr` system package | No |
-| `paddleocr` | Deep learning OCR | `paddlepaddle`, `paddleocr` | **Yes** |
+| Provider | Default? | Dependencies |
+|----------|---------|-------------|
+| `mock` | No | None — stub data, for dev/test |
+| `tesseract` | No | `tesseract-ocr` system package |
+| `paddleocr` | **Yes** | `paddlepaddle`, `paddleocr` |
 
-> **Note:** The default provider in `config.py` is `paddleocr`. On servers without GPU or PaddleOCR system dependencies, explicitly set `OCR_PROVIDER=mock` for development and `OCR_PROVIDER=tesseract` as a lightweight production alternative.
+> **Note:** Default in `config.py` is `paddleocr`. On machines without PaddleOCR dependencies, set `OCR_PROVIDER=mock` for dev or `OCR_PROVIDER=tesseract` for lightweight production use.
 
 ### Flow
 
 ```
-POST /ocr/scan  (multipart: image file)
-→ OCRRegistry.get_provider(OCR_PROVIDER).scan(image_bytes)
-→ Returns {serial_number, melt_number, confidence}
+Operator selects blade image in browser UI
+  → POST /ocr/scan  (multipart: image file)
+  → OCRRegistry.get_provider(OCR_PROVIDER).scan(image_bytes)
+  → Returns {serial_number, melt_number, confidence}
 
 POST /ocr/verify-numbers  (manual_serial, manual_melt, ocr_serial, ocr_melt)
-→ Compare strings
-→ Set blade.ocr_mismatch_flag + blade.ocr_mismatch_notes if mismatch detected
-→ Return verification result
+  → Compares strings
+  → Sets blade.ocr_mismatch_flag + blade.ocr_mismatch_notes on mismatch
+  → Returns verification result
 
 POST /blades/{id}/attach-ocr-scan
-→ Associates a previously scanned image file with the blade as an OCR_SCAN attachment
-→ Stores under /app/uploads/ocr_scans/
+  → Associates the scanned image with the blade as OCR_SCAN attachment
+  → Stores under /app/uploads/ocr_scans/
 ```
 
 ---
 
-## 11. Report Generation
+## 12. Report Generation
 
 ### Supported Formats
 
@@ -901,7 +1005,7 @@ POST /blades/{id}/attach-ocr-scan
 | Excel (.xlsx) | openpyxl | Data export, further analysis |
 | PDF | ReportLab / WeasyPrint | Print-quality traceability reports |
 
-### Report Filters (stored in `filter_params` JSONB)
+### Report Filters
 
 ```json
 {
@@ -910,15 +1014,30 @@ POST /blades/{id}/attach-ocr-scan
   "blade_type": "LPTR",
   "date_from": "2026-01-01",
   "date_to": "2026-06-30",
-  "batch_number": "B2026-01"
+  "batch_number": "B2026-01",
+  "serial_number": "SN010001"
 }
 ```
 
-Reports include: blade identity (including nomenclature, engine hours, component hours), all measurements (initial/interim/final), slot allocations, balancing data, full workflow history, rejection details (if any).
+### Report Structure
+
+The generator (`backend/app/reports/generator.py`) produces **5 sheets/sections**:
+
+| Sheet | Contents |
+|-------|----------|
+| 1 — Summary | Serial, melt, status, station, created, updated |
+| 2 — Measurements | Type, weight, static moment, rocking, creep, date, station |
+| 3 — Slot Allocations | Serial, slot #, position, balanced flag, imbalance value |
+| 4 — Workflow History | From/to status, actor, timestamp |
+| 5 — Batch Traceability | Batch #, serial, melt, blade type, status, slot, rocking, creep |
+
+A **Dashboard Summary** report (separate type) additionally includes: total blade count, blades by status, blades by station, rejection rate %, average processing hours.
+
+The IRS logical sections (A–G, described in Section 13) map across these 5 sheets.
 
 ---
 
-## 12. IRS (Inspection Record Sheet) Format
+## 13. IRS (Inspection Record Sheet) Format
 
 The Inspection Record Sheet is the official per-blade compliance document produced at the end of the OH inspection stage. It is generated as a PDF (printed and signed by the inspector) or Excel (retained in the digital archive). The IRS number uniquely identifies each inspection event.
 
@@ -934,71 +1053,70 @@ Example: IRS-45786-SN010001-20260618
 
 #### Section A — Blade Identity
 
-| Field | Source | Notes |
-|-------|--------|-------|
-| Work Order No. | `blade.work_order_number` | MRO work order |
-| Shop Order No. | `blade.shop_order_number` | Internal shop tracking number |
-| Part Number | `blade.part_number` | Drawing/part number e.g. 104.04.02.020 |
-| Nomenclature | `blade.nomenclature` | Human-readable name e.g. "HP Turbine Blade Stage 1" |
-| Serial Number | `blade.serial_number` | Physical blade identifier |
-| Melt / Heat Number | `blade.melt_number` | Material batch traceability |
-| Engine No. | `blade.engine_number` | Parent engine identifier |
-| Blade Type | `blade.blade_type` | `LPTR` or `HPTR` |
-| Engine Hours | `blade.engine_hours` | Total engine hours at removal |
-| Component Hours | `blade.component_hours` | Blade individual hours at removal |
-| Batch Number | `blade.batch_number` | Assembly batch grouping key |
-| Inspection Station | `blade.current_station_id → station.name` | OH station name |
+| Field | Source |
+|-------|--------|
+| Work Order No. | `blade.work_order_number` |
+| Shop Order No. | `blade.shop_order_number` |
+| Part Number | `blade.part_number` |
+| Nomenclature | `blade.nomenclature` |
+| Serial Number | `blade.serial_number` |
+| Melt / Heat Number | `blade.melt_number` |
+| Engine No. | `blade.engine_number` |
+| Blade Type | `blade.blade_type` |
+| Engine Hours | `blade.engine_hours` |
+| Component Hours | `blade.component_hours` |
+| Batch Number | `blade.batch_number` |
+| Inspection Station | `blade.current_station_id → station.name` |
 
 #### Section B — OCR Verification
 
-| Field | Source | Notes |
-|-------|--------|-------|
-| OCR Serial No. (extracted) | `blade.ocr_serial_number` | Extracted by OCR provider |
-| OCR Melt No. (extracted) | `blade.ocr_melt_number` | Extracted by OCR provider |
-| OCR Provider | Attachment metadata | `mock` / `tesseract` / `paddleocr` |
-| Confidence Score | OCR result | 0.0 – 1.0 |
-| Mismatch Flag | `blade.ocr_mismatch_flag` | `YES` if OCR disagrees with manual entry |
-| Mismatch Notes | `blade.ocr_mismatch_notes` | Inspector explanation of any discrepancy |
-| Scan Image Reference | `attachment.id` where `attachment_type=OCR_SCAN` | Stored at `/app/uploads/ocr_scans/` |
+| Field | Source |
+|-------|--------|
+| OCR Serial No. (extracted) | `blade.ocr_serial_number` |
+| OCR Melt No. (extracted) | `blade.ocr_melt_number` |
+| OCR Provider | Attachment metadata |
+| Confidence Score | OCR result (0.0 – 1.0) |
+| Mismatch Flag | `blade.ocr_mismatch_flag` |
+| Mismatch Notes | `blade.ocr_mismatch_notes` |
+| Scan Image Reference | `attachment.id` where `attachment_type=OCR_SCAN` |
 
 #### Section C — Weighing Machine Readings
 
 | Field | Source | Notes |
 |-------|--------|-------|
 | Gross Weight | `measurement.weight_grams` | Blade weight in grams |
-| Static Moment | `measurement.static_moment_gcm` | Auto-calculated: weight × 1.57 × 20 (g·cm) |
-| Measurement Type | `measurement.measurement_type` | `INITIAL` / `INTERIM` / `FINAL` |
-| Recorded By | `measurement.measured_by_id → user.full_name` | OH operator |
-| Recorded At | `measurement.measured_at` | Timestamp |
-| Station | `measurement.station_id → station.name` | Weighing station |
-| Scale Calibration Ref. | Free-text remarks field | Entered by operator; references the scale's calibration certificate |
+| Static Moment | `measurement.static_moment_gcm` | weight × 1.57 × 20 (g·cm) |
+| Measurement Type | `measurement.measurement_type` | INITIAL / INTERIM / FINAL |
+| Recorded By | `measurement.measured_by_id → user.full_name` | |
+| Recorded At | `measurement.measured_at` | |
+| Station | `measurement.station_id → station.name` | |
+| Scale Calibration Ref. | Free-text `measurement.notes` | |
 
 **Static moment formula:**
 ```
-Static Moment (g·cm) = Weight (g) × Moment Arm (cm)
-                     = weight_grams × 1.57 × 20
+Static Moment (g·cm) = weight_grams × 1.57 × 20
 ```
 
 #### Section D — DTI (Dial Test Indicator) Readings
 
-| Field | Source | Notes |
-|-------|--------|-------|
-| H1 reading | `measurement.height_data["H1"]` | Tip height at position 1 (mm) |
-| H2 reading | `measurement.height_data["H2"]` | Tip height at position 2 (mm) |
-| H3 reading | `measurement.height_data["H3"]` | Tip height at position 3 (mm) |
-| H4 reading | `measurement.height_data["H4"]` | Tip height at position 4 (mm) |
-| … Hn | `measurement.height_data["Hn"]` | Additional positions as required |
-| DTI Gauge Calibration Ref. | Free-text remarks field | References the gauge's calibration certificate |
+| Field | Source |
+|-------|--------|
+| H1 reading | `measurement.height_data["H1"]` (mm) |
+| H2 reading | `measurement.height_data["H2"]` (mm) |
+| H3 reading | `measurement.height_data["H3"]` (mm) |
+| H4 reading | `measurement.height_data["H4"]` (mm) |
+| … Hn | Additional positions as configured |
+| DTI Gauge Calibration Ref. | Free-text remarks field |
 
-Height data is stored as a JSONB map `{"H1": 12.34, "H2": 11.95, …}` in the `measurements` table. Position keys must match the pattern `H<n>` (H1, H2, H3, …). Readings are captured live from the DTI gauge via `dti_bridge.py` and auto-populated into the measurement form.
+Height data is stored as JSONB `{"H1": 12.34, "H2": 11.95, …}`. Position keys must match pattern `H<n>`. The number of positions is configured via `POST /dti/positions` and fetched dynamically by `dti_bridge.py`.
 
 #### Section E — Rocking & Creep Values
 
 | Field | Source | Notes |
 |-------|--------|-------|
-| Slot Number | `slot_allocation.slot_number` | Assigned by Assembly; must be present before entry |
-| Rocking Value | `measurement.rocking_value` | Required for all blade types |
-| Creep Value | `measurement.creep_value` | LPTR blades only; mandatory if blade_type = LPTR |
+| Slot Number | `slot_allocation.slot_number` | Assigned by Assembly |
+| Rocking Value | `measurement.rocking_value` | All blade types |
+| Creep Value | `measurement.creep_value` | LPTR only; null for HPTR |
 
 Rules enforced at the API layer:
 - **LPTR**: both `rocking_value` AND `creep_value` are mandatory.
@@ -1006,15 +1124,15 @@ Rules enforced at the API layer:
 
 #### Section F — Inspection Results & QA Sign-off
 
-| Field | Source | Notes |
-|-------|--------|-------|
-| Overall Result | Derived from `blade.status` | `PASS` if `MEASUREMENTS_RECORDED` or later active state; `FAIL` if `REJECTED` |
-| Rejection Reason | `blade.rejection_reason_id → rejection_reason.description` | Populated only on FAIL |
-| Rejection Notes | `blade.rejection_notes` | Inspector's narrative |
-| Inspector Remarks | `measurement.notes` | Free-text field on the measurement record |
-| Approved By | `measurement.approved_by_id → user.full_name` | QA sign-off name |
-| Approval Date | `measurement.approved_at` | QA sign-off timestamp |
-| Approval Status | `measurement.is_approved` | `APPROVED` / `PENDING` |
+| Field | Source |
+|-------|--------|
+| Overall Result | Derived: `PASS` if status is active post-inspection; `FAIL` if REJECTED |
+| Rejection Reason | `blade.rejection_reason_id → rejection_reason.description` |
+| Rejection Notes | `blade.rejection_notes` |
+| Inspector Remarks | `measurement.notes` |
+| Approved By | `measurement.approved_by_id → user.full_name` |
+| Approval Date | `measurement.approved_at` |
+| Approval Status | `measurement.is_approved` |
 
 #### Section G — Workflow Timeline
 
@@ -1028,38 +1146,43 @@ Sourced from `WorkflowLog` entries for the blade, ordered by timestamp:
 | Timestamp | UTC datetime |
 | Remarks | Optional operator note |
 
-### IRS in the Report Generator
-
-When generating a blade PDF or Excel report, the IRS structure above is mapped to the output:
-
-- **PDF**: Printed in sections A–G on consecutive pages. Each section has a title bar, tabular data, and a signature/approval footer.
-- **Excel**: One sheet per section (Sheet 1 = Identity, Sheet 2 = Measurements, Sheet 3 = DTI/Rocking/Creep, Sheet 4 = Workflow History).
-
-The filter `filter_params.serial_number` or `filter_params.status` on the report generation request controls which blades' IRS records are included in a batch report.
-
 ---
 
-## 13. Infrastructure & Deployment
+## 14. Infrastructure & Deployment
+
+### Deployment Modes
+
+Three Docker Compose configurations cover the deployment scenarios:
+
+| File | Use Case | Database |
+|------|----------|----------|
+| `docker-compose.yml` | Single-machine (dev, testing, all-in-one) | Postgres runs locally |
+| `docker-compose.oh.yml` | OH Station (701 Hanger) production | Postgres runs here; exposes `/api/v1/sync/*` to LAN |
+| `docker-compose.assembly.yml` | Assembly Station (720 Hanger) production | Connects to OH PC Postgres; sets `STATION_ROLE=ASSEMBLY` and `OH_SYNC_URL` |
+
+For the two-station deployment:
+1. Start OH PC with `docker-compose.oh.yml` — this hosts the database
+2. Start Assembly PC with `docker-compose.assembly.yml` — set `DATABASE_URL` and `OH_SYNC_URL` to point at OH PC's LAN IP
 
 ### Docker Compose Services
 
-| Service | Image | Port | Notes |
-|---------|-------|------|-------|
-| `postgres` | postgres:15-alpine | internal | UTF-8 locale; volume: postgres_data |
-| `redis` | redis:7-alpine | internal | Password auth required; max 256 MB LRU; volume: redis_data |
-| `backend` | custom (Dockerfile) | 8000 (internal) | 4 Gunicorn workers |
-| `celery_worker` | same as backend | — | Same image, different CMD |
-| `frontend` | custom (Dockerfile) | 80 (via nginx) | Static SPA |
-| `nginx` | nginx:1.27-alpine | 80, 443 | Entry point |
+| Service | Image | Notes |
+|---------|-------|-------|
+| `postgres` | postgres:15-alpine | UTF-8 locale; volume: postgres_data; OH PC only |
+| `redis` | redis:7-alpine | Password auth required; max 256 MB LRU; volume: redis_data |
+| `backend` | custom (Dockerfile) | 4 Gunicorn workers; port 8000 internal |
+| `celery_worker` | same as backend | Queues: reports, celery; concurrency: 2 |
+| `frontend` | custom (Dockerfile) | Static SPA served via NGINX |
+| `nginx` | nginx:1.27-alpine | Entry point; ports 80, 443 |
 
-All services share a named Docker network `blade_rocking_net`.
+All services share Docker network `blade_rocking_net`.
 
 ### Volumes
 
 ```
 postgres_data   — persistent PostgreSQL data
 redis_data      — persistent Redis AOF/RDB
-./uploads       — file attachments (bind mount)
+./uploads       — file attachments + OCR scans (bind mount)
 ./reports       — generated reports (bind mount)
 ./logs          — structured logs (bind mount)
 ./ssl           — TLS certificates (production)
@@ -1077,13 +1200,8 @@ Four jobs on push to `main`:
 ### Database Migrations
 
 ```bash
-# New migration (after model change)
 alembic revision --autogenerate -m "describe_change"
-
-# Apply
 alembic upgrade head
-
-# Rollback one step
 alembic downgrade -1
 ```
 
@@ -1094,9 +1212,7 @@ Existing migrations:
 
 ---
 
-## 14. Security
-
-### Controls
+## 15. Security
 
 | Control | Implementation |
 |---------|----------------|
@@ -1109,13 +1225,13 @@ Existing migrations:
 | Input validation | Pydantic v2 strict schemas on all endpoints |
 | SQL injection | SQLAlchemy parameterized queries only |
 | Audit trail | Every HTTP request + domain event logged to `audit_logs` |
-| Soft deletes | Users and blades (non-deleted path) use `deleted_at` timestamp |
-| Hard deletes | Blade deletion via DELETE endpoint removes rows permanently |
+| Soft deletes | Users: `deleted_at` timestamp |
+| Hard deletes | Blade DELETE endpoint removes rows permanently |
 | File upload | MIME-type validation via python-magic; size cap via `MAX_FILE_SIZE_MB` |
 
 ---
 
-## 15. Testing
+## 16. Testing
 
 ### Structure
 
@@ -1123,43 +1239,63 @@ Existing migrations:
 backend/app/tests/
 ├── conftest.py               # Async fixtures: db, test_user, test_blade, client
 ├── api/
-│   ├── test_auth.py          # Login, refresh, logout, /me
-│   ├── test_blades.py        # CRUD, workflow transitions, RBAC
-│   └── test_rbac.py          # Cross-role access matrix
+│   ├── test_auth.py
+│   ├── test_blades.py
+│   └── test_rbac.py
 └── unit/
-    └── test_workflow.py      # State machine transitions (no DB)
+    └── test_workflow.py      # State machine transitions (pure Python, no DB)
 ```
 
 ### Running Tests
 
 ```bash
-# Full suite with coverage (70% minimum)
-pytest app/tests/ -v --cov=app --cov-fail-under=70
-
-# Unit only (fast, no DB)
-pytest app/tests/unit/ -v
-
-# API integration
-pytest app/tests/api/ -v
-
-# Single test
+pytest app/tests/ -v --cov=app --cov-fail-under=70   # full suite (70% gate)
+pytest app/tests/unit/ -v                              # unit only (fast)
+pytest app/tests/api/ -v                               # API integration
 pytest app/tests/api/test_blades.py::test_send_to_assembly -v
 ```
 
 ### Key Fixtures
 
-| Fixture | Scope | Description |
-|---------|-------|-------------|
-| `db` | function | In-process async DB session |
-| `client` | function | AsyncTestClient with test DB |
-| `test_user` | function | OH_OPERATOR user |
-| `admin_user` | function | SUPER_ADMIN user |
-| `test_blade` | function | Blade in OH_INSPECTION status |
-| `fake_redis` | session | fakeredis instance (no real Redis needed) |
+| Fixture | Description |
+|---------|-------------|
+| `db` | In-process async DB session |
+| `client` | AsyncTestClient with test DB |
+| `test_user` | OH_OPERATOR user |
+| `admin_user` | SUPER_ADMIN user |
+| `test_blade` | Blade in OH_INSPECTION status |
+| `fake_redis` | fakeredis (no real Redis needed) |
 
 ---
 
-## 16. Configuration Reference
+## 17. Frontend Routes
+
+Defined in `frontend/src/routes/index.tsx`. Role-based routing enforced client-side; role mismatches redirect to the role's home page.
+
+| Route | Page | Minimum Role |
+|-------|------|-------------|
+| `/login` | LoginPage | Public |
+| `/` | RoleHome (redirect) | Authenticated |
+| `/dashboard` | DashboardPage | SUPER_ADMIN |
+| `/blades/new` | BladeEntryPage | OH_OPERATOR |
+| `/blades/:id` | BladeDetailPage | Any |
+| `/blades/:id/timeline` | WorkflowTimelinePage | Any |
+| `/oh-queue` | OHQueuePage | OH_OPERATOR |
+| `/assembly-queue` | AssemblyQueuePage | ASSEMBLY_OPERATOR |
+| `/slots` | SlotAllocationPage | ASSEMBLY_OPERATOR |
+| `/rocking-creep` | RockingCreepPage | OH_OPERATOR |
+| `/assembly/verify/:batchNumber` | AssemblyVerificationPage | ASSEMBLY_OPERATOR |
+| `/batch-tracking` | BatchTrackingPage | Any |
+| `/batches/:batchNumber/modify` | ModifyBatchPage | ASSEMBLY_OPERATOR |
+| `/batches/:batchNumber/accept` | AcceptBatchPage | ASSEMBLY_OPERATOR |
+| `/reports` | ReportsPage | Any |
+| `/users` | UserManagementPage | SUPER_ADMIN |
+| `/notifications` | NotificationsPage | Authenticated |
+| `/settings` | SettingsPage | Authenticated |
+
+---
+
+## 18. Configuration Reference
 
 ### Required Environment Variables
 
@@ -1170,8 +1306,8 @@ POSTGRES_DB=blade_rocking
 POSTGRES_USER=blade_user
 POSTGRES_PASSWORD=<strong-password>
 
-# Security (generate: python3 -c "import secrets; print(secrets.token_hex(32))")
-SECRET_KEY=<64-char-hex>
+# Security
+SECRET_KEY=<64-char-hex>   # python3 -c "import secrets; print(secrets.token_hex(32))"
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
@@ -1182,39 +1318,41 @@ REDIS_PASSWORD=<strong-password>
 CELERY_BROKER_URL=redis://:password@redis:6379/1
 CELERY_RESULT_BACKEND=redis://:password@redis:6379/2
 
-# CORS (comma-separated list for production)
+# CORS
 CORS_ORIGINS=["https://your-domain.internal"]
 ```
 
 ### Optional Environment Variables
 
 ```bash
-# OCR backend: mock | tesseract | paddleocr  (default: paddleocr)
-# Set to mock for dev machines without PaddleOCR installed
-OCR_PROVIDER=mock
+# Two-station deployment (Assembly PC only)
+STATION_ROLE=ASSEMBLY          # "OH" or "ASSEMBLY"
+OH_SYNC_URL=https://192.168.1.50
+
+# OCR backend (default: paddleocr — set mock for dev without PaddleOCR installed)
+OCR_PROVIDER=mock              # mock | tesseract | paddleocr
 
 # File storage
 UPLOAD_DIR=/app/uploads
 REPORTS_DIR=/app/reports
 MAX_FILE_SIZE_MB=10
 
-# Email notifications (leave blank to disable; smtp_enabled property checks all fields)
+# Email notifications (leave blank to disable)
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASSWORD=
-SMTP_TLS=true                   # Use TLS when connecting to SMTP server
+SMTP_TLS=true
 EMAILS_FROM_EMAIL=noreply@example.com
 
 # Observability
 LOG_LEVEL=INFO
 LOG_FORMAT=json
-ENABLE_METRICS=false            # Prometheus endpoint at /metrics
+ENABLE_METRICS=false           # Prometheus endpoint at /metrics
 
 # Runtime
 ENVIRONMENT=dev|staging|prod
 DEBUG=false
-APP_NAME=Blade Rocking & Creep Test Management System
 APP_VERSION=1.0.0
 ```
 

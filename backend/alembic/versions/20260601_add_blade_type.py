@@ -21,18 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # The bladetype enum type already exists in the database.
-    # Just add the column with a server default so existing rows get a value.
-    bladetype = sa.Enum('LPTR', 'HPTR', name='bladetype', create_type=False)
-    op.add_column(
-        'blades',
-        sa.Column(
-            'blade_type',
-            bladetype,
-            nullable=False,
-            server_default='LPTR',
-        ),
-    )
+    # Use ADD COLUMN IF NOT EXISTS so this is safe to run on DBs where the
+    # initial schema already included blade_type.
+    op.execute("ALTER TABLE blades ADD COLUMN IF NOT EXISTS blade_type bladetype NOT NULL DEFAULT 'LPTR'")
 
 
 def downgrade() -> None:

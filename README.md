@@ -68,6 +68,9 @@ docker-compose exec backend alembic upgrade head
 docker-compose exec backend python ../scripts/seed_data.py
 ```
 
+> Setting this up on a different PC — a fresh factory machine, or the full
+> two-station OH/Assembly deployment? See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
 ### Service URLs
 
 | Service            | URL |

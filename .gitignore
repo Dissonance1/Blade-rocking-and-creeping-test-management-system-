@@ -10,6 +10,7 @@ env/
 ENV/
 .env
 !.env.example
+CREDENTIALS.local.md
 *.egg-info/
 dist/
 build/
