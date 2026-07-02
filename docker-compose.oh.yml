@@ -1,0 +1,196 @@
+version: "3.9"
+
+# =============================================================================
+# Blade Rocking & Creep Test System — OH Station (701 Hanger)
+#
+# Run this compose file on the OH PC that hosts the database.
+#
+# First-time setup:
+#   1. cp .env.oh.example .env.oh   (edit passwords, SECRET_KEY, OH_SYNC_API_KEY)
+#   2. docker-compose -f docker-compose.oh.yml build
+#   3. docker-compose -f docker-compose.oh.yml up -d
+#   4. docker-compose -f docker-compose.oh.yml exec oh_backend alembic upgrade head
+#   5. docker-compose -f docker-compose.oh.yml exec oh_backend python scripts/seed_data.py
+#
+# Access from Assembly PC on the LAN:  http://<OH_PC_IP>/api/v1/sync/...
+# Local UI:                            http://localhost/
+# =============================================================================
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+    target: production
+  env_file: .env.oh
+  environment:
+    STATION_ROLE: "OH"
+  depends_on:
+    oh_postgres:
+      condition: service_healthy
+    oh_redis:
+      condition: service_healthy
+  networks:
+    - oh_network
+  restart: unless-stopped
+
+services:
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL 15 — primary database, hosted on OH PC
+  # --------------------------------------------------------------------------
+  oh_postgres:
+    image: postgres:15-alpine
+    container_name: oh_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-blade_rocking_oh}
+      POSTGRES_USER: ${POSTGRES_USER:-blade_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      - oh_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-blade_user} -d ${POSTGRES_DB:-blade_rocking_oh}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - oh_network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Redis 7
+  # --------------------------------------------------------------------------
+  oh_redis:
+    image: redis:7-alpine
+    container_name: oh_redis
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD:-changeme_redis_oh}
+    volumes:
+      - oh_redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_redis_oh}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - oh_network
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # FastAPI Backend
+  # --------------------------------------------------------------------------
+  oh_backend:
+    <<: *backend-common
+    container_name: oh_backend
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/oh/backend:/app/logs
+    expose:
+      - "8000"
+    networks:
+      oh_network:
+        aliases:
+          - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # Celery Worker
+  # --------------------------------------------------------------------------
+  oh_celery:
+    <<: *backend-common
+    container_name: oh_celery
+    command: >
+      celery -A app.worker worker
+      --loglevel=info
+      -Q reports,celery
+      --concurrency=2
+      --max-tasks-per-child=50
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/oh/celery:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  # --------------------------------------------------------------------------
+  # React Frontend
+  # --------------------------------------------------------------------------
+  oh_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: oh_frontend
+    depends_on:
+      - oh_backend
+    expose:
+      - "80"
+    networks:
+      oh_network:
+        aliases:
+          - frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # NGINX — exposes port 80 to LAN so Assembly PC can call the sync API
+  # --------------------------------------------------------------------------
+  oh_nginx:
+    image: nginx:1.27-alpine
+    container_name: oh_nginx
+    depends_on:
+      oh_backend:
+        condition: service_healthy
+      oh_frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs/oh/nginx:/var/log/nginx
+    networks:
+      - oh_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sfk", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  oh_network:
+    driver: bridge
+    name: oh_blade_rocking_net
+
+volumes:
+  oh_postgres_data:
+    name: oh_blade_postgres_data
+  oh_redis_data:
+    name: oh_blade_redis_data

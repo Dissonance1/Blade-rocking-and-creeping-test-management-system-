@@ -1,0 +1,129 @@
+version: "3.9"
+
+# =============================================================================
+# Assembly Station (720 Hanger) — NO local database
+#
+# Backend connects to OH PC's PostgreSQL over LAN via DATABASE_URL.
+# Run on Assembly PC:
+#   docker compose -f docker-compose.assembly.yml --env-file .env.assembly up -d --build
+#   docker compose -f docker-compose.assembly.yml --env-file .env.assembly exec backend alembic upgrade head
+# =============================================================================
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+    target: production
+  env_file: .env.assembly
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - assembly_network
+  restart: unless-stopped
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: assembly_redis
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD:-changeme_redis}
+    volumes:
+      - assembly_redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - assembly_network
+    restart: unless-stopped
+
+  backend:
+    <<: *backend-common
+    container_name: assembly_backend
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/backend:/app/logs
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  celery_worker:
+    <<: *backend-common
+    container_name: assembly_celery_worker
+    command: >
+      celery -A app.worker worker
+      --loglevel=info
+      -Q reports,celery
+      --concurrency=2
+      --max-tasks-per-child=50
+    volumes:
+      - ./uploads:/app/uploads
+      - ./reports:/app/reports
+      - ./logs/celery:/app/logs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: assembly_frontend
+    depends_on:
+      - backend
+    expose:
+      - "80"
+    networks:
+      - assembly_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: assembly_nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+      - ./logs/nginx:/var/log/nginx
+    networks:
+      - assembly_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  assembly_network:
+    driver: bridge
+    name: assembly_blade_rocking_net
+
+volumes:
+  assembly_redis_data:
+    name: assembly_blade_redis_data
