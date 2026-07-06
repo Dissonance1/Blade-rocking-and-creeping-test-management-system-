@@ -13,22 +13,26 @@ import {
   Wrench,
   Hash,
   ChevronDown,
-  ArrowUpDown,
   ArrowUp,
-  ArrowDown,
-  ChevronRight,
-  Weight,
-  Search,
+  PauseCircle,
+  Cog,
+  Zap,
+  ShieldCheck,
+  BarChart3,
+  TrendingUp,
+  Kanban,
+  Cpu,
+  FileBarChart,
 } from "lucide-react";
-import { formatDistanceToNow, parseISO } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 
 import { workflowService } from "@/services/workflowService";
+import { batchService, type BatchSummary } from "@/services/batchService";
 import api from "@/services/api";
-import type { BladeStatus, DashboardStats, BladeListItem } from "@/types";
+import type { BladeStatus, DashboardStats } from "@/types";
 import { cn } from "@/utils/cn";
 
 // ─── Status config ────────────────────────────────────────────────────────────
@@ -51,34 +55,94 @@ const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> = {
   REOPENED:              { label: "Reopened",              color: "bg-purple-500 text-white" },
 };
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
+// ─── KPI card (operations-dashboard style) ─────────────────────────────────────
 
-function StatCard({ title, value, icon, gradient, shadow }: {
-  title: string; value: number; icon: React.ReactNode;
-  gradient: string; shadow: string;
+type KpiAccent = "blue" | "amber" | "emerald" | "rose";
+
+const KPI_ACCENT: Record<KpiAccent, { bg: string; text: string }> = {
+  blue:    { bg: "bg-blue-100 dark:bg-blue-500/15",       text: "text-blue-600 dark:text-blue-400" },
+  amber:   { bg: "bg-amber-100 dark:bg-amber-500/15",     text: "text-amber-600 dark:text-amber-400" },
+  emerald: { bg: "bg-emerald-100 dark:bg-emerald-500/15", text: "text-emerald-600 dark:text-emerald-400" },
+  rose:    { bg: "bg-rose-100 dark:bg-rose-500/15",       text: "text-rose-600 dark:text-rose-400" },
+};
+
+function KpiCard({ title, value, caption, icon, delta, accent }: {
+  title: string; value: number | string; caption?: string;
+  icon: React.ReactNode; delta?: number; accent: KpiAccent;
 }) {
+  const a = KPI_ACCENT[accent];
   return (
-    <div className={cn("rounded-xl p-5 text-white shadow-lg", gradient, shadow)}>
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 p-5 shadow-sm">
       <div className="flex items-center justify-between">
-        <div>
-          <p className="text-white/80 text-sm font-medium">{title}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
-        </div>
-        <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center", a.bg, a.text)}>
           {icon}
         </div>
+        {typeof delta === "number" && delta > 0 && (
+          <span className="flex items-center gap-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+            <ArrowUp className="w-3 h-3" /> +{delta}
+          </span>
+        )}
+      </div>
+      <p className="text-3xl font-bold mt-3 text-slate-900 dark:text-white">{value}</p>
+      <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mt-0.5">{title}</p>
+      {caption && <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">{caption}</p>}
+    </div>
+  );
+}
+
+// ─── Station card ───────────────────────────────────────────────────────────────
+
+function StationCard({ icon, iconBg, title, total, items, barColor, barPct }: {
+  icon: React.ReactNode; iconBg: string; title: string; total: number;
+  items: { label: string; value: number; dotColor: string }[];
+  barColor: string; barPct: number;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 p-5 shadow-sm flex flex-col">
+      <div className="flex items-center gap-3 mb-4">
+        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center shrink-0", iconBg)}>
+          {icon}
+        </div>
+        <div>
+          <p className="text-sm font-bold text-slate-900 dark:text-white">{title}</p>
+          <p className="text-xs text-slate-400 dark:text-slate-500">{total} blade{total !== 1 ? "s" : ""} in process</p>
+        </div>
+      </div>
+      <div className="space-y-2 flex-1">
+        {items.map((it) => (
+          <div key={it.label} className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+              <span className={cn("w-1.5 h-1.5 rounded-full", it.dotColor)} />
+              {it.label}
+            </span>
+            <span className="font-semibold text-slate-900 dark:text-white">{it.value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden mt-4">
+        <div className={cn("h-full rounded-full", barColor)} style={{ width: `${barPct}%` }} />
       </div>
     </div>
   );
 }
 
-// ─── Sort config ──────────────────────────────────────────────────────────────
+// ─── Quick action ───────────────────────────────────────────────────────────────
 
-type SortKey = "serial_number" | "weight_grams" | "static_moment" | "status" | "created_at";
-type SortDir = "asc" | "desc";
-
-// BladeListItem already has weight_grams, static_moment_gcm, work_order_number, engine_number
-type BladeSortable = BladeListItem;
+function QuickAction({ icon, iconBg, label, onClick }: {
+  icon: React.ReactNode; iconBg: string; label: string; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 px-4 py-4 text-left hover:border-orange-300 dark:hover:border-orange-500/50 hover:shadow-md transition-all"
+    >
+      <span className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", iconBg)}>
+        {icon}
+      </span>
+      <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{label}</span>
+    </button>
+  );
+}
 
 interface WorkOrderSummary {
   work_order_number: string;
@@ -95,10 +159,6 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const [selectedWO, setSelectedWO] = useState<string | null>(null);
   const [showWODropdown, setShowWODropdown] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("serial_number");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<BladeStatus | "ALL">("ALL");
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const { data: stats, dataUpdatedAt, refetch, isFetching } = useQuery<DashboardStats>({
@@ -116,79 +176,61 @@ export default function DashboardPage() {
     refetchInterval: 60_000,
   });
 
-  // Client-side pagination state
-  const [perPage, setPerPage] = useState<number>(50);
-  const [currentPage, setCurrentPage] = useState(1);
-
-  // Fetch blades — status filter applied server-side, limit=1000 (backend max)
-  const { data: bladesData, isLoading: loadingBlades } = useQuery<{
-    items: BladeSortable[];
-    total: number;
-  }>({
-    queryKey: ["dashboard-blades-all", statusFilter],
-    queryFn: async () => {
-      const params = statusFilter !== "ALL"
-        ? `status=${statusFilter}&limit=1000&page=1`
-        : `limit=1000&page=1`;
-      const { data } = await api.get(`/blades/?${params}`);
-      return data as { items: BladeSortable[]; total: number };
-    },
+  const { data: batches = [] } = useQuery<BatchSummary[]>({
+    queryKey: ["dashboard-batches"],
+    queryFn: () => batchService.list(),
     refetchInterval: 30_000,
   });
 
-  const allBladesTotal = bladesData?.total ?? 0;
+  const { data: throughputToday = [] } = useQuery<
+    { date: string; created: number; completed: number; rejected: number }[]
+  >({
+    queryKey: ["dashboard-throughput-today"],
+    queryFn: () => workflowService.getDailyThroughput(1),
+    refetchInterval: 60_000,
+  });
 
   const activeWO: WorkOrderSummary | null =
     workOrders.find((w) => w.work_order_number === selectedWO) ??
     workOrders[0] ?? null;
 
-  // ── Sort + filter + paginate — all client-side ───────────────────────────
-  const allBlades: BladeSortable[] = bladesData?.items ?? [];
+  // ── Operations-dashboard derived values ──────────────────────────────────
+  const byStatus = (stats?.by_status ?? {}) as Partial<Record<BladeStatus, number>>;
+  const totalBlades = Object.values(byStatus).reduce((a, b) => a + (b ?? 0), 0);
+  const onHoldCount = byStatus.ON_HOLD ?? 0;
+  const inProgressCount = Math.max(0, (stats?.total_active ?? 0) - onHoldCount);
+  const completedCount = stats?.total_completed ?? 0;
+  const completionRate = totalBlades > 0 ? (completedCount / totalBlades) * 100 : 0;
+  const todayCreated = throughputToday[0]?.created ?? 0;
+  const todayCompleted = throughputToday[0]?.completed ?? 0;
+  const activeBatches = batches.filter((b) => b.blades_completed < b.blade_count);
 
-  // Step 1: filter
-  const filtered = allBlades.filter((b) => {
-    const q = search.toLowerCase();
-    const matchSearch =
-      !q ||
-      b.serial_number.toLowerCase().includes(q) ||
-      (b.melt_number ?? "").toLowerCase().includes(q) ||
-      (b.work_order_number ?? "").toLowerCase().includes(q) ||
-      (b.engine_number ?? "").toLowerCase().includes(q);
-    const matchStatus = statusFilter === "ALL" || b.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+  // Overhaul Hangar
+  const ohInspection = byStatus.OH_INSPECTION ?? 0;
+  const ohMeasurement = byStatus.MEASUREMENTS_RECORDED ?? 0;
+  const ohTotal = ohInspection + ohMeasurement;
 
-  // Step 2: sort
-  const sortedAll = [...filtered].sort((a, b) => {
-    let cmp = 0;
-    if (sortKey === "serial_number") cmp = a.serial_number.localeCompare(b.serial_number);
-    else if (sortKey === "weight_grams") cmp = ((a.weight_grams ?? 0) - (b.weight_grams ?? 0));
-    else if (sortKey === "static_moment") cmp = ((a.static_moment_gcm ?? 0) - (b.static_moment_gcm ?? 0));
-    else if (sortKey === "status") cmp = a.status.localeCompare(b.status);
-    else if (sortKey === "created_at") cmp = a.created_at.localeCompare(b.created_at);
-    return sortDir === "asc" ? cmp : -cmp;
-  });
+  // Assembly Hangar
+  const asmQueued = (byStatus.SENT_TO_ASSEMBLY ?? 0) + (byStatus.ASSEMBLY_RECEIVED ?? 0) + (byStatus.ASSEMBLY_VERIFIED ?? 0);
+  const asmSlotted = byStatus.SLOT_ASSIGNED ?? 0;
+  const asmBalancing = (byStatus.BALANCING_IN_PROGRESS ?? 0) + (byStatus.BALANCING_COMPLETED ?? 0);
+  const asmTotal = asmQueued + asmSlotted + asmBalancing;
 
-  // Step 3: client-side paginate
-  const totalFiltered = sortedAll.length;
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / perPage));
-  const safeCurrentPage = Math.min(currentPage, totalPages);
-  const pageStart = (safeCurrentPage - 1) * perPage;
-  const sorted = sortedAll.slice(pageStart, pageStart + perPage);
+  // Final Verification
+  const fvReturned = byStatus.RETURNED_TO_OH ?? 0;
+  const fvVerifying = byStatus.FINAL_VERIFICATION ?? 0;
+  const fvTotal = fvReturned + fvVerifying;
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
-  }
+  const maxStationTotal = Math.max(ohTotal, asmTotal, fvTotal, 1);
 
-  function SortIcon({ k }: { k: SortKey }) {
-    if (sortKey !== k) return <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />;
-    return sortDir === "asc"
-      ? <ArrowUp className="w-3.5 h-3.5 text-orange-500" />
-      : <ArrowDown className="w-3.5 h-3.5 text-orange-500" />;
-  }
-
-  const uniqueStatuses = Array.from(new Set(allBlades.map((b) => b.status))).sort();
+  // Status distribution — full workflow order
+  const STATUS_ORDER: BladeStatus[] = [
+    "CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "SENT_TO_ASSEMBLY",
+    "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "SLOT_ASSIGNED",
+    "BALANCING_IN_PROGRESS", "BALANCING_COMPLETED", "RETURNED_TO_OH",
+    "FINAL_VERIFICATION", "COMPLETED", "ON_HOLD", "REJECTED", "REOPENED",
+  ];
+  const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
@@ -202,12 +244,15 @@ export default function DashboardPage() {
               Operations Dashboard
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {dataUpdatedAt
-                ? `Last updated ${formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}`
-                : "Loading…"}
+              Real-time blade tracking across all stations
+              {dataUpdatedAt && (
+                <span className="text-slate-400 dark:text-slate-500">
+                  {" · "}Last updated {formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}
+                </span>
+              )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}
               className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 gap-1.5">
               <RefreshCw className={cn("w-3.5 h-3.5", isFetching && "animate-spin")} />
@@ -226,6 +271,172 @@ export default function DashboardPage() {
       </div>
 
       <div className="max-w-screen-2xl mx-auto px-6 py-6 space-y-5">
+
+        {/* ── KPI cards ────────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+          <KpiCard title="Total Blades" value={totalBlades}
+            caption={`${activeBatches.length} active batch${activeBatches.length !== 1 ? "es" : ""}`}
+            icon={<Layers className="w-5 h-5" />} delta={todayCreated} accent="blue" />
+          <KpiCard title="In Progress" value={inProgressCount}
+            caption="Across all stations"
+            icon={<Clock className="w-5 h-5" />} accent="amber" />
+          <KpiCard title="Completed" value={completedCount}
+            caption={`${completionRate.toFixed(1)}% completion rate`}
+            icon={<CheckCircle2 className="w-5 h-5" />} delta={todayCompleted} accent="emerald" />
+          <KpiCard title="On Hold" value={onHoldCount}
+            caption="Needs attention"
+            icon={<PauseCircle className="w-5 h-5" />} accent="rose" />
+        </div>
+
+        {/* ── Station cards ────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <StationCard
+            icon={<Cog className="w-5 h-5" />}
+            iconBg="bg-sky-100 dark:bg-sky-500/15 text-sky-600 dark:text-sky-400"
+            title="Overhaul Hangar"
+            total={ohTotal}
+            items={[
+              { label: "Inspection", value: ohInspection, dotColor: "bg-sky-500" },
+              { label: "Measurement", value: ohMeasurement, dotColor: "bg-sky-500" },
+            ]}
+            barColor="bg-sky-500"
+            barPct={(ohTotal / maxStationTotal) * 100}
+          />
+          <StationCard
+            icon={<Zap className="w-5 h-5" />}
+            iconBg="bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400"
+            title="Assembly Hangar"
+            total={asmTotal}
+            items={[
+              { label: "Queued", value: asmQueued, dotColor: "bg-orange-500" },
+              { label: "Slotted", value: asmSlotted, dotColor: "bg-orange-500" },
+              { label: "Balancing", value: asmBalancing, dotColor: "bg-orange-500" },
+            ]}
+            barColor="bg-orange-500"
+            barPct={(asmTotal / maxStationTotal) * 100}
+          />
+          <StationCard
+            icon={<ShieldCheck className="w-5 h-5" />}
+            iconBg="bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+            title="Final Verification"
+            total={fvTotal}
+            items={[
+              { label: "Returned", value: fvReturned, dotColor: "bg-emerald-500" },
+              { label: "Verifying", value: fvVerifying, dotColor: "bg-emerald-500" },
+            ]}
+            barColor="bg-emerald-500"
+            barPct={(fvTotal / maxStationTotal) * 100}
+          />
+        </div>
+
+        {/* ── Active Batches + Status Distribution ────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
+              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-orange-500" />
+                Active Batches
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+              {activeBatches.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 dark:text-slate-500 text-sm">
+                  No active batches
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {activeBatches.slice(0, 5).map((b) => {
+                    const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
+                    return (
+                      <div key={b.batch_number}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                              {b.batch_number}
+                            </p>
+                            <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                              {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}
+                            </p>
+                          </div>
+                          <span className="text-sm font-bold text-orange-500 shrink-0 ml-2">
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden">
+                          <div className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-500"
+                            style={{ width: `${pct}%` }} />
+                        </div>
+                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                          {b.blades_completed} / {b.blade_count} blades completed
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
+              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-orange-500" />
+                Status Distribution
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <div className="space-y-2.5">
+                {STATUS_ORDER.map((s) => {
+                  const cfg = STATUS_CFG[s];
+                  const count = byStatus[s] ?? 0;
+                  const pct = (count / maxStatusCount) * 100;
+                  const dotColor = cfg.color.split(" ")[0];
+                  return (
+                    <div key={s} className="flex items-center gap-3">
+                      <span className={cn("w-2 h-2 rounded-full shrink-0", dotColor)} />
+                      <span className="w-32 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate">
+                        {cfg.label}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden">
+                        <div className={cn("h-full rounded-full", dotColor)} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="w-6 shrink-0 text-right text-xs font-semibold text-slate-700 dark:text-slate-200">
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Quick actions ────────────────────────────────────────────────── */}
+        <div>
+          <h2 className="text-xs font-bold tracking-widest uppercase text-slate-400 dark:text-slate-500 mb-3">
+            Quick Actions
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <QuickAction
+              icon={<Kanban className="w-4 h-4" />}
+              iconBg="bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400"
+              label="Workflow Board"
+              onClick={() => navigate("/batch-tracking")}
+            />
+            <QuickAction
+              icon={<Cpu className="w-4 h-4" />}
+              iconBg="bg-sky-100 dark:bg-sky-500/15 text-sky-600 dark:text-sky-400"
+              label="Instrument Data"
+              onClick={() => navigate("/rocking-creep")}
+            />
+            <QuickAction
+              icon={<FileBarChart className="w-4 h-4" />}
+              iconBg="bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+              label="QA Reports"
+              onClick={() => navigate("/reports")}
+            />
+          </div>
+        </div>
 
         {/* ── Work Order / Engine Summary ─────────────────────────────────── */}
         {workOrders.length > 0 && (
@@ -282,27 +493,6 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ── Stat cards ──────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-          <StatCard title="Active Blades"  value={stats?.total_active ?? 0}
-            icon={<Layers className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-blue-500 to-blue-600"
-            shadow="shadow-blue-200 dark:shadow-blue-900/50" />
-          <StatCard title="In Progress"
-            value={stats ? Object.values(stats.by_status ?? {}).reduce((a,b)=>a+(b??0),0)-(stats.total_completed??0)-(stats.total_rejected??0) : 0}
-            icon={<Clock className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-amber-500 to-orange-500"
-            shadow="shadow-amber-200 dark:shadow-amber-900/50" />
-          <StatCard title="Completed"     value={stats?.total_completed ?? 0}
-            icon={<CheckCircle2 className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-emerald-500 to-green-600"
-            shadow="shadow-emerald-200 dark:shadow-emerald-900/50" />
-          <StatCard title="Rejected"      value={stats?.total_rejected ?? 0}
-            icon={<XCircle className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-red-500 to-rose-600"
-            shadow="shadow-red-200 dark:shadow-red-900/50" />
-        </div>
-
         {/* ── Unbalanced alert ─────────────────────────────────────────────── */}
         {((stats?.total_unbalanced ?? 0) > 0) && (
           <div className="rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
@@ -324,235 +514,6 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ── Blade Table ──────────────────────────────────────────────────── */}
-        <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-          <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
-                <Weight className="w-4 h-4 text-orange-500" />
-                All Blades
-                <span className="ml-1 text-sm font-normal text-slate-400 dark:text-slate-500">
-                  ({sorted.length} of {allBlades.length})
-                </span>
-              </CardTitle>
-
-              <div className="flex items-center gap-2 flex-wrap">
-                {/* Search */}
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                  <Input value={search} onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search serial / melt / WO…"
-                    className="pl-8 h-8 text-xs w-52 bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600" />
-                </div>
-
-                {/* Status filter */}
-                <select value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as BladeStatus | "ALL")}
-                  className="h-8 text-xs rounded-lg border-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 px-2 pr-7 focus:outline-none focus:border-orange-400">
-                  <option value="ALL">All Statuses</option>
-                  {uniqueStatuses.map((s) => (
-                    <option key={s} value={s}>{STATUS_CFG[s as BladeStatus]?.label ?? s}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </CardHeader>
-
-          <CardContent className="p-0">
-            {loadingBlades ? (
-              <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500 text-sm gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Loading blades…
-              </div>
-            ) : sorted.length === 0 ? (
-              <div className="text-center py-16 text-slate-400 dark:text-slate-500 text-sm">
-                No blades match your filter
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[900px]">
-                  <thead>
-                    <tr className="bg-slate-800 dark:bg-slate-700">
-                      {[
-                        { key: "serial_number" as SortKey, label: "Serial No.", width: "w-36" },
-                        { key: null, label: "Melt No.", width: "w-32" },
-                        { key: "weight_grams" as SortKey, label: "Weight (g)", width: "w-28" },
-                        { key: "static_moment" as SortKey, label: "Static Moment", width: "w-32" },
-                        { key: "status" as SortKey, label: "Status", width: "w-36" },
-                        { key: null, label: "Work Order", width: "w-36" },
-                        { key: null, label: "Engine No.", width: "w-36" },
-                        { key: null, label: "Part No.", width: "w-32" },
-                        { key: "created_at" as SortKey, label: "Entered", width: "w-28" },
-                        { key: null, label: "", width: "w-8" },
-                      ].map(({ key, label, width }) => (
-                        <th key={label}
-                          className={cn("px-4 py-3 text-left text-slate-100 font-semibold tracking-wide text-xs uppercase", width,
-                            key && "cursor-pointer hover:text-orange-300 transition-colors select-none"
-                          )}
-                          onClick={() => key && toggleSort(key)}>
-                          <span className="flex items-center gap-1.5">
-                            {label}
-                            {key && <SortIcon k={key} />}
-                          </span>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700/40">
-                    {sorted.map((blade, idx) => {
-                      const cfg = STATUS_CFG[blade.status];
-                      const isEven = idx % 2 === 0;
-                      return (
-                        <tr key={blade.id}
-                          onClick={() => navigate(`/blades/${blade.id}`)}
-                          className={cn(
-                            "cursor-pointer transition-colors hover:bg-orange-50 dark:hover:bg-slate-700/40",
-                            isEven ? "bg-white dark:bg-transparent" : "bg-slate-50/60 dark:bg-slate-800/20"
-                          )}>
-                          <td className="px-4 py-3 font-mono text-xs font-semibold text-slate-900 dark:text-white">
-                            {blade.serial_number}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">
-                            {blade.melt_number}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-mono text-sm font-bold text-slate-900 dark:text-white">
-                              {(blade as BladeSortable).weight_grams
-                                ? Number((blade as BladeSortable).weight_grams).toFixed(2)
-                                : <span className="text-slate-400 dark:text-slate-500 font-normal text-xs">—</span>}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="font-mono text-xs text-slate-600 dark:text-slate-300">
-                              {(blade as BladeSortable).static_moment_gcm
-                                ? Number((blade as BladeSortable).static_moment_gcm).toFixed(1)
-                                : <span className="text-slate-400 dark:text-slate-500">—</span>}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold", cfg?.color ?? "bg-slate-400 text-white")}>
-                              {cfg?.label ?? blade.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300 font-mono">
-                            {blade.work_order_number ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300 font-mono">
-                            {(blade as any).engine_number ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300 font-mono">
-                            {blade.part_number ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                            {formatDistanceToNow(parseISO(blade.created_at), { addSuffix: true })}
-                          </td>
-                          <td className="px-4 py-3">
-                            <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600" />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Table footer — per-page + pagination */}
-            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/30 flex-wrap gap-2">
-              {/* Left: count + sort info */}
-              <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                <span>
-                  <span className="font-semibold text-slate-700 dark:text-slate-200">
-                    {pageStart + 1}–{Math.min(pageStart + perPage, totalFiltered)}
-                  </span>{" "}
-                  of{" "}
-                  <span className="font-semibold text-slate-700 dark:text-slate-200">
-                    {totalFiltered}
-                  </span>
-                  {totalFiltered < allBladesTotal && (
-                    <span className="text-orange-500"> (filtered from {allBladesTotal})</span>
-                  )}
-                </span>
-                {sorted.length > 0 && (
-                  <span>
-                    Sorted by{" "}
-                    <span className="font-medium text-orange-500">
-                      {sortKey === "weight_grams" ? "Weight" :
-                       sortKey === "static_moment" ? "Static Moment" :
-                       sortKey === "serial_number" ? "Serial No." :
-                       sortKey === "status" ? "Status" : "Date Added"}
-                    </span>{" "}
-                    {sortDir === "asc" ? "↑" : "↓"}
-                  </span>
-                )}
-              </div>
-
-              {/* Right: per-page selector + page nav */}
-              <div className="flex items-center gap-3">
-                {/* Per-page */}
-                <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                  <span>Show</span>
-                  {[10, 20, 50, 100].map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => { setPerPage(n); setCurrentPage(1); }}
-                      className={cn(
-                        "w-8 h-7 rounded-md text-xs font-medium transition-colors",
-                        perPage === n
-                          ? "bg-orange-500 text-white"
-                          : "bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-orange-400"
-                      )}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                  <span>per page</span>
-                </div>
-
-                {/* Page navigation */}
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={safeCurrentPage === 1}
-                      className="w-8 h-7 rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold disabled:opacity-40 hover:border-orange-400 transition-colors"
-                    >
-                      ‹
-                    </button>
-                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                      const p = totalPages <= 7
-                        ? i + 1
-                        : safeCurrentPage <= 4
-                          ? i + 1
-                          : safeCurrentPage >= totalPages - 3
-                            ? totalPages - 6 + i
-                            : safeCurrentPage - 3 + i;
-                      return (
-                        <button key={p}
-                          onClick={() => setCurrentPage(p)}
-                          className={cn(
-                            "w-8 h-7 rounded-md text-xs font-medium transition-colors",
-                            safeCurrentPage === p
-                              ? "bg-orange-500 text-white"
-                              : "bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-orange-400"
-                          )}
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={safeCurrentPage === totalPages}
-                      className="w-8 h-7 rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold disabled:opacity-40 hover:border-orange-400 transition-colors"
-                    >
-                      ›
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );

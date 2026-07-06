@@ -5,6 +5,7 @@ POST /auth/login          — email + password → Token pair (+ httponly refres
 POST /auth/refresh        — refresh token → new access token
 POST /auth/logout         — invalidate refresh token
 GET  /auth/me             — current user profile
+PATCH /auth/me/profile    — update own profile (full_name)
 POST /auth/me/change-password — update own password
 """
 
@@ -34,6 +35,7 @@ from app.schemas.base import StatusResponse
 from app.schemas.user import (
     ChangePasswordRequest,
     LoginRequest,
+    ProfileUpdateRequest,
     RefreshTokenRequest,
     Token,
     UserResponse,
@@ -295,6 +297,39 @@ async def get_me(
     Return the full profile of the currently authenticated user,
     including their roles and permissions.
     """
+    return current_user
+
+
+# ---------------------------------------------------------------------------
+# PATCH /me/profile
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/me/profile",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update the authenticated user's own profile",
+)
+async def update_profile(
+    body: ProfileUpdateRequest,
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Any:
+    """
+    Update self-service profile fields (currently just ``full_name``) for
+    the currently authenticated user.
+
+    Mutates the already role-loaded ``current_user`` in place rather than
+    re-fetching, since a plain (non-eager-loaded) lookup would drop the
+    ``roles`` relationship needed to serialize the response.
+    """
+    current_user.full_name = body.full_name
+    db.add(current_user)
+    await db.commit()
+    await db.refresh(current_user, attribute_names=["full_name", "updated_at"])
+
+    logger.info("profile_updated", user_id=str(current_user.id))
     return current_user
 
 

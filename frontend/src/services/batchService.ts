@@ -27,6 +27,7 @@ export interface BatchSummary {
   batch_number: string;
   blade_count: number;
   blades_sent: number;
+  blades_completed: number;
   current_status: BatchStatus;
   current_status_label: string;
   first_blade_at: string | null;
