@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -53,12 +54,14 @@ type PasswordFormValues = z.infer<typeof passwordSchema>;
 // ─── Section wrapper ──────────────────────────────────────────────────────────
 
 function Section({
+  id,
   icon,
   title,
   description,
   children,
   accentColor = "bg-orange-500",
 }: {
+  id?: string;
   icon: React.ReactNode;
   title: string;
   description: string;
@@ -66,7 +69,7 @@ function Section({
   accentColor?: string;
 }) {
   return (
-    <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+    <Card id={id} className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm scroll-mt-6">
       <CardHeader className="pb-4 border-b border-slate-100 dark:border-slate-700/50">
         <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
           <div className={`w-7 h-7 rounded-lg ${accentColor} flex items-center justify-center`}>
@@ -87,6 +90,13 @@ export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
   const hasRole = useAuthStore((s) => s.hasRole);
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const el = document.getElementById(location.hash.slice(1));
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash]);
 
   const [showOld, setShowOld] = useState(false);
   const [showNew, setShowNew] = useState(false);
@@ -166,6 +176,7 @@ export default function SettingsPage() {
       <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
         {/* Profile section */}
         <Section
+          id="profile"
           icon={<UserIcon className="w-3.5 h-3.5 text-white" />}
           title="Profile"
           description="Update your personal information"
@@ -262,6 +273,7 @@ export default function SettingsPage() {
 
         {/* Security section */}
         <Section
+          id="security"
           icon={<Lock className="w-3.5 h-3.5 text-white" />}
           title="Security"
           description="Change your account password"

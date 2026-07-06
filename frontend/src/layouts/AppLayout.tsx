@@ -571,12 +571,12 @@ export default function AppLayout() {
 
                 <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-700" />
 
-                <DropdownMenuItem onClick={() => navigate("/profile")} className="text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer">
+                <DropdownMenuItem onClick={() => navigate("/settings#profile")} className="text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer">
                   <UserCircle className="mr-2 h-4 w-4" />
                   My Profile
                 </DropdownMenuItem>
 
-                <DropdownMenuItem onClick={() => navigate("/change-password")} className="text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer">
+                <DropdownMenuItem onClick={() => navigate("/settings#security")} className="text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer">
                   <KeyRound className="mr-2 h-4 w-4" />
                   Change Password
                 </DropdownMenuItem>

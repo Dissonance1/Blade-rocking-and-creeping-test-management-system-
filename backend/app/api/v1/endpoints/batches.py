@@ -185,6 +185,12 @@ async def list_batches(
                         else_=0,
                     )
                 ).label("blades_sent"),
+                func.sum(
+                    case(
+                        (Blade.status == BladeStatus.COMPLETED, 1),
+                        else_=0,
+                    )
+                ).label("blades_completed"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.batch_number.isnot(None), Blade.deleted_at.is_(None))
@@ -287,6 +293,7 @@ async def list_batches(
             "batch_number": bn,
             "blade_count": row.blade_count,
             "blades_sent": row.blades_sent or 0,
+            "blades_completed": row.blades_completed or 0,
             "current_status": cur_status,
             "current_status_label": _status_label(cur_status),
             "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
@@ -330,6 +337,12 @@ async def get_batch(
                         else_=0,
                     )
                 ).label("blades_sent"),
+                func.sum(
+                    case(
+                        (Blade.status == BladeStatus.COMPLETED, 1),
+                        else_=0,
+                    )
+                ).label("blades_completed"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.batch_number == batch_number, Blade.deleted_at.is_(None))
@@ -379,6 +392,7 @@ async def get_batch(
         "batch_number": batch_number,
         "blade_count": blade_agg.blade_count,
         "blades_sent": blade_agg.blades_sent or 0,
+        "blades_completed": blade_agg.blades_completed or 0,
         "current_status": cur_status,
         "current_status_label": _status_label(cur_status),
         "first_blade_at": blade_agg.first_blade_at.isoformat() if blade_agg.first_blade_at else None,

@@ -215,3 +215,14 @@ class ChangePasswordRequest(BaseSchema):
                 "new_password and confirm_new_password do not match"
             )
         return self
+
+
+class ProfileUpdateRequest(BaseSchema):
+    """Payload for an authenticated user updating their own profile.
+
+    Deliberately narrower than :class:`UserUpdate` — self-service editing
+    must not be able to touch role/permission-adjacent fields such as
+    ``is_active`` or ``station_id``.
+    """
+
+    full_name: str = Field(..., min_length=2, max_length=255)
