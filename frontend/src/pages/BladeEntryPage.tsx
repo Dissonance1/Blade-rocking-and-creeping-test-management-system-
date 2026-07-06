@@ -739,7 +739,7 @@ export default function BladeEntryPage() {
   const { status: scaleStatus, locked: scaleLocked, toggleLock } = useWeighingScale(applyWeight);
 
   // ── DTI gauge ─────────────────────────────────────────────────────────────
-  const [dtiStation, setDtiStation] = useState<string>(
+  const [dtiStation] = useState<string>(
     () => localStorage.getItem("dti_station") ?? "1"
   );
   const { lastReading: dtiReading, connected: dtiConn } = useDTISocket(dtiStation);
@@ -1308,24 +1308,6 @@ export default function BladeEntryPage() {
                     )}
                   </Label>
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-                      <span>Rig:</span>
-                      {["1", "2"].map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          onClick={() => { setDtiStation(s); localStorage.setItem("dti_station", s); }}
-                          className={cn(
-                            "px-1.5 py-0.5 rounded font-mono text-xs border transition-colors",
-                            dtiStation === s
-                              ? "bg-orange-500 border-orange-500 text-white"
-                              : "border-slate-300 dark:border-slate-600 hover:border-orange-400"
-                          )}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
                     <Button
                       type="button"
                       variant="outline"
