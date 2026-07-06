@@ -40,6 +40,7 @@ router = APIRouter()
 _subscribers: dict[str, set[asyncio.Queue[dict]]] = {}
 _position_count: int = 4  # updated by frontend when rows are added/removed
 _reset_pending: dict[str, bool] = {}  # set by frontend on new blade entry
+_cycle_readings: dict[str, dict[str, float]] = {}  # station -> {position: value} captured so far this blade
 
 _POSITION_RE = re.compile(r"^H\d+$")
 
@@ -107,6 +108,7 @@ async def set_position_count(body: DtiPositionConfig) -> dict[str, Any]:
 async def reset_dti_cycle(station: str = Query(default="1")) -> dict[str, Any]:
     """Frontend calls this when a new blade entry starts — forces bridge back to H1."""
     _reset_pending[station] = True
+    _cycle_readings[station] = {}
     logger.debug("dti_reset_requested", station=station)
     return {"ok": True, "station": station}
 
@@ -127,12 +129,14 @@ async def push_dti(body: DtiReading) -> dict[str, Any]:
     if _reset_pending.pop(body.station, False):
         broadcast_pos = "H1"
         next_num = 2 if _position_count > 1 else 1
+        _cycle_readings[body.station] = {}
     else:
         broadcast_pos = body.position
         current_num = int(body.position[1:])
         next_num = (current_num % _position_count) + 1
 
     reading = {"position": broadcast_pos, "value": body.value}
+    _cycle_readings.setdefault(body.station, {})[broadcast_pos] = body.value
     _broadcast(body.station, reading)
     next_position = f"H{next_num}"
 
@@ -185,6 +189,13 @@ async def dti_ws(websocket: WebSocket) -> None:
 
     await websocket.accept()
     await websocket.send_json({"type": "status", "status": "connected", "station": station})
+
+    # Catch the client up on readings captured for this blade before it connected
+    # (server restart, WS reconnect gap, page navigation) — otherwise those readings
+    # are lost forever since _broadcast only reaches queues that exist at push time.
+    buffered = _cycle_readings.get(station, {})
+    for position in sorted(buffered, key=lambda p: int(p[1:])):
+        await websocket.send_json({"type": "dti", "position": position, "value": buffered[position]})
 
     q: asyncio.Queue[dict] = asyncio.Queue(maxsize=20)
     _subscribers.setdefault(station, set()).add(q)

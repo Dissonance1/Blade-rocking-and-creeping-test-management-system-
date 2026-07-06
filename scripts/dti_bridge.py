@@ -44,7 +44,9 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 import time
+from pathlib import Path
 
 import requests
 import serial
@@ -52,20 +54,28 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+_LOG_DIR = Path(__file__).resolve().parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_handlers = [logging.FileHandler(_LOG_DIR / "dti_bridge.log", encoding="utf-8")]
+if sys.stderr is not None:
+    _handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(message)s",
     datefmt="%H:%M:%S",
+    handlers=_handlers,
 )
 log = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_PORT    = "COM1"
-DEFAULT_SERVER  = "https://localhost"
-DEFAULT_STATION = "1"
-PUSH_PATH       = "/api/v1/dti/push"
-POSITIONS_PATH  = "/api/v1/dti/positions"
-BAUD_RATES      = [9600, 4800, 2400, 19200, 38400]
+DEFAULT_PORT     = "COM1"
+DEFAULT_SERVER   = "https://localhost"
+DEFAULT_STATION  = "1"
+PUSH_PATH        = "/api/v1/dti/push"
+POSITIONS_PATH   = "/api/v1/dti/positions"
+BAUD_RATES       = [9600, 4800, 2400, 19200, 38400]
+RETRY_INTERVAL_S = 5
 
 # Many DTI gauges output: "+012.345\r\n" or "12.345\r\n" or "  12.345 mm\r\n"
 _DTI_RE = re.compile(r"[+-]?\d+\.?\d*")
@@ -106,22 +116,27 @@ def _open_port(port: str, baud: int) -> serial.Serial | None:
     return None
 
 
-def _connect(port: str) -> serial.Serial | None:
-    """Open the port; for virtual COM ports (VMux2) just open at 9600."""
-    log.info("[serial] opening %s …", port)
-    # Try 9600 first (VMux2 virtual ports work at any baud — just need to open)
-    for baud in BAUD_RATES:
-        ser = _open_port(port, baud)
-        if ser:
-            return ser
-    log.error(
-        "[serial] could not open %s.\n"
-        "  • Is VMux2 running and configured with this COM port?\n"
-        "  • Is the COM port correct?  (Run: python -m serial.tools.list_ports)\n"
-        "  • Is another application using the port?",
-        port,
-    )
-    return None
+def _connect(port: str) -> serial.Serial:
+    """Open the port, retrying forever until it succeeds.
+
+    For virtual COM ports (VMux2) just opening at any baud is enough.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        log.info("[serial] opening %s (attempt %d) …", port, attempt)
+        for baud in BAUD_RATES:
+            ser = _open_port(port, baud)
+            if ser:
+                return ser
+        log.warning(
+            "[serial] could not open %s — retrying in %ds.\n"
+            "  • Is VMux2 running and configured with this COM port?\n"
+            "  • Is the COM port correct?  (Run: python -m serial.tools.list_ports)\n"
+            "  • Is another application using the port?",
+            port, RETRY_INTERVAL_S,
+        )
+        time.sleep(RETRY_INTERVAL_S)
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
@@ -136,25 +151,30 @@ def run(port: str, server: str, station: str) -> None:
     session = requests.Session()
     session.verify = False
 
-    try:
-        r = session.get(server.rstrip("/") + "/health", timeout=5)
-        log.info("[http ] server reachable — status %s", r.status_code)
-    except requests.RequestException as exc:
-        log.error(
-            "[http ] cannot reach server at %s: %s\n"
-            "  • Is the server running?  (docker compose ps)\n"
-            "  • Is the URL correct?  Try https://localhost or https://<server-ip>",
-            server, exc,
-        )
-        return
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            r = session.get(server.rstrip("/") + "/health", timeout=5)
+            log.info("[http ] server reachable — status %s", r.status_code)
+            break
+        except requests.RequestException as exc:
+            log.warning(
+                "[http ] cannot reach server at %s (attempt %d): %s — retrying in %ds",
+                server, attempt, exc, RETRY_INTERVAL_S,
+            )
+            time.sleep(RETRY_INTERVAL_S)
 
     ser = _connect(port)
-    if ser is None:
-        return
 
-    current_pos = "H1"  # position label sent with every reading (frontend ignores it)
-    last_accepted = 0.0          # monotonic timestamp of last accepted reading
-    DEBOUNCE_S    = 0.35         # ignore duplicate sends within 350 ms
+    current_pos = "H1"  # advances via the server's next_position after each accepted reading
+    last_value = None             # value of the last accepted reading
+    last_accepted = 0.0           # monotonic timestamp of last accepted reading
+    DEBOUNCE_S    = 1.5           # ignore a repeat of the SAME value within this window
+                                   # (Sylvac BT duplicate-frame quirk — BT latency on the
+                                   # second frame is variable, so debounce on value+time,
+                                   # not time alone, or a real second reading taken quickly
+                                   # gets silently dropped instead of the duplicate)
 
     log.info("[ready] waiting for DTI reading at position %s — Ctrl+C to stop", current_pos)
 
@@ -170,8 +190,6 @@ def run(port: str, server: str, station: str) -> None:
                     pass
                 time.sleep(5)
                 ser = _connect(port)
-                if ser is None:
-                    return
                 continue
 
             if not raw:
@@ -189,9 +207,10 @@ def run(port: str, server: str, station: str) -> None:
 
             # Debounce: Sylvac BT can emit the same frame twice on one DATA press
             now = time.monotonic()
-            if now - last_accepted < DEBOUNCE_S:
-                log.debug("[dti  ] debounced (%.0f ms since last) — skipping %r", (now - last_accepted) * 1000, decoded)
+            if value == last_value and now - last_accepted < DEBOUNCE_S:
+                log.debug("[dti  ] debounced (%.0f ms since last, same value) — skipping %r", (now - last_accepted) * 1000, decoded)
                 continue
+            last_value = value
             last_accepted = now
 
             log.info("[dti  ] %s = %.4f mm  →  posting (station %s) …", current_pos, value, station)
@@ -204,6 +223,12 @@ def run(port: str, server: str, station: str) -> None:
                 )
                 if resp.status_code == 200:
                     log.info("[http ] ✓ accepted  value = %.4f", value)
+                    try:
+                        next_position = resp.json().get("next_position")
+                    except ValueError:
+                        next_position = None
+                    if next_position:
+                        current_pos = next_position
                 else:
                     log.warning(
                         "[http ] server returned %d: %s",
@@ -212,7 +237,7 @@ def run(port: str, server: str, station: str) -> None:
             except requests.RequestException as exc:
                 log.warning("[http ] POST failed: %s", exc)
 
-            log.info("[dti  ] ready for next reading — press DATA")
+            log.info("[dti  ] ready for next reading at position %s — press DATA", current_pos)
 
     except KeyboardInterrupt:
         log.info("Stopped.")
@@ -267,7 +292,13 @@ Typical DTI gauge RS-232 settings:
             "The browser measurement form must connect with the matching ?station= value."
         ),
     )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Log every raw serial line, including ones skipped as unparseable or debounced.",
+    )
     args = parser.parse_args()
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
     run(args.port, args.server, args.station)
 
 

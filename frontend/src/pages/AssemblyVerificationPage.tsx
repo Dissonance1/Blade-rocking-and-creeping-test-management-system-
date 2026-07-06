@@ -77,7 +77,7 @@ function HardwareIndicator({ label, connected }: { label: string; connected: boo
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
         connected
           ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
-          : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+          : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
       )}
     >
       {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
@@ -256,7 +256,7 @@ export default function AssemblyVerificationPage() {
   });
 
   // ── DTI station (persisted per-browser so each rig remembers its own) ──
-  const [dtiStation, setDtiStation] = useState<string>(
+  const [dtiStation] = useState<string>(
     () => localStorage.getItem("dti_station") ?? "1"
   );
 
@@ -540,22 +540,6 @@ export default function AssemblyVerificationPage() {
           <div className="flex gap-2 items-center">
             <HardwareIndicator label="Scale" connected={weightConn} />
             <HardwareIndicator label={`DTI·S${dtiStation}`} connected={dtiConn} />
-            <div className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-              <span>Rig:</span>
-              {["1", "2"].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => { setDtiStation(s); localStorage.setItem("dti_station", s); }}
-                  className={`px-1.5 py-0.5 rounded font-mono text-xs border transition-colors ${
-                    dtiStation === s
-                      ? "bg-orange-500 border-orange-500 text-white"
-                      : "border-slate-300 dark:border-slate-600 hover:border-orange-400"
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
           </div>
           {setMakingReady && (
             <Button
