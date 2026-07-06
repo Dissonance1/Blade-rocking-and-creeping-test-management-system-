@@ -112,9 +112,16 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Don't refresh for auth endpoints — avoids infinite loops.
+    // A failed login attempt is not an expired session — just propagate the
+    // error so the login form can show it. Redirecting here would wipe the
+    // page (and the error message) before the form ever sees it.
     const url = originalRequest.url ?? "";
-    if (url.includes("/auth/login") || url.includes("/auth/refresh")) {
+    if (url.includes("/auth/login")) {
+      return Promise.reject(error);
+    }
+
+    // Don't refresh for the refresh endpoint itself — avoids infinite loops.
+    if (url.includes("/auth/refresh")) {
       await doLogout();
       return Promise.reject(error);
     }

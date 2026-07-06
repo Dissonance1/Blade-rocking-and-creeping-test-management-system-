@@ -110,7 +110,7 @@ async def login(
         logger.warning("login_failed", email=body.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Wrong credentials given, please check your email and password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
