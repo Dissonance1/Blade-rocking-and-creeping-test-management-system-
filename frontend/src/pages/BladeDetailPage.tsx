@@ -221,7 +221,7 @@ export default function BladeDetailPage() {
   const logs: WorkflowLog[] = history?.logs ?? [];
 
   const measurementChartData = [
-    { name: "Rocking", value: blade.measurements?.[0]?.rocking_value ?? 0, fill: "#f97316" },
+    { name: "Rocking", value: blade.measurements?.[0]?.rocking_value ?? 0, fill: "#f29a25" },
     { name: "Creep", value: blade.measurements?.[0]?.creep_value ?? 0, fill: "#8b5cf6" },
   ];
 
