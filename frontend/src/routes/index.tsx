@@ -1,6 +1,5 @@
 import { RouterProvider, createBrowserRouter, Navigate, useNavigate } from "react-router-dom";
-import AppLayout from "@/layouts/AppLayout";
-import AuthLayout from "@/layouts/AuthLayout";
+import AppLayout from "@/layouts/components/SideBarMenu";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import BladeEntryPage from "@/pages/BladeEntryPage";
@@ -22,6 +21,7 @@ import AssemblyVerificationPage from "@/pages/AssemblyVerificationPage";
 import { useAuthStore } from "@/store/authStore";
 import type { UserRole } from "@/types";
 import { ShieldOff, ArrowLeft } from "lucide-react";
+import RouteErrorBoundary from "@/components/common/RouteErrorBoundary";
 
 /* ─── Auth guard ─────────────────────────────────────────────────────────── */
 
@@ -107,10 +107,7 @@ function RoleHome() {
 
 const router = createBrowserRouter([
   /* ── Auth routes (no app shell) ── */
-  {
-    element: <AuthLayout />,
-    children: [{ path: "/login", element: <LoginPage /> }],
-  },
+  { path: "/login", element: <LoginPage />, errorElement: <RouteErrorBoundary /> },
 
   /* ── App routes (protected — redirect to /login if not authenticated) ── */
   {
@@ -119,6 +116,7 @@ const router = createBrowserRouter([
         <AppLayout />
       </RequireAuth>
     ),
+    errorElement: <RouteErrorBoundary />,
     children: [
       { path: "/", element: <RoleHome /> },
       {

@@ -104,6 +104,21 @@ export default {
           DEFAULT: "#22c55e",
           foreground: "#ffffff",
         },
+        /* Brand orange (login page accent, #f29a25) — overrides Tailwind's default orange scale
+           so every existing orange-* utility class resolves to the same brand color. */
+        orange: {
+          50:  "#fef8f0",
+          100: "#fdf2e2",
+          200: "#fbe0bb",
+          300: "#f8c581",
+          400: "#f6af51",
+          500: "#f29a25",
+          600: "#de8612",
+          700: "#b56f12",
+          800: "#915b12",
+          900: "#784c11",
+          950: "#412a0b",
+        },
         /* Industrial neutrals */
         steel: {
           50:  "#f8fafc",
@@ -127,7 +142,7 @@ export default {
       },
 
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Inter Variable", "Inter", "Helvetica", "sans-serif"],
         mono: ["JetBrains Mono", "Fira Code", "monospace"],
       },
 

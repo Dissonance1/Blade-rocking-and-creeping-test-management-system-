@@ -1,11 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { Toaster } from "sonner";
 
 import App from "@/App";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
+import "@fontsource-variable/inter";
+import "@/assets/keenicons/outline/style.css";
 import "@/index.css";
 
 /* ─── React Query client ─────────────────────────────────────────────────── */
@@ -46,11 +47,6 @@ ReactDOM.createRoot(rootEl).render(
             },
           }}
         />
-
-        {/* Dev tools (stripped in production by tree-shaking) */}
-        {import.meta.env.DEV && (
-          <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-right" />
-        )}
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>

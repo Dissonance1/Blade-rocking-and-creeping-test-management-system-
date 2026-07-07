@@ -82,6 +82,12 @@
     @apply font-semibold tracking-tight;
   }
 
+  /* Hide native browser password-reveal/clear icons (Edge/IE) — we render our own toggle */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
+
   /* Scrollbar styling */
   ::-webkit-scrollbar {
     @apply w-1.5 h-1.5;

@@ -19,15 +19,16 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         "/api": {
-          target: env.VITE_API_BASE_URL || "http://localhost:8000",
+          target: env.VITE_DEV_PROXY_TARGET || "http://localhost:8000",
           changeOrigin: true,
           secure: false,
           rewrite: (path) => path.replace(/^\/api/, "/api"),
         },
         "/ws": {
-          target: env.VITE_WS_BASE_URL || "ws://localhost:8000",
+          target: env.VITE_DEV_PROXY_WS_TARGET || "ws://localhost:8000",
           ws: true,
           changeOrigin: true,
+          secure: false,
         },
       },
     },
