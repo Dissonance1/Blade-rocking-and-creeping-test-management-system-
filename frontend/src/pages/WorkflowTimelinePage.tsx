@@ -22,6 +22,7 @@ import { bladeService } from "@/services/bladeService";
 import { workflowService } from "@/services/workflowService";
 import type { BladeStatus, WorkflowLog } from "@/types";
 import { cn } from "@/utils/cn";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -82,88 +83,88 @@ function TimelineEvent({
 
       {/* Right column: card */}
       <div className="flex-1 min-w-0 pb-2">
-      <div
-        className={cn(
-          "rounded-xl border p-5 transition-colors",
-          isFirst
-            ? "bg-orange-50 dark:bg-slate-700/50 border-orange-200 dark:border-slate-600"
-            : "bg-white dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/50"
-        )}
-      >
-        {/* Status transition */}
-        <div className="flex items-center gap-2 flex-wrap mb-3">
-          {fromCfg && (
-            <>
-              <span className="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300">
-                {fromCfg.label}
-              </span>
-              <ArrowRight className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
-            </>
+        <div
+          className={cn(
+            "rounded-xl border p-5 transition-colors",
+            isFirst
+              ? "bg-orange-50 dark:bg-slate-700/50 border-orange-200 dark:border-slate-600"
+              : "bg-white dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/50"
           )}
-          <span
-            className={cn(
-              "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold text-white",
-              toCfg.color
+        >
+          {/* Status transition */}
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            {fromCfg && (
+              <>
+                <span className="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  {fromCfg.label}
+                </span>
+                <ArrowRight className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
+              </>
             )}
-          >
-            {toCfg.label}
-          </span>
-          {isFirst && (
-            <span className="ml-auto rounded-full bg-orange-500 text-white px-2 py-0.5 text-xs font-semibold">
-              Current
+            <span
+              className={cn(
+                "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold text-white",
+                toCfg.color
+              )}
+            >
+              {toCfg.label}
             </span>
-          )}
-        </div>
-
-        {/* Meta row */}
-        <div className="flex items-center gap-5 flex-wrap">
-          {/* Actor */}
-          <div className="flex items-center gap-2">
-            <Avatar className="w-7 h-7">
-              <AvatarFallback className="bg-slate-700 dark:bg-slate-600 text-white text-xs font-semibold">
-                {actorInitials}
-              </AvatarFallback>
-            </Avatar>
-            <div>
-              <p className="text-slate-900 dark:text-white text-sm font-medium leading-none">{actorName}</p>
-              <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5 flex items-center gap-1">
-                <User className="w-3 h-3" /> Actor
-              </p>
-            </div>
+            {isFirst && (
+              <span className="ml-auto rounded-full bg-orange-500 text-white px-2 py-0.5 text-xs font-semibold">
+                Current
+              </span>
+            )}
           </div>
 
-          <Separator orientation="vertical" className="h-8 bg-slate-200 dark:bg-slate-700" />
-
-          {/* Station */}
-          {log.station_id && (
-            <>
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 text-sm">
-                <MapPin className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-                {log.station_id}
+          {/* Meta row */}
+          <div className="flex items-center gap-5 flex-wrap">
+            {/* Actor */}
+            <div className="flex items-center gap-2">
+              <Avatar className="w-7 h-7">
+                <AvatarFallback className="bg-slate-700 dark:bg-slate-600 text-white text-xs font-semibold">
+                  {actorInitials}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <p className="text-slate-900 dark:text-white text-sm font-medium leading-none">{actorName}</p>
+                <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5 flex items-center gap-1">
+                  <User className="w-3 h-3" /> Actor
+                </p>
               </div>
-              <Separator orientation="vertical" className="h-8 bg-slate-200 dark:bg-slate-700" />
-            </>
-          )}
+            </div>
 
-          {/* Timestamp */}
-          <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 text-sm">
-            <Clock className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-            <div>
-              <p>{format(parseISO(log.timestamp), "dd MMM yyyy, HH:mm")}</p>
-              <p className="text-slate-400 dark:text-slate-500 text-xs">
-                {formatDistanceToNow(parseISO(log.timestamp), { addSuffix: true })}
-              </p>
+            <Separator orientation="vertical" className="h-8 bg-slate-200 dark:bg-slate-700" />
+
+            {/* Station */}
+            {log.station_id && (
+              <>
+                <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 text-sm">
+                  <MapPin className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+                  {log.station_id}
+                </div>
+                <Separator orientation="vertical" className="h-8 bg-slate-200 dark:bg-slate-700" />
+              </>
+            )}
+
+            {/* Timestamp */}
+            <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 text-sm">
+              <Clock className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+              <div>
+                <p>{format(parseISO(log.timestamp), "dd MMM yyyy, HH:mm")}</p>
+                <p className="text-slate-400 dark:text-slate-500 text-xs">
+                  {formatDistanceToNow(parseISO(log.timestamp), { addSuffix: true })}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Remarks */}
-        {log.remarks && (
-          <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700/50">
-            <p className="text-slate-600 dark:text-slate-400 text-sm italic">"{log.remarks}"</p>
-          </div>
-        )}
-      </div>
+          {/* Remarks */}
+          {log.remarks && (
+            <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700/50">
+              <p className="text-slate-600 dark:text-slate-400 text-sm italic">"{log.remarks}"</p>
+            </div>
+          )}
+        </div>
       </div>  {/* close flex-1 wrapper */}
     </li>
   );
@@ -191,35 +192,35 @@ export default function WorkflowTimelinePage() {
   const isLoading = loadingBlade || loadingHistory;
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white print:bg-white print:text-black">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white print:bg-white print:text-black">
       {/* Header — hidden in print */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm print:hidden">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-4 shadow-none border-b-0 print:hidden">
+        <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate(-1)}
-              className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white shrink-0"
             >
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <div>
-              <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <History className="w-5 h-5 text-orange-500" />
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2 truncate">
+                <History className="w-5 h-5 text-orange-500 shrink-0" />
                 Workflow Timeline
               </h1>
               {blade && (
-                <p className="text-slate-500 dark:text-slate-400 text-sm font-mono">{blade.serial_number}</p>
+                <p className="text-slate-500 dark:text-slate-400 text-sm font-mono truncate">{blade.serial_number}</p>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => window.print()}
-              className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="flex-1 sm:flex-none justify-center border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
             >
               <Printer className="w-4 h-4" />
               Print
@@ -227,7 +228,7 @@ export default function WorkflowTimelinePage() {
             <Button
               variant="outline"
               size="sm"
-              className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="flex-1 sm:flex-none justify-center border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
               onClick={() => {
                 // PDF export — in production use jsPDF or react-pdf
                 window.print();
@@ -251,66 +252,72 @@ export default function WorkflowTimelinePage() {
         </p>
       </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
-          </div>
-        ) : (
-          <>
-            {/* Blade summary */}
-            {blade && (
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm mb-8 print:bg-white print:border-slate-200">
-                <CardHeader className="pb-2 border-b border-slate-100 dark:border-slate-700/50">
-                  <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold print:text-black">
-                    Blade Summary
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 text-sm">
-                    {[
-                      ["Serial", blade.serial_number],
-                      ["Melt", blade.melt_number],
-                      ["Part", blade.part_number],
-                      ["Work Order", blade.work_order_number],
-                      ["Status", STATUS_CFG[blade.status]?.label ?? blade.status],
-                      [
-                        "Created",
-                        format(parseISO(blade.created_at), "dd MMM yyyy"),
-                      ],
-                    ].map(([k, v]) => (
-                      <div key={k}>
-                        <span className="text-slate-500 dark:text-slate-400 print:text-slate-500">{k}: </span>
-                        <span className="text-slate-900 dark:text-white font-medium print:text-black font-mono">
-                          {v}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+      <div className="flex-1 min-h-0 w-full overflow-y-auto flex flex-col">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex-1 w-full">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+            </div>
+          ) : (
+            <>
+              {/* Blade summary */}
+              {blade && (
+                <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm mb-8 print:bg-white print:border-slate-200">
+                  <CardHeader className="pb-2 border-b border-slate-100 dark:border-slate-700/50">
+                    <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold print:text-black">
+                      Blade Summary
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3 text-sm">
+                      {[
+                        ["Serial", blade.serial_number],
+                        ["Melt", blade.melt_number],
+                        ["Part", blade.part_number],
+                        ["Work Order", blade.work_order_number],
+                        ["Status", STATUS_CFG[blade.status]?.label ?? blade.status],
+                        [
+                          "Created",
+                          format(parseISO(blade.created_at), "dd MMM yyyy"),
+                        ],
+                      ].map(([k, v]) => (
+                        <div key={k} className="min-w-0">
+                          <span className="text-slate-500 dark:text-slate-400 print:text-slate-500">{k}: </span>
+                          <span className="block sm:inline-block max-w-full truncate align-bottom text-slate-900 dark:text-white font-medium print:text-black font-mono">
+                            {v}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
-            {/* Timeline */}
-            {logs.length === 0 ? (
-              <div className="text-center py-16 text-slate-400 dark:text-slate-500">
-                <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                <p>No workflow events recorded yet</p>
-              </div>
-            ) : (
-              <ol className="relative">
-                {logs.map((log, idx) => (
-                  <TimelineEvent
-                    key={log.id}
-                    log={log}
-                    isFirst={idx === 0}
-                    isLast={idx === logs.length - 1}
-                  />
-                ))}
-              </ol>
-            )}
-          </>
-        )}
+              {/* Timeline */}
+              {logs.length === 0 ? (
+                <div className="text-center py-16 text-slate-400 dark:text-slate-500">
+                  <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                  <p>No workflow events recorded yet</p>
+                </div>
+              ) : (
+                <ol className="relative">
+                  {logs.map((log, idx) => (
+                    <TimelineEvent
+                      key={log.id}
+                      log={log}
+                      isFirst={idx === 0}
+                      isLast={idx === logs.length - 1}
+                    />
+                  ))}
+                </ol>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
+        <Footer />
       </div>
     </div>
   );

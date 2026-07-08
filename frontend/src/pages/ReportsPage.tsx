@@ -14,8 +14,12 @@ import {
   XCircle,
   Clock,
   AlertCircle,
+  BarChart,
   BarChart3,
+  CalendarIcon,
 } from "lucide-react";
+import { NotepadIcon } from "@/components/common/CustomIcons";
+import Footer from "@/layouts/components/Navbar/Footer";
 import { format, parseISO, subDays } from "date-fns";
 
 import { Button } from "@/components/ui/button";
@@ -171,39 +175,43 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="max-w-screen-lg mx-auto">
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-orange-500" />
-            Reports
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm">Generate and download operational reports</p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm border-b border-slate-200 dark:border-slate-700/60">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <NotepadIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              Reports
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">Generate and download operational reports</p>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-screen-lg mx-auto px-6 py-6">
+      <div className="w-full px-4 sm:px-6 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 mb-6 rounded-xl shadow-sm">
-            <TabsTrigger
-              value="generate"
-              className="rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
-            >
-              Generate Report
-            </TabsTrigger>
-            <TabsTrigger
-              value="my-reports"
-              className="rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
-            >
-              My Reports
-              {reports.filter((r) => r.status === "GENERATING").length > 0 && (
-                <span className="ml-2">
-                  <Loader2 className="w-3 h-3 animate-spin text-amber-400 inline" />
-                </span>
-              )}
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 mb-6">
+            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
+              <TabsTrigger
+                value="generate"
+                className="shrink-0 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
+              >
+                Generate Report
+              </TabsTrigger>
+              <TabsTrigger
+                value="my-reports"
+                className="shrink-0 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
+              >
+                My Reports
+                {reports.filter((r) => r.status === "GENERATING").length > 0 && (
+                  <span className="ml-2">
+                    <Loader2 className="w-3 h-3 animate-spin text-amber-400 inline" />
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* Generate tab */}
           <TabsContent value="generate">
@@ -213,15 +221,15 @@ export default function ReportsPage() {
                 <div className="lg:col-span-2 space-y-5">
                   {/* Report type */}
                   <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3">
+                    <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Report Format</CardTitle>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="px-4 sm:px-6">
                       <Controller
                         control={control}
                         name="report_type"
                         render={({ field }) => (
-                          <div className="flex gap-3">
+                          <div className="flex flex-col sm:flex-row gap-3">
                             {(["PDF", "EXCEL"] as const).map((type) => (
                               <button
                                 key={type}
@@ -255,11 +263,11 @@ export default function ReportsPage() {
 
                   {/* Date range */}
                   <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3">
+                    <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Date Range</CardTitle>
                     </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-2 gap-4">
+                    <CardContent className="px-4 sm:px-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="space-y-1.5">
                           <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">From</Label>
                           <Input
@@ -288,7 +296,7 @@ export default function ReportsPage() {
 
                   {/* Status filter */}
                   <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3">
+                    <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">
                         Status Filter{" "}
                         <span className="text-slate-400 dark:text-slate-500 font-normal text-xs ml-1">
@@ -296,12 +304,12 @@ export default function ReportsPage() {
                         </span>
                       </CardTitle>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="px-4 sm:px-6">
                       <Controller
                         control={control}
                         name="statuses"
                         render={({ field }) => (
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {ALL_STATUSES.map((s) => (
                               <label
                                 key={s.value}
@@ -326,15 +334,15 @@ export default function ReportsPage() {
                 {/* Right: options + submit */}
                 <div className="space-y-5">
                   <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3">
+                    <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Options</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
+                    <CardContent className="space-y-4 px-4 sm:px-6">
                       <Controller
                         control={control}
                         name="include_rejected"
                         render={({ field }) => (
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between gap-3">
                             <Label className="text-slate-600 dark:text-slate-300 text-sm cursor-pointer">
                               Include Rejected Blades
                             </Label>
@@ -404,11 +412,11 @@ export default function ReportsPage() {
           {/* My reports tab */}
           <TabsContent value="my-reports">
             <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-              <CardHeader className="flex-row items-center justify-between pb-3">
+              <CardHeader className="flex-row items-center justify-between pb-3 px-4 sm:px-6">
                 <CardTitle className="text-slate-900 dark:text-white text-base">My Reports</CardTitle>
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="icon"
                   onClick={() => queryClient.invalidateQueries({ queryKey: ["reports"] })}
                   className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
                 >
@@ -429,7 +437,7 @@ export default function ReportsPage() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm whitespace-nowrap">
                       <thead className="bg-slate-800 dark:bg-slate-700">
                         <tr>
                           {["Name", "Type", "Status", "Created", "Size", "Actions"].map(
@@ -514,6 +522,10 @@ export default function ReportsPage() {
             </Card>
           </TabsContent>
         </Tabs>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
     </div>
   );

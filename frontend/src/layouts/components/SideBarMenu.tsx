@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -9,6 +10,19 @@ import { useUIStore } from "@/store/uiStore";
 import { notificationService } from "@/services/notificationService";
 import { Button } from "@/components/ui/button";
 import KTIcon from "@/components/common/KTIcon";
+import {
+  DashboardIcon,
+  BatchOverviewIcon,
+  SettingsIcon,
+  AssemblyQueueIcon,
+  SlotAllocationIcon,
+  BladeEntryIcon,
+  OhQueueIcon,
+  RockingCreepIcon,
+  NotepadIcon,
+  UserManagementIcon,
+  BellIcon,
+} from "@/components/common/CustomIcons";
 import { cn } from "@/utils/cn";
 import type { UserRole, Notification } from "@/types";
 import Navbar from "./Navbar/Navbar";
@@ -20,6 +34,7 @@ interface NavItem {
   label: string;
   href: string;
   iconName: string;
+  icon?: ComponentType<{ className?: string }>;
   roles?: UserRole[];
 }
 
@@ -28,62 +43,71 @@ const NAV_ITEMS: NavItem[] = [
     label: "Dashboard",
     href: "/dashboard",
     iconName: "chart-simple",
+    icon: DashboardIcon,
     roles: ["SUPER_ADMIN"],
   },
   {
     label: "Batch Overview",
     href: "/batch-tracking",
     iconName: "package",
+    icon: BatchOverviewIcon,
     roles: ["SUPER_ADMIN", "OH_OPERATOR", "ASSEMBLY_OPERATOR", "QA_VIEWER"],
   },
   {
     label: "Assembly Queue",
     href: "/assembly-queue",
     iconName: "cube-3",
+    icon: AssemblyQueueIcon,
     roles: ["SUPER_ADMIN", "ASSEMBLY_OPERATOR"],
   },
   {
     label: "Slot Allocation",
     href: "/slots",
     iconName: "geolocation",
+    icon: SlotAllocationIcon,
     roles: ["SUPER_ADMIN", "ASSEMBLY_OPERATOR"],
   },
   {
     label: "Blade Entry",
     href: "/blades/new",
     iconName: "wrench",
+    icon: BladeEntryIcon,
     roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
   },
   {
     label: "OH Queue",
     href: "/oh-queue",
     iconName: "book-open",
+    icon: OhQueueIcon,
     roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
   },
   {
     label: "Rocking & Creep",
     href: "/rocking-creep",
     iconName: "flask",
+    icon: RockingCreepIcon,
     roles: ["SUPER_ADMIN", "OH_OPERATOR"],
   },
   {
     label: "Reports",
     href: "/reports",
     iconName: "graph-up",
+    icon: NotepadIcon,
     roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
   },
-  { label: "Notifications", href: "/notifications", iconName: "notification" },
+  { label: "Notifications", href: "/notifications", iconName: "notification", icon: BellIcon },
   {
     label: "User Management",
     href: "/users",
     iconName: "people",
+    icon: UserManagementIcon,
     roles: ["SUPER_ADMIN"],
   },
   {
     label: "Settings",
     href: "/settings",
     iconName: "setting-4",
-    roles: ["SUPER_ADMIN"],
+    icon: SettingsIcon,
   },
 ];
 
@@ -136,17 +160,42 @@ function SideNavLink({
       onClick={onClick}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-900 transition-colors group relative",
-          isActive ? "bg-orange-50" : "hover:bg-slate-100"
+          "flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-semibold transition-colors group relative",
+          isActive 
+            ? "bg-orange-50 dark:bg-orange-500/10 text-slate-900 dark:text-white" 
+            : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800"
         )
       }
     >
-      <KTIcon iconName={item.iconName} className="text-lg leading-none text-slate-400 flex-shrink-0" />
-      {!collapsed && <span className="truncate">{item.label}</span>}
-      {collapsed && (
-        <span className="absolute left-full ml-2 px-2 py-1 rounded-lg bg-slate-800 text-white text-xs shadow-lg border border-slate-700 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity">
-          {item.label}
-        </span>
+      {({ isActive }) => (
+        <>
+          {item.icon ? (
+            <item.icon
+              className={cn(
+                "text-xl leading-none flex-shrink-0 transition-colors",
+                isActive 
+                  ? "text-slate-900 dark:text-white" 
+                  : "text-slate-400 dark:text-slate-500 group-hover:text-slate-900 dark:group-hover:text-white"
+              )}
+            />
+          ) : (
+            <KTIcon
+              iconName={item.iconName}
+              className={cn(
+                "text-xl leading-none flex-shrink-0 transition-colors",
+                isActive 
+                  ? "text-slate-900 dark:text-white" 
+                  : "text-slate-400 dark:text-slate-500 group-hover:text-slate-900 dark:group-hover:text-white"
+              )}
+            />
+          )}
+          {!collapsed && <span className="truncate">{item.label}</span>}
+          {collapsed && (
+            <span className="absolute left-full ml-2 px-2 py-1 rounded-lg bg-slate-800 text-white text-xs shadow-lg border border-slate-700 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity">
+              {item.label}
+            </span>
+          )}
+        </>
       )}
     </NavLink>
   );
@@ -157,7 +206,7 @@ function SideNavLink({
 export default function AppLayout() {
   const { user } = useAuthStore();
   const { addNotification, setNotifications } = useNotificationStore();
-  const { sidebarCollapsed, toggleSidebar } = useUIStore();
+  const { sidebarCollapsed, toggleSidebar, theme } = useUIStore();
 
   /* ── Hover-to-expand when collapsed (desktop) ── */
   const [sidebarHovered, setSidebarHovered] = useState(false);
@@ -203,9 +252,9 @@ export default function AppLayout() {
             description: notification.body,
             action: notification.blade_id
               ? {
-                  label: "View",
-                  onClick: () => navigate(`/blades/${notification.blade_id}`),
-                }
+                label: "View",
+                onClick: () => navigate(`/blades/${notification.blade_id}`),
+              }
               : undefined,
           });
         },
@@ -233,6 +282,20 @@ export default function AppLayout() {
 
   /* ── Close mobile sidebar on route change ── */
   const location = useLocation();
+  const isFullScreenPage =
+    location.pathname === "/dashboard" ||
+    location.pathname === "/batch-tracking" ||
+    location.pathname === "/assembly-queue" ||
+    location.pathname === "/oh-queue" ||
+    location.pathname === "/slots" ||
+    location.pathname === "/notifications" ||
+    location.pathname === "/reports" ||
+    location.pathname === "/users" ||
+    location.pathname === "/settings" ||
+    location.pathname === "/rocking-creep" ||
+    location.pathname.startsWith("/assembly/") ||
+    location.pathname.startsWith("/blades/") ||
+    location.pathname.startsWith("/batches/");
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);
@@ -243,22 +306,22 @@ export default function AppLayout() {
   function SidebarContent({ mobile = false }: { mobile?: boolean }) {
     const collapsedView = !mobile && !showExpanded;
     return (
-      <div className="flex flex-col h-full bg-white">
+      <div className="flex flex-col h-full bg-white dark:bg-black">
         {/* Logo */}
         <div
           className={cn(
-            "flex items-center gap-3 px-4 h-20 border-b border-dashed border-slate-200 flex-shrink-0 bg-white",
+            "flex items-center gap-2.5 px-4 h-14 sm:h-16 border-b border-slate-200 dark:border-slate-700 flex-shrink-0 bg-white dark:bg-black",
             collapsedView ? "justify-center px-2" : "justify-between"
           )}
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <img
-              src="/media/login/Light.png"
+              src={theme === "dark" ? "/media/login/Dark.png" : "/media/login/Light.png"}
               alt="Blade Rocking & Creep Test System"
-              className="h-16 w-16 object-contain flex-shrink-0"
+              className="h-10 w-10 sm:h-14 sm:w-14 object-contain flex-shrink-0"
             />
             {!collapsedView && (
-              <span className="font-bold text-lg text-slate-900 tracking-tight truncate min-w-0">
+              <span className="font-bold text-base text-slate-900 dark:text-white tracking-tight truncate min-w-0">
                 BRCMS
               </span>
             )}
@@ -266,11 +329,11 @@ export default function AppLayout() {
 
           {/* Collapse toggle (desktop only, expanded state) */}
           {!mobile && showExpanded && (
-            <div className="flex items-center pl-3 border-l border-dashed border-slate-200 flex-shrink-0">
+            <div className="flex items-center ml-3 pl-3 border-l border-dashed border-slate-200 dark:border-slate-700 flex-shrink-0">
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 flex-shrink-0 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-900"
+                className="h-8 w-8 flex-shrink-0 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600 dark:hover:text-white"
                 onClick={handleToggleSidebar}
                 aria-label="Collapse sidebar"
               >
@@ -281,7 +344,7 @@ export default function AppLayout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1 bg-white">
+        <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-1 bg-white dark:bg-black">
           {visibleNav.map((item) => (
             <SideNavLink
               key={item.href}
@@ -297,14 +360,14 @@ export default function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-100 dark:bg-slate-900 overflow-hidden">
+    <div className="flex h-screen bg-slate-100 dark:bg-black overflow-hidden">
       {/* ── Desktop sidebar ── */}
       <aside
         onMouseEnter={() => sidebarCollapsed && setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          "hidden lg:flex relative flex-col border-r border-slate-200 bg-white transition-all duration-200 flex-shrink-0",
-          showExpanded ? "w-64" : "w-16"
+          "hidden lg:flex relative flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-black transition-all duration-200 flex-shrink-0",
+          showExpanded ? "w-56" : "w-16"
         )}
       >
         <SidebarContent />
@@ -314,7 +377,7 @@ export default function AppLayout() {
           <Button
             variant="ghost"
             size="icon"
-            className="absolute top-6 right-0 translate-x-1/2 h-7 w-7 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 shadow-sm hover:bg-slate-200 hover:text-slate-900 z-10"
+            className="absolute top-6 right-0 translate-x-1/2 h-7 w-7 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 shadow-sm hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600 dark:hover:text-white z-10"
             onClick={handleToggleSidebar}
             aria-label="Expand sidebar"
           >
@@ -333,14 +396,14 @@ export default function AppLayout() {
             aria-hidden="true"
           />
           {/* Drawer */}
-          <aside className="absolute left-0 top-0 bottom-0 w-64 bg-white border-r border-slate-200 z-50 flex flex-col">
-            <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 bg-white">
-              <span className="font-bold text-sm text-slate-900">Navigation</span>
+          <aside className="absolute left-0 top-0 bottom-0 w-48 bg-white dark:bg-black border-r border-slate-200 dark:border-slate-700 z-50 flex flex-col">
+            <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 dark:border-slate-700 bg-white dark:bg-black">
+              <span className="font-bold text-sm text-slate-900 dark:text-white">Navigation</span>
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => setMobileOpen(false)}
-                className="text-slate-500 hover:text-slate-900"
+                className="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
                 aria-label="Close menu"
               >
                 <KTIcon iconName="cross" className="text-base leading-none" />
@@ -358,12 +421,20 @@ export default function AppLayout() {
         <Navbar onOpenMobileMenu={() => setMobileOpen(true)} />
 
         {/* ── Page content ── */}
-        <main className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900">
-          <div className="p-4 md:p-6 lg:p-8">
+        {isFullScreenPage ? (
+          <main className="flex-1 min-h-0 overflow-hidden bg-slate-100 dark:bg-black">
             <Outlet />
-            <Footer />
-          </div>
-        </main>
+          </main>
+        ) : (
+          <main className="flex-1 min-h-0 flex flex-col bg-slate-100 dark:bg-black">
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+              <Outlet />
+            </div>
+            <div className="shrink-0 p-4 pt-2 md:px-6 lg:px-8 border-t border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-black">
+              <Footer />
+            </div>
+          </main>
+        )}
       </div>
     </div>
   );

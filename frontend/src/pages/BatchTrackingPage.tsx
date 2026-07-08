@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow, parseISO } from "date-fns";
+import { toast } from "sonner";
 import {
   Package,
   CheckCircle2,
@@ -16,12 +17,76 @@ import {
   Send,
   Wrench,
 } from "lucide-react";
+import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import KTIcon from "@/components/common/KTIcon";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 import { batchService, type BatchSummary, type BatchStatus, type BatchEvent } from "@/services/batchService";
 import { cn } from "@/utils/cn";
+
+const REFRESH_TOAST_DURATION = 3000;
+
+// ─── Refresh toast ────────────────────────────────────────────────────────────
+
+function RefreshToast() {
+  const [filled, setFilled] = useState(false);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setFilled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <div className="w-full rounded-lg bg-green-50 dark:bg-green-950/50 shadow-lg overflow-hidden">
+      <div className="flex items-start gap-2.5 px-4 py-3">
+        <KTIcon iconName="check-circle" className="text-lg leading-none text-emerald-500 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">Batch list refreshed</p>
+        </div>
+      </div>
+      <div className="h-1 w-full bg-blue-100 dark:bg-blue-500/20">
+        <div
+          className="h-full bg-blue-500"
+          style={{
+            width: filled ? "100%" : "0%",
+            transition: filled ? `width ${REFRESH_TOAST_DURATION}ms linear` : "none",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── KPI card ─────────────────────────────────────────────────────────────────
+
+type KpiAccent = "slate" | "violet" | "emerald" | "rose";
+
+const KPI_ACCENT: Record<KpiAccent, { gradient: string; glow: string }> = {
+  slate:   { gradient: "from-slate-400 to-slate-600",       glow: "shadow-slate-500/30" },
+  violet:  { gradient: "from-violet-400 to-violet-600",     glow: "shadow-violet-500/30" },
+  emerald: { gradient: "from-emerald-400 to-emerald-600",   glow: "shadow-emerald-500/30" },
+  rose:    { gradient: "from-rose-400 to-rose-600",         glow: "shadow-rose-500/30" },
+};
+
+function KpiCard({ title, value, icon, accent }: {
+  title: string; value: number; icon: React.ReactNode; accent: KpiAccent;
+}) {
+  const a = KPI_ACCENT[accent];
+  return (
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br shadow-lg text-white shrink-0", a.gradient, a.glow)}>
+          {icon}
+        </div>
+        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{title}</p>
+      </div>
+      <p className="text-2xl font-semibold tabular-nums tracking-tight mt-auto text-slate-900 dark:text-white">{value}</p>
+    </div>
+  );
+}
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -125,57 +190,60 @@ function BatchDetailPanel({ batchNumber }: { batchNumber: string }) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+        <Loader2 className="w-5 h-5 animate-spin text-slate-400 dark:text-slate-500" />
       </div>
     );
   }
   if (!data) return null;
 
   return (
-    <div className="mt-4 space-y-4">
+    <div className="mt-3 space-y-3 border-t border-slate-100 dark:border-white/10 pt-3 max-h-56 overflow-y-auto">
       {/* Metadata row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+      <div className="grid grid-cols-2 gap-3 text-xs">
         {data.work_order_number && (
-          <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2">
-            <p className="text-slate-400 dark:text-slate-500">Work Order</p>
-            <p className="font-medium text-slate-900 dark:text-white">{data.work_order_number}</p>
+          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Work Order</p>
+            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.work_order_number}</p>
           </div>
         )}
         {data.part_number && (
-          <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2">
-            <p className="text-slate-400 dark:text-slate-500">Part No.</p>
-            <p className="font-medium text-slate-900 dark:text-white">{data.part_number}</p>
+          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Part No.</p>
+            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.part_number}</p>
           </div>
         )}
         {data.engine_number && (
-          <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2">
-            <p className="text-slate-400 dark:text-slate-500">Engine No.</p>
-            <p className="font-medium text-slate-900 dark:text-white">{data.engine_number}</p>
+          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Engine No.</p>
+            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.engine_number}</p>
           </div>
         )}
         {data.nomenclature && (
-          <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2">
-            <p className="text-slate-400 dark:text-slate-500">Nomenclature</p>
-            <p className="font-medium text-slate-900 dark:text-white truncate">{data.nomenclature}</p>
+          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Nomenclature</p>
+            <p className="font-semibold text-slate-900 dark:text-white mt-1 truncate">{data.nomenclature}</p>
           </div>
         )}
       </div>
 
       {/* Event timeline */}
-      <div className="space-y-2">
-        <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-          Event History
-        </p>
+      <div className="pt-4 mt-4 border-t border-dashed border-slate-200 dark:border-white/10 space-y-3">
+        <div className="flex items-center gap-3">
+          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-widest shrink-0">
+            Event History
+          </p>
+          <div className="flex-1 h-px bg-slate-100 dark:bg-white/5" />
+        </div>
         {data.events.length === 0 ? (
-          <p className="text-xs text-slate-400 dark:text-slate-500 italic">No events recorded yet.</p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 italic py-2">No events recorded yet.</p>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {data.events.map((ev: BatchEvent) => {
               const scfg = STATUS_CONFIG[ev.event_type as BatchStatus];
               return (
                 <div
                   key={ev.id}
-                  className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2.5 text-xs"
+                  className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3 text-xs"
                 >
                   <div className="flex items-start gap-3">
                     <span
@@ -218,15 +286,15 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
   const sentPct = Math.round((batch.blades_sent / 90) * 100);
 
   return (
-    <Card className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 shadow-sm">
-      <CardHeader className="pb-2 pt-4 px-4">
+    <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20">
+      <CardHeader className="pb-1 pt-3 px-3.5">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="text-base font-semibold text-slate-900 dark:text-white font-mono">
+          <div className="min-w-0 flex-1">
+            <CardTitle className="text-sm font-semibold text-slate-900 dark:text-white font-mono truncate">
               {batch.batch_number}
             </CardTitle>
             {batch.nomenclature && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                 {batch.nomenclature}
               </p>
             )}
@@ -235,20 +303,22 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
         </div>
       </CardHeader>
 
-      <CardContent className="px-4 pb-4 space-y-3">
+      <CardContent className="px-3.5 pb-3.5 space-y-2">
         {/* Blade progress bar */}
         <div className="space-y-1">
-          <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
             <span>Blades in batch</span>
             <span className={cn(batch.blade_count >= 90 ? "text-emerald-500 font-semibold" : "")}>
               {batch.blade_count} / 90{batch.blade_count >= 90 ? " (Full)" : ""}
             </span>
           </div>
-          <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                batch.blade_count >= 90 ? "bg-emerald-500" : "bg-orange-400"
+                batch.blade_count >= 90
+                  ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
+                  : "bg-gradient-to-r from-orange-400 to-orange-500"
               )}
               style={{ width: `${Math.min(filledPct, 100)}%` }}
             />
@@ -262,9 +332,9 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
               <span>Sent to Assembly</span>
               <span className="text-violet-500 font-semibold">{batch.blades_sent}</span>
             </div>
-            <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+            <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
               <div
-                className="h-full rounded-full bg-violet-500 transition-all"
+                className="h-full rounded-full bg-gradient-to-r from-violet-400 to-violet-600 transition-all"
                 style={{ width: `${Math.min(sentPct, 100)}%` }}
               />
             </div>
@@ -289,7 +359,7 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
 
         {/* Last event snippet */}
         {batch.last_event && (
-          <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-2 text-xs text-slate-600 dark:text-slate-300">
+          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-2 text-xs text-slate-600 dark:text-slate-300">
             <span className="font-medium text-slate-400 dark:text-slate-500">Latest: </span>
             {batch.last_event.remarks ?? STATUS_CONFIG[batch.last_event.event_type as BatchStatus]?.label}
           </div>
@@ -324,7 +394,6 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BatchTrackingPage() {
-  const queryClient = useQueryClient();
   const hasRole = useAuthStore((s) => s.hasRole);
 
   // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) batch view.
@@ -332,11 +401,16 @@ export default function BatchTrackingPage() {
   const isOHView = hasRole(["OH_OPERATOR", "QA_VIEWER", "SUPER_ADMIN"]);
   const isAssemblyView = hasRole(["ASSEMBLY_OPERATOR"]) && !hasRole(["SUPER_ADMIN"]);
 
-  const { data: batches = [], isLoading, isError } = useQuery({
+  const { data: batches = [], isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["batches"],
     queryFn: () => batchService.list(),
     refetchInterval: 30_000,
   });
+
+  async function handleRefresh() {
+    await refetch();
+    toast.custom(() => <RefreshToast />, { duration: REFRESH_TOAST_DURATION, unstyled: true });
+  }
 
   const statusOrder: Record<BatchStatus, number> = {
     CREATED: 0,
@@ -372,69 +446,109 @@ export default function BatchTrackingPage() {
     : "Batches created and managed at 701 Hanger (OH)";
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{pageTitle}</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            {pageSubtitle}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => queryClient.invalidateQueries({ queryKey: ["batches"] })}
-          className="border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300"
-        >
-          <RefreshCw className="w-4 h-4 mr-1.5" />
-          Refresh
-        </Button>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: "Total Batches", value: total, cls: "from-slate-600 to-slate-700" },
-          { label: "Sent to Assembly", value: sent, cls: "from-violet-600 to-violet-700" },
-          { label: "Accepted", value: accepted, cls: "from-emerald-600 to-emerald-700" },
-          { label: "Rejected", value: rejected, cls: "from-red-600 to-red-700" },
-        ].map((s) => (
-          <div
-            key={s.label}
-            className={cn(
-              "rounded-xl p-4 text-white shadow-md bg-gradient-to-br",
-              s.cls
-            )}
-          >
-            <p className="text-white/70 text-xs font-medium">{s.label}</p>
-            <p className="text-3xl font-bold tabular-nums mt-1">{s.value}</p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <BatchOverviewIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              {pageTitle}
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight">
+              {pageSubtitle}
+            </p>
           </div>
-        ))}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={isFetching}
+            className="w-full sm:w-auto sm:min-w-[8rem] h-8 justify-center border-2 border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 gap-1.5"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", isFetching && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
-      {/* Batch grid */}
-      {isLoading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+      <div className="w-full px-4 sm:px-6 py-3 flex flex-col gap-3">
+
+        {/* KPI row */}
+        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <KpiCard
+            title="Total Batches"
+            value={total}
+            icon={<Package className="w-5 h-5" />}
+            accent="slate"
+          />
+          <KpiCard
+            title="Sent to Assembly"
+            value={sent}
+            icon={<Send className="w-5 h-5" />}
+            accent="violet"
+          />
+          <KpiCard
+            title="Accepted"
+            value={accepted}
+            icon={<CheckCircle2 className="w-5 h-5" />}
+            accent="emerald"
+          />
+          <KpiCard
+            title="Rejected"
+            value={rejected}
+            icon={<XCircle className="w-5 h-5" />}
+            accent="rose"
+          />
         </div>
-      ) : isError ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-red-500">
-          <AlertCircle className="w-5 h-5" />
-          <span>Failed to load batches</span>
-        </div>
-      ) : sorted.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
-          <Package className="w-10 h-10 opacity-40" />
-          <p>No batches found. Register blades with a batch number to get started.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sorted.map((batch) => (
-            <BatchCard key={batch.batch_number} batch={batch} />
-          ))}
-        </div>
-      )}
+
+        {/* Batch grid */}
+        <Card className="shrink-0 bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+          <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
+            <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
+                <KTIcon iconName="chart-line-up" className="text-base leading-none" />
+              </span>
+              All Batches
+              {!isLoading && (
+                <span className="text-sm font-normal text-slate-400 dark:text-slate-400">
+                  ({sorted.length})
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-3">
+            {isLoading ? (
+              <div className="flex items-center justify-center h-full min-h-[12rem]">
+                <Loader2 className="w-6 h-6 animate-spin text-slate-400 dark:text-slate-500" />
+              </div>
+            ) : isError ? (
+              <div className="flex items-center justify-center gap-2 h-full min-h-[12rem] text-red-500 dark:text-red-400">
+                <AlertCircle className="w-5 h-5" />
+                <span>Failed to load batches</span>
+              </div>
+            ) : sorted.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[12rem] text-slate-400 dark:text-slate-500 gap-3">
+                <Package className="w-10 h-10 opacity-40" />
+                <p className="text-center text-sm max-w-sm">
+                  No batches found. Register blades with a batch number to get started.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-1">
+                {sorted.map((batch) => (
+                  <BatchCard key={batch.batch_number} batch={batch} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
+      </div>
     </div>
   );
 }

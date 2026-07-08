@@ -1,10 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Layers,
-  Clock,
-  CheckCircle2,
   XCircle,
   Plus,
   ArrowRight,
@@ -14,26 +12,53 @@ import {
   Hash,
   ChevronDown,
   ArrowUp,
-  PauseCircle,
-  Cog,
-  Zap,
-  ShieldCheck,
-  BarChart3,
-  TrendingUp,
-  Kanban,
-  Cpu,
-  FileBarChart,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { DashboardIcon } from "@/components/common/CustomIcons";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import KTIcon from "@/components/common/KTIcon";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 import { workflowService } from "@/services/workflowService";
 import { batchService, type BatchSummary } from "@/services/batchService";
 import api from "@/services/api";
 import type { BladeStatus, DashboardStats } from "@/types";
 import { cn } from "@/utils/cn";
+
+const REFRESH_TOAST_DURATION = 3000;
+
+// ─── Refresh toast (bottom bar fills left-to-right over REFRESH_TOAST_DURATION) ─
+
+function RefreshToast() {
+  const [filled, setFilled] = useState(false);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setFilled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <div className="w-full rounded-lg bg-green-50 dark:bg-green-950/50 shadow-lg overflow-hidden">
+      <div className="flex items-start gap-2.5 px-4 py-3">
+        <KTIcon iconName="check-circle" className="text-lg leading-none text-emerald-500 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">Dashboard refreshed</p>
+        </div>
+      </div>
+      <div className="h-1 w-full bg-blue-100 dark:bg-blue-500/20">
+        <div
+          className="h-full bg-blue-500"
+          style={{
+            width: filled ? "100%" : "0%",
+            transition: filled ? `width ${REFRESH_TOAST_DURATION}ms linear` : "none",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -59,11 +84,11 @@ const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> = {
 
 type KpiAccent = "blue" | "amber" | "emerald" | "rose";
 
-const KPI_ACCENT: Record<KpiAccent, { bg: string; text: string }> = {
-  blue:    { bg: "bg-blue-100 dark:bg-blue-500/15",       text: "text-blue-600 dark:text-blue-400" },
-  amber:   { bg: "bg-amber-100 dark:bg-amber-500/15",     text: "text-amber-600 dark:text-amber-400" },
-  emerald: { bg: "bg-emerald-100 dark:bg-emerald-500/15", text: "text-emerald-600 dark:text-emerald-400" },
-  rose:    { bg: "bg-rose-100 dark:bg-rose-500/15",       text: "text-rose-600 dark:text-rose-400" },
+const KPI_ACCENT: Record<KpiAccent, { gradient: string; glow: string }> = {
+  blue:    { gradient: "from-blue-400 to-blue-600",       glow: "shadow-blue-500/30" },
+  amber:   { gradient: "from-amber-400 to-amber-600",     glow: "shadow-amber-500/30" },
+  emerald: { gradient: "from-emerald-400 to-emerald-600", glow: "shadow-emerald-500/30" },
+  rose:    { gradient: "from-rose-400 to-rose-600",       glow: "shadow-rose-500/30" },
 };
 
 function KpiCard({ title, value, caption, icon, delta, accent }: {
@@ -72,20 +97,24 @@ function KpiCard({ title, value, caption, icon, delta, accent }: {
 }) {
   const a = KPI_ACCENT[accent];
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 p-5 shadow-sm">
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col justify-between">
       <div className="flex items-center justify-between">
-        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center", a.bg, a.text)}>
-          {icon}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br shadow-lg text-white shrink-0", a.gradient, a.glow)}>
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{title}</p>
+            {caption && <p className="text-[10px] text-slate-400 dark:text-slate-300 truncate">{caption}</p>}
+          </div>
         </div>
         {typeof delta === "number" && delta > 0 && (
-          <span className="flex items-center gap-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+          <span className="flex items-center gap-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">
             <ArrowUp className="w-3 h-3" /> +{delta}
           </span>
         )}
       </div>
-      <p className="text-3xl font-bold mt-3 text-slate-900 dark:text-white">{value}</p>
-      <p className="text-sm font-medium text-slate-600 dark:text-slate-300 mt-0.5">{title}</p>
-      {caption && <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">{caption}</p>}
+      <p className="text-xl font-semibold tabular-nums tracking-tight mt-1 text-slate-900 dark:text-white">{value}</p>
     </div>
   );
 }
@@ -98,19 +127,19 @@ function StationCard({ icon, iconBg, title, total, items, barColor, barPct }: {
   barColor: string; barPct: number;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 p-5 shadow-sm flex flex-col">
-      <div className="flex items-center gap-3 mb-4">
-        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center shrink-0", iconBg)}>
+    <div className="h-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-4 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+      <div className="flex items-center gap-3 mb-3">
+        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br shadow-lg text-white", iconBg)}>
           {icon}
         </div>
         <div>
           <p className="text-sm font-bold text-slate-900 dark:text-white">{title}</p>
-          <p className="text-xs text-slate-400 dark:text-slate-500">{total} blade{total !== 1 ? "s" : ""} in process</p>
+          <p className="text-xs text-slate-400 dark:text-slate-300">{total} blade{total !== 1 ? "s" : ""} in process</p>
         </div>
       </div>
-      <div className="space-y-2 flex-1">
+      <div className="space-y-1.5 flex-1">
         {items.map((it) => (
-          <div key={it.label} className="flex items-center justify-between text-sm">
+          <div key={it.label} className="flex items-center justify-between text-[11px]">
             <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
               <span className={cn("w-1.5 h-1.5 rounded-full", it.dotColor)} />
               {it.label}
@@ -119,28 +148,10 @@ function StationCard({ icon, iconBg, title, total, items, barColor, barPct }: {
           </div>
         ))}
       </div>
-      <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden mt-4">
+      <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden mt-3">
         <div className={cn("h-full rounded-full", barColor)} style={{ width: `${barPct}%` }} />
       </div>
     </div>
-  );
-}
-
-// ─── Quick action ───────────────────────────────────────────────────────────────
-
-function QuickAction({ icon, iconBg, label, onClick }: {
-  icon: React.ReactNode; iconBg: string; label: string; onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/60 px-4 py-4 text-left hover:border-orange-300 dark:hover:border-orange-500/50 hover:shadow-md transition-all"
-    >
-      <span className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", iconBg)}>
-        {icon}
-      </span>
-      <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{label}</span>
-    </button>
   );
 }
 
@@ -161,7 +172,7 @@ export default function DashboardPage() {
   const [showWODropdown, setShowWODropdown] = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
-  const { data: stats, dataUpdatedAt, refetch, isFetching } = useQuery<DashboardStats>({
+  const { data: stats, refetch, isFetching } = useQuery<DashboardStats>({
     queryKey: ["dashboard-stats"],
     queryFn: workflowService.getDashboardStats,
     refetchInterval: 30_000,
@@ -223,6 +234,11 @@ export default function DashboardPage() {
 
   const maxStationTotal = Math.max(ohTotal, asmTotal, fvTotal, 1);
 
+  async function handleRefresh() {
+    await refetch();
+    toast.custom(() => <RefreshToast />, { duration: REFRESH_TOAST_DURATION, unstyled: true });
+  }
+
   // Status distribution — full workflow order
   const STATUS_ORDER: BladeStatus[] = [
     "CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "SENT_TO_ASSEMBLY",
@@ -233,66 +249,61 @@ export default function DashboardPage() {
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
 
-      {/* ── Sticky header ───────────────────────────────────────────────── */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center justify-between max-w-screen-2xl mx-auto">
-          <div>
-            <h1 className="text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white">
-              <Activity className="w-5 h-5 text-orange-500" />
+      {/* ── Header ───────────────────────────────────────────────────────── */}
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <DashboardIcon className="w-5 h-5 text-orange-500 shrink-0" />
               Operations Dashboard
             </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Real-time blade tracking across all stations
-              {dataUpdatedAt && (
-                <span className="text-slate-400 dark:text-slate-500">
-                  {" · "}Last updated {formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}
-                </span>
-              )}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 tracking-tight">
+              Real-time blade tracking across all stations.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}
-              className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 gap-1.5">
-              <RefreshCw className={cn("w-3.5 h-3.5", isFetching && "animate-spin")} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={handleRefresh} disabled={isFetching}
+              className="h-8 px-3 text-xs flex-1 sm:flex-none justify-center border-2 border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 gap-1.5 w-full sm:w-36">
+              <RefreshCw className={cn("w-3 h-3", isFetching && "animate-spin")} />
               Refresh
             </Button>
-            <Button size="sm" onClick={() => navigate("/blades/new")}
-              className="bg-orange-500 hover:bg-orange-600 text-white gap-1.5">
-              <Plus className="w-3.5 h-3.5" /> New Blade Entry
+            <Button onClick={() => navigate("/blades/new")}
+              className="h-8 px-3 text-xs flex-1 sm:flex-none justify-center bg-gradient-to-br from-orange-400 to-orange-600 hover:from-orange-500 hover:to-orange-700 text-white shadow-lg shadow-orange-500/30 border-0 gap-1.5 w-full sm:w-36">
+              <Plus className="w-3 h-3" /> New Blade Entry
             </Button>
-            <Button variant="outline" size="sm" onClick={() => navigate("/assembly-queue")}
-              className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 gap-1.5">
-              Assembly Queue <ArrowRight className="w-3.5 h-3.5" />
+            <Button variant="outline" onClick={() => navigate("/assembly-queue")}
+              className="h-8 px-3 text-xs flex-1 sm:flex-none justify-center bg-white hover:bg-slate-50 border-2 border-slate-300 dark:bg-black dark:hover:bg-slate-900 dark:border-slate-700 text-slate-900 dark:text-white gap-1.5 w-full sm:w-36">
+              Assembly Queue <ArrowRight className="w-3 h-3" />
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-screen-2xl mx-auto px-6 py-6 space-y-5">
+      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-4 overflow-y-auto">
 
         {/* ── KPI cards ────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 items-start">
           <KpiCard title="Total Blades" value={totalBlades}
             caption={`${activeBatches.length} active batch${activeBatches.length !== 1 ? "es" : ""}`}
-            icon={<Layers className="w-5 h-5" />} delta={todayCreated} accent="blue" />
+            icon={<KTIcon iconName="category" className="text-xl leading-none" />} delta={todayCreated} accent="blue" />
           <KpiCard title="In Progress" value={inProgressCount}
             caption="Across all stations"
-            icon={<Clock className="w-5 h-5" />} accent="amber" />
+            icon={<KTIcon iconName="time" className="text-xl leading-none" />} accent="amber" />
           <KpiCard title="Completed" value={completedCount}
             caption={`${completionRate.toFixed(1)}% completion rate`}
-            icon={<CheckCircle2 className="w-5 h-5" />} delta={todayCompleted} accent="emerald" />
+            icon={<KTIcon iconName="check-circle" className="text-xl leading-none" />} delta={todayCompleted} accent="emerald" />
           <KpiCard title="On Hold" value={onHoldCount}
             caption="Needs attention"
-            icon={<PauseCircle className="w-5 h-5" />} accent="rose" />
+            icon={<KTIcon iconName="flag" className="text-xl leading-none" />} accent="rose" />
         </div>
 
         {/* ── Station cards ────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="shrink-0 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <StationCard
-            icon={<Cog className="w-5 h-5" />}
-            iconBg="bg-sky-100 dark:bg-sky-500/15 text-sky-600 dark:text-sky-400"
+            icon={<KTIcon iconName="gear" className="text-xl leading-none" />}
+            iconBg="from-sky-400 to-sky-600 shadow-sky-500/30"
             title="Overhaul Hangar"
             total={ohTotal}
             items={[
@@ -303,8 +314,8 @@ export default function DashboardPage() {
             barPct={(ohTotal / maxStationTotal) * 100}
           />
           <StationCard
-            icon={<Zap className="w-5 h-5" />}
-            iconBg="bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400"
+            icon={<KTIcon iconName="flash-circle" className="text-xl leading-none" />}
+            iconBg="from-orange-400 to-orange-600 shadow-orange-500/30"
             title="Assembly Hangar"
             total={asmTotal}
             items={[
@@ -316,8 +327,8 @@ export default function DashboardPage() {
             barPct={(asmTotal / maxStationTotal) * 100}
           />
           <StationCard
-            icon={<ShieldCheck className="w-5 h-5" />}
-            iconBg="bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+            icon={<KTIcon iconName="shield-tick" className="text-xl leading-none" />}
+            iconBg="from-emerald-400 to-emerald-600 shadow-emerald-500/30"
             title="Final Verification"
             total={fvTotal}
             items={[
@@ -329,119 +340,10 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* ── Active Batches + Status Distribution ────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-            <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
-              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-orange-500" />
-                Active Batches
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-4">
-              {activeBatches.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 dark:text-slate-500 text-sm">
-                  No active batches
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {activeBatches.slice(0, 5).map((b) => {
-                    const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
-                    return (
-                      <div key={b.batch_number}>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                              {b.batch_number}
-                            </p>
-                            <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
-                              {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}
-                            </p>
-                          </div>
-                          <span className="text-sm font-bold text-orange-500 shrink-0 ml-2">
-                            {pct.toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden">
-                          <div className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-500"
-                            style={{ width: `${pct}%` }} />
-                        </div>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                          {b.blades_completed} / {b.blade_count} blades completed
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-            <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
-              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-orange-500" />
-                Status Distribution
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-4">
-              <div className="space-y-2.5">
-                {STATUS_ORDER.map((s) => {
-                  const cfg = STATUS_CFG[s];
-                  const count = byStatus[s] ?? 0;
-                  const pct = (count / maxStatusCount) * 100;
-                  const dotColor = cfg.color.split(" ")[0];
-                  return (
-                    <div key={s} className="flex items-center gap-3">
-                      <span className={cn("w-2 h-2 rounded-full shrink-0", dotColor)} />
-                      <span className="w-32 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate">
-                        {cfg.label}
-                      </span>
-                      <div className="flex-1 h-2 rounded-full bg-slate-100 dark:bg-slate-700/50 overflow-hidden">
-                        <div className={cn("h-full rounded-full", dotColor)} style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="w-6 shrink-0 text-right text-xs font-semibold text-slate-700 dark:text-slate-200">
-                        {count}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ── Quick actions ────────────────────────────────────────────────── */}
-        <div>
-          <h2 className="text-xs font-bold tracking-widest uppercase text-slate-400 dark:text-slate-500 mb-3">
-            Quick Actions
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <QuickAction
-              icon={<Kanban className="w-4 h-4" />}
-              iconBg="bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400"
-              label="Workflow Board"
-              onClick={() => navigate("/batch-tracking")}
-            />
-            <QuickAction
-              icon={<Cpu className="w-4 h-4" />}
-              iconBg="bg-sky-100 dark:bg-sky-500/15 text-sky-600 dark:text-sky-400"
-              label="Instrument Data"
-              onClick={() => navigate("/rocking-creep")}
-            />
-            <QuickAction
-              icon={<FileBarChart className="w-4 h-4" />}
-              iconBg="bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-              label="QA Reports"
-              onClick={() => navigate("/reports")}
-            />
-          </div>
-        </div>
-
         {/* ── Work Order / Engine Summary ─────────────────────────────────── */}
         {workOrders.length > 0 && (
-          <div className="bg-white dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/60 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3 bg-slate-800 dark:bg-slate-900">
+          <div className="shrink-0 bg-white/70 dark:bg-black/40 backdrop-blur-xl rounded-2xl border border-white/60 dark:border-white/10 shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 bg-slate-800 dark:bg-black">
               <div className="flex items-center gap-2">
                 <Wrench className="w-4 h-4 text-orange-400" />
                 <span className="text-white text-sm font-semibold tracking-wide uppercase">Active Work Order</span>
@@ -453,7 +355,7 @@ export default function DashboardPage() {
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showWODropdown && (
-                  <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl min-w-[220px] max-h-60 overflow-y-auto">
+                  <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-neutral-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl min-w-[220px] max-h-60 overflow-y-auto">
                     {workOrders.map((wo) => (
                       <button key={wo.work_order_number + wo.engine_number}
                         onClick={() => { setSelectedWO(wo.work_order_number); setShowWODropdown(false); }}
@@ -478,10 +380,10 @@ export default function DashboardPage() {
                   { icon: <Layers className="w-3.5 h-3.5"/>, label: "Part Number", value: activeWO.part_number,        mono: true },
                   { icon: <Activity className="w-3.5 h-3.5"/>,label:"Nomenclature",value: activeWO.nomenclature,       mono: false },
                 ].map(({ icon, label, value, mono }) => (
-                  <div key={label} className="px-4 py-3">
+                  <div key={label} className="px-3 py-2">
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-slate-400 dark:text-slate-500">{icon}</span>
-                      <span className="text-slate-400 dark:text-slate-500 text-[10px] font-semibold uppercase tracking-widest">{label}</span>
+                      <span className="text-slate-400 dark:text-slate-300">{icon}</span>
+                      <span className="text-slate-400 dark:text-slate-300 text-[10px] font-semibold uppercase tracking-widest">{label}</span>
                     </div>
                     <p className={cn("text-slate-900 dark:text-white font-semibold text-sm truncate", mono && "font-mono")}>
                       {value ?? "—"}
@@ -495,7 +397,7 @@ export default function DashboardPage() {
 
         {/* ── Unbalanced alert ─────────────────────────────────────────────── */}
         {((stats?.total_unbalanced ?? 0) > 0) && (
-          <div className="rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
+          <div className="shrink-0 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
             <div className="flex items-start gap-3">
               <XCircle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
               <div>
@@ -514,6 +416,96 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* ── Active Batches + Status Distribution ────────────────────────── */}
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
+            <CardHeader className="shrink-0 pb-3 border-b border-slate-100 dark:border-slate-700/50 pt-4">
+              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-md shadow-cyan-500/30 text-white shrink-0">
+                  <KTIcon iconName="chart-line-up" className="text-xl leading-none" />
+                </span>
+                Active Batches
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 min-h-0 overflow-y-auto pt-3">
+              {activeBatches.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 dark:text-slate-300 text-base">
+                  No active batches
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {activeBatches.slice(0, 5).map((b) => {
+                    const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
+                    return (
+                      <div key={b.batch_number}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                              {b.batch_number}
+                            </p>
+                            <p className="text-xs text-slate-400 dark:text-slate-300 truncate">
+                              {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}
+                            </p>
+                          </div>
+                          <span className="text-sm font-bold text-orange-500 shrink-0 ml-2">
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="h-2.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
+                          <div className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-500"
+                            style={{ width: `${pct}%` }} />
+                        </div>
+                        <p className="text-xs text-slate-400 dark:text-slate-300 mt-1">
+                          {b.blades_completed} / {b.blade_count} blades completed
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
+            <CardHeader className="shrink-0 pb-3 border-b border-slate-100 dark:border-slate-700/50 pt-4">
+              <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br from-violet-400 to-violet-600 shadow-md shadow-violet-500/30 text-white shrink-0">
+                  <KTIcon iconName="chart-pie-simple" className="text-xl leading-none" />
+                </span>
+                Status Distribution
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 min-h-0 flex flex-col gap-1 pt-2 overflow-y-auto pb-2">
+              {STATUS_ORDER.map((s) => {
+                const cfg = STATUS_CFG[s];
+                const count = byStatus[s] ?? 0;
+                const pct = (count / maxStatusCount) * 100;
+                const dotColor = cfg.color.split(" ")[0];
+                return (
+                  <div key={s} className="flex items-center gap-2">
+                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dotColor)} />
+                    <span className="w-32 shrink-0 text-[11px] text-slate-600 dark:text-slate-300 truncate">
+                      {cfg.label}
+                    </span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
+                      <div className={cn("h-full rounded-full", dotColor)} style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="w-6 shrink-0 text-right text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                      {count}
+                    </span>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        </div>
+
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <div className="w-full">
+          <Footer />
+        </div>
       </div>
     </div>
   );

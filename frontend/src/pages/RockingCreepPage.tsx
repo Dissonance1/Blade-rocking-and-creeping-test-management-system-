@@ -11,6 +11,8 @@ import {
   FlaskConical,
   Package,
 } from "lucide-react";
+import Footer from "@/layouts/components/Navbar/Footer";
+import { RockingCreepIcon } from "@/components/common/CustomIcons";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -161,19 +163,23 @@ export default function RockingCreepPage() {
   ).length;
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <FlaskConical className="w-6 h-6 text-orange-500" />
-            Rocking &amp; Creep Entry
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">
-            Enter Rocking and Creep values for blades after Assembly slot allocation
-          </p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <RockingCreepIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              Rocking &amp; Creep Entry
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">
+              Enter Rocking and Creep values for blades after Assembly slot allocation
+            </p>
+          </div>
         </div>
       </div>
+
+      <div className="w-full px-4 sm:px-6 py-6 sm:py-8 space-y-6">
 
       {/* Batch selector + stats bar */}
       <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
@@ -256,7 +262,7 @@ export default function RockingCreepPage() {
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm whitespace-nowrap">
                 <thead className="bg-slate-800 dark:bg-slate-900">
                   <tr>
                     {[
@@ -452,6 +458,11 @@ export default function RockingCreepPage() {
           <p className="font-medium">No blades found in batch {selectedBatch}</p>
         </div>
       )}
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
+      </div>
     </div>
-  );
+  </div>
+);
 }
