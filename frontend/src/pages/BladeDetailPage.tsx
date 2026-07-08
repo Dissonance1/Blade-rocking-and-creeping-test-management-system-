@@ -33,6 +33,7 @@ import { workflowService } from "@/services/workflowService";
 import { useAuthStore } from "@/store/authStore";
 import type { BladeStatus, WorkflowLog } from "@/types";
 import { cn } from "@/utils/cn";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -204,7 +205,7 @@ export default function BladeDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
+      <div className="h-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
       </div>
     );
@@ -212,7 +213,7 @@ export default function BladeDetailPage() {
 
   if (!blade) {
     return (
-      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-slate-500 dark:text-slate-400">
+      <div className="h-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-slate-500 dark:text-slate-400 text-center px-4">
         Blade not found.
       </div>
     );
@@ -226,22 +227,22 @@ export default function BladeDetailPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="flex items-center justify-between max-w-screen-xl mx-auto">
-          <div className="flex items-center gap-4">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-4 shadow-none border-b-0">
+        <div className="w-full flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <Button
               variant="ghost"
-              size="sm"
+              size="icon"
               onClick={() => navigate(-1)}
-              className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              className="shrink-0 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
             >
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-bold font-mono text-slate-900 dark:text-white truncate">
                   {blade.serial_number}
                 </h1>
                 <StatusBadge status={blade.status} />
@@ -252,14 +253,14 @@ export default function BladeDetailPage() {
                   </span>
                 )}
               </div>
-              <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">
+              <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5 truncate">
                 {blade.nomenclature} · {blade.part_number}
               </p>
             </div>
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-2 flex-wrap lg:justify-end">
             <Button
               variant="outline"
               size="sm"
@@ -289,10 +290,12 @@ export default function BladeDetailPage() {
             {blade.status === "MEASUREMENTS_RECORDED" &&
               blade.batch_number &&
               hasRole(["OH_OPERATOR", "SUPER_ADMIN"]) && (
-                <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/40 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+                <div className="flex items-center gap-2 flex-wrap rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/40 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300 max-w-full">
                   <Package className="w-3.5 h-3.5 flex-shrink-0" />
-                  Part of batch <span className="font-mono font-semibold mx-1">{blade.batch_number}</span>
-                  — send the full batch from OH Queue
+                  <span>
+                    Part of batch <span className="font-mono font-semibold mx-1">{blade.batch_number}</span>
+                    — send the full batch from OH Queue
+                  </span>
                 </div>
               )}
 
@@ -327,8 +330,8 @@ export default function BladeDetailPage() {
         </div>
       </div>
 
-      <div className="max-w-screen-xl mx-auto px-6 py-6">
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-5 flex flex-col gap-5 overflow-y-auto">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start shrink-0">
           {/* Left: detail cards */}
           <div className="xl:col-span-2 space-y-6">
             {/* Blade identity */}
@@ -342,7 +345,7 @@ export default function BladeDetailPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-4">
-                <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-4">
+                <dl className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-4">
                   <InfoField label="Serial Number" value={<span className="font-mono">{blade.serial_number}</span>} />
                   <InfoField label="Melt Number" value={<span className="font-mono">{blade.melt_number}</span>} />
                   <InfoField label="Work Order" value={blade.work_order_number} />
@@ -400,7 +403,7 @@ export default function BladeDetailPage() {
                     if (!m) return null;
                     return (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
+                        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                           <InfoField
                             label="Weight"
                             value={m.weight_grams != null ? `${m.weight_grams} g` : null}
@@ -476,8 +479,8 @@ export default function BladeDetailPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-4">
-                  <div className="flex items-start gap-4">
-                    <dl className="flex-1 space-y-2">
+                  <div className="flex flex-col sm:flex-row items-start gap-4">
+                    <dl className="flex-1 min-w-0 space-y-2">
                       <InfoField
                         label="OCR Serial Number"
                         value={<span className="font-mono">{blade.ocr_serial_number}</span>}
@@ -570,6 +573,9 @@ export default function BladeDetailPage() {
             </Card>
           </div>
         </div>
+      </div>
+      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-6 pb-4">
+        <Footer />
       </div>
     </div>
   );

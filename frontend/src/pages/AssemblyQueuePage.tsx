@@ -14,7 +14,11 @@ import {
   Package,
   PackageSearch,
   PackageCheck,
+  Eye,
+  Activity,
+  AlertTriangle,
 } from "lucide-react";
+import { AssemblyQueueIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 import { Button } from "@/components/ui/button";
@@ -29,6 +33,7 @@ import { assemblyService } from "@/services/assemblyService";
 import type { BladeStatus } from "@/types";
 import { cn } from "@/utils/cn";
 import { toast } from "sonner";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
@@ -70,12 +75,14 @@ function QuickStat({
   gradient: string;
 }) {
   return (
-    <div className={cn("rounded-xl p-4 text-white shadow-md flex items-center gap-4", gradient)}>
-      <div className="p-2 rounded-lg bg-white/20">{icon}</div>
-      <div>
-        <p className="text-white/80 text-xs font-medium">{label}</p>
-        <p className="text-2xl font-bold tabular-nums">{count}</p>
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shadow-lg text-white shrink-0", gradient)}>
+          {icon}
+        </div>
+        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{label}</p>
       </div>
+      <p className="text-2xl font-semibold tabular-nums tracking-tight mt-auto text-slate-900 dark:text-white">{count}</p>
     </div>
   );
 }
@@ -227,51 +234,58 @@ export default function AssemblyQueuePage() {
   }, [allBlades, activeTab, search, currentTab.statuses]);
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="max-w-screen-xl mx-auto">
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Assembly Shop Queue</h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm">Balancing and slot allocation management</p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="w-full max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <AssemblyQueueIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              Assembly Shop Queue
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight">
+              Balancing and slot allocation management
+            </p>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-screen-xl mx-auto px-6 py-6 space-y-6">
+      <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-4 sm:px-6 py-5 flex flex-col gap-5">
         {/* Quick stats — vibrant gradients */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <QuickStat
             label="Incoming"
             count={incomingCount}
             icon={<Layers className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-violet-500 to-violet-600"
+            gradient="bg-gradient-to-br from-violet-400 to-violet-600 shadow-violet-500/30"
           />
           <QuickStat
             label="In Progress"
             count={inProgressCount}
             icon={<Wrench className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-amber-500 to-orange-500"
+            gradient="bg-gradient-to-br from-amber-400 to-orange-600 shadow-orange-500/30"
           />
           <QuickStat
             label="Completed"
             count={completedCount}
             icon={<CheckCircle2 className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-emerald-500 to-green-600"
+            gradient="bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-emerald-500/30"
           />
           <QuickStat
             label="Rejected Batches"
             count={rejectedCount}
             icon={<XCircle className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-red-500 to-rose-600"
+            gradient="bg-gradient-to-br from-red-400 to-red-600 shadow-red-500/30"
           />
         </div>
 
         {/* Batch action cards — always visible */}
         {assemblyBatches.length > 0 && (
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+          <div className="shrink-0 flex flex-col">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2 shrink-0">
               Batches
             </p>
-            <div className="grid gap-3">
+            <div className="grid gap-3 pr-2 pb-1">
               {assemblyBatches.map((batch) => {
                 const isActionable =
                   batch.current_status === "SENT_TO_ASSEMBLY" ||
@@ -282,18 +296,18 @@ export default function AssemblyQueuePage() {
                 return (
                   <Card
                     key={batch.batch_number}
-                    className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm"
+                    className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20"
                   >
                     <CardContent className="p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-4">
                         {/* Batch info */}
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
                           <Package className="w-5 h-5 text-violet-500 flex-shrink-0" />
-                          <div>
-                            <p className="font-semibold text-slate-900 dark:text-white font-mono">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-900 dark:text-white font-mono truncate">
                               {batch.batch_number}
                             </p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                               <span
                                 className={cn(
                                   "font-medium",
@@ -392,7 +406,12 @@ export default function AssemblyQueuePage() {
                                 rejectMutation.mutate({ batchNumber: batch.batch_number, remarks: batchRemarks.trim() })
                               }
                               disabled={rejectMutation.isPending || !batchRemarks.trim()}
-                              className="bg-red-600 hover:bg-red-500 text-white"
+                              className={cn(
+                                "text-white",
+                                (!batchRemarks.trim() || rejectMutation.isPending)
+                                  ? "bg-slate-400 dark:bg-slate-600 cursor-not-allowed opacity-100"
+                                  : "bg-red-600 hover:bg-red-500"
+                              )}
                             >
                               {rejectMutation.isPending && (
                                 <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
@@ -419,14 +438,14 @@ export default function AssemblyQueuePage() {
         )}
 
         {/* Search + Batch filter (for blade table) */}
-        <div className="flex flex-wrap gap-3 items-center">
+        <div className="shrink-0 flex flex-wrap gap-3 items-center">
           <div className="relative min-w-[200px] max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 dark:text-slate-400" />
             <Input
               placeholder="Search serial or melt number…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
+              className="pl-9 bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-sm"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -434,7 +453,7 @@ export default function AssemblyQueuePage() {
             <select
               value={batchFilter}
               onChange={(e) => setBatchFilter(e.target.value)}
-              className="rounded-md border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px]"
+              className="rounded-md border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px] shadow-sm"
             >
               <option value="">All Batches</option>
               {batchNumbers.map((bn) => (
@@ -445,17 +464,19 @@ export default function AssemblyQueuePage() {
         </div>
 
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 mb-5 rounded-xl shadow-sm">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
+          <TabsList className="shrink-0 flex-wrap bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 h-auto p-1 mb-3 rounded-xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 self-start">
             {ASSEMBLY_TABS.map((tab) => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}
-                className="flex items-center gap-2 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="group flex items-center gap-2 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
               >
-                {tab.icon}
-                {tab.label}
-                <span className="ml-1 rounded-full bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300">
+                <div className="text-slate-500 dark:text-slate-400 group-data-[state=active]:text-white">
+                  {tab.icon}
+                </div>
+                <span className="font-medium group-data-[state=active]:text-white">{tab.label}</span>
+                <span className="ml-1 rounded-full bg-slate-100 dark:bg-slate-700 group-data-[state=active]:bg-white/20 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300 group-data-[state=active]:text-white border border-transparent group-data-[state=active]:border-white/10">
                   {tabCount(tab.statuses)}
                 </span>
               </TabsTrigger>
@@ -463,22 +484,22 @@ export default function AssemblyQueuePage() {
           </TabsList>
 
           {ASSEMBLY_TABS.map((tab) => (
-            <TabsContent key={tab.id} value={tab.id}>
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                <CardContent className="p-0">
+            <TabsContent key={tab.id} value={tab.id} className="flex-1 min-h-0 flex flex-col mt-0 data-[state=inactive]:hidden">
+              <Card className="flex-1 min-h-0 flex flex-col bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+                <CardContent className="flex-1 min-h-0 overflow-y-auto p-0">
                   {isLoading ? (
-                    <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500">
+                    <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500 h-full">
                       <Loader2 className="w-6 h-6 animate-spin mr-2" />
                       Loading…
                     </div>
                   ) : filtered.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
+                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 h-full">
                       <Inbox className="w-12 h-12 mb-3 opacity-30" />
                       <p className="font-medium">No blades in this section</p>
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                      <table className="w-full text-sm whitespace-nowrap">
                         <thead className="bg-slate-800 dark:bg-slate-700">
                           <tr>
                             {[
@@ -488,14 +509,15 @@ export default function AssemblyQueuePage() {
                               "Static Moment (g·cm)",
                               "Status",
                               "Part Number",
+                              "Nomenclature",
                               "Received",
-                              "Actions",
+                              "Preview",
                             ].map((h) => (
                               <th
                                 key={h}
                                 className={cn(
                                   "px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase text-left",
-                                  h === "Actions" && "text-right"
+                                  h === "Preview" && "text-right"
                                 )}
                               >
                                 {h}
@@ -548,9 +570,10 @@ export default function AssemblyQueuePage() {
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => navigate(`/blades/${blade.id}`)}
-                                    className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white h-8 px-2"
+                                    className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white h-8 px-2 flex items-center gap-1.5"
                                   >
-                                    View
+                                    <Eye className="w-4 h-4" />
+                                    <span>View</span>
                                   </Button>
                                   {(blade.status === "SLOT_ASSIGNED" ||
                                     blade.status === "BALANCING_IN_PROGRESS") && (
@@ -577,6 +600,12 @@ export default function AssemblyQueuePage() {
             </TabsContent>
           ))}
         </Tabs>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3">
+        <div className="w-full">
+          <Footer />
+        </div>
       </div>
 
     </div>

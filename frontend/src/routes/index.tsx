@@ -18,6 +18,7 @@ import ModifyBatchPage from "@/pages/ModifyBatchPage";
 import AcceptBatchPage from "@/pages/AcceptBatchPage";
 import RockingCreepPage from "@/pages/RockingCreepPage";
 import AssemblyVerificationPage from "@/pages/AssemblyVerificationPage";
+import MyProfile from "@/pages/MyProfile";
 import { useAuthStore } from "@/store/authStore";
 import type { UserRole } from "@/types";
 import { ShieldOff, ArrowLeft } from "lucide-react";
@@ -175,6 +176,8 @@ const router = createBrowserRouter([
       },
       { path: "/admin/users", element: <Navigate to="/users" replace /> },
 
+      { path: "/profile", element: <MyProfile /> },
+
       {
         path: "/assembly/verify/:batchNumber",
         element: (
@@ -210,7 +213,6 @@ const router = createBrowserRouter([
       },
       { path: "/notifications", element: <NotificationsPage /> },
       { path: "/settings", element: <SettingsPage /> },
-      { path: "/dashboard", element: <Navigate to="/" replace /> },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },

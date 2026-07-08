@@ -142,7 +142,7 @@ export default {
       },
 
       fontFamily: {
-        sans: ["Inter Variable", "Inter", "Helvetica", "sans-serif"],
+        sans: ["-apple-system", "BlinkMacSystemFont", "Inter Variable", "Inter", "Helvetica", "sans-serif"],
         mono: ["JetBrains Mono", "Fira Code", "monospace"],
       },
 

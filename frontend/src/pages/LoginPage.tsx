@@ -73,34 +73,40 @@ export default function LoginPage() {
   const onSubmit = (values: LoginFormValues) => loginMutation.mutate(values);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white">
-      <div className="absolute top-6 right-6">
-        <div className="flex items-center gap-4 rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-md">
-          <img src="/media/login/HAL.png" alt="HAL" className="h-[46px] w-auto object-contain" />
-          <div className="h-12 w-px bg-slate-200" />
-          <img src="/media/login/MDL.png" alt="Meridian Data Labs" className="h-[38px] w-auto object-contain" />
+    <div
+      className="min-h-screen flex items-center justify-center bg-slate-50 bg-no-repeat bg-cover bg-center px-4 py-10"
+      style={{
+        backgroundImage:
+          "linear-gradient(rgba(248,250,252,0.82), rgba(248,250,252,0.82)), url(/media/login/FullBackgroundLogin.png)",
+      }}
+    >
+      <div className="hidden sm:flex absolute top-4 right-4 sm:top-6 sm:right-6">
+        <div className="flex items-center gap-2.5 sm:gap-3.5 rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 sm:px-3.5 sm:py-2.5 shadow-md">
+          <img src="/media/login/HAL.png" alt="HAL" className="h-8 sm:h-[42px] w-auto object-contain" />
+          <div className="h-8 sm:h-11 w-px bg-slate-200" />
+          <img src="/media/login/MDL.png" alt="Meridian Data Labs" className="h-6 sm:h-[34px] w-auto object-contain" />
         </div>
       </div>
 
-      <span className="absolute bottom-7 right-8 text-[13px] font-medium uppercase tracking-wide text-slate-400">
-        Built by @ Meridian Data Labs
+      <span className="hidden md:block absolute bottom-7 right-8 text-[12px] font-medium uppercase tracking-wide text-slate-400">
+        Built by ©Meridian Data Labs
       </span>
-      <div className="relative w-full max-w-md px-4">
+      <div className="relative w-full max-w-md">
         {/* Logo / Branding area */}
-        <div className="flex flex-col items-center mb-6">
+        <div className="flex flex-col items-center mb-5">
           <img
             src="/media/login/Light.png"
             alt="Blade Rocking & Creep Test System"
-            className="h-16 w-16 object-contain mb-3"
+            className="h-12 w-12 sm:h-14 sm:w-14 object-contain mb-2"
           />
           <h1
-            className="text-2xl font-bold text-slate-900 tracking-tight text-center leading-tight"
+            className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight text-center leading-tight"
             style={{ fontFamily: "Montserrat, Verdana, Geneva, sans-serif" }}
           >
             Blade Rocking &amp; Creeping
           </h1>
           <p
-            className="text-slate-600 text-sm mt-1.5 text-center"
+            className="text-slate-600 text-xs mt-1 text-center"
             style={{ fontFamily: "Inter, Verdana, Geneva, sans-serif" }}
           >
             Advanced Test Management System
@@ -108,22 +114,22 @@ export default function LoginPage() {
         </div>
 
         <Card
-          className="border-slate-200 shadow-xl rounded-2xl overflow-hidden bg-no-repeat bg-cover bg-center"
+          className="border-slate-200 shadow-xl rounded-xl overflow-hidden bg-no-repeat bg-cover bg-center"
           style={{
             backgroundColor: "#ffffff",
             backgroundImage:
               "linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.85)), url(/media/login/BackgroundImageLight.png)",
           }}
         >
-          <CardHeader className="pb-4">
-            <CardTitle className="text-black text-xl">Sign In</CardTitle>
-            <CardDescription className="text-slate-500">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-black text-lg">Sign In</CardTitle>
+            <CardDescription className="text-slate-500 text-xs">
               Enter your credentials to access the system
             </CardDescription>
           </CardHeader>
 
           <CardContent>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-3" noValidate>
               {/* Global error */}
               {loginMutation.isError && (
                 <Alert variant="destructive" className="border-red-500/50 bg-red-50">
@@ -135,8 +141,8 @@ export default function LoginPage() {
               )}
 
               {/* Email */}
-              <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-slate-600 text-sm font-medium">
+              <div className="space-y-1">
+                <Label htmlFor="email" className="text-slate-600 text-xs font-medium">
                   Email/Username
                 </Label>
                 <div className="relative">
@@ -149,7 +155,7 @@ export default function LoginPage() {
                     autoCorrect="off"
                     placeholder="Email/Username"
                     className={cn(
-                      "bg-white text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-0 focus-visible:ring-offset-0",
+                      "bg-white text-slate-900 placeholder:text-slate-400 h-10 focus-visible:ring-0 focus-visible:ring-offset-0",
                       emailHasError
                         ? "border-red-500 focus:border-red-500 pr-10"
                         : "border-slate-300 focus:border-slate-400"
@@ -171,8 +177,8 @@ export default function LoginPage() {
               </div>
 
               {/* Password */}
-              <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-slate-600 text-sm font-medium">
+              <div className="space-y-1">
+                <Label htmlFor="password" className="text-slate-600 text-xs font-medium">
                   Password
                 </Label>
                 <div className="relative">
@@ -182,7 +188,7 @@ export default function LoginPage() {
                     autoComplete="current-password"
                     placeholder="Password"
                     className={cn(
-                      "bg-white text-slate-900 placeholder:text-slate-400 h-11 focus-visible:ring-0 focus-visible:ring-offset-0",
+                      "bg-white text-slate-900 placeholder:text-slate-400 h-10 focus-visible:ring-0 focus-visible:ring-offset-0",
                       passwordHasError
                         ? "border-red-500 focus:border-red-500 pr-16"
                         : "border-slate-300 focus:border-slate-400 pr-10"
@@ -216,7 +222,7 @@ export default function LoginPage() {
               <Button
                 type="submit"
                 disabled={loginMutation.isPending}
-                className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-semibold mt-1 transition-colors shadow-md shadow-orange-200"
+                className="w-full h-10 bg-orange-500 hover:bg-orange-600 text-white font-semibold mt-0.5 transition-colors shadow-md shadow-orange-200"
               >
                 {loginMutation.isPending ? (
                   <>

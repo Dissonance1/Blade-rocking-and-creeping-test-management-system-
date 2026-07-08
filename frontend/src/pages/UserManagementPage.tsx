@@ -12,9 +12,12 @@ import {
   Loader2,
   AlertCircle,
   Users,
+  ShieldAlert,
   Search,
 } from "lucide-react";
+import { UserManagementIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, parseISO } from "date-fns";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -148,8 +151,8 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
           onSubmit={handleSubmit((v) => createMutation.mutate(v))}
           className="space-y-4 py-2"
         >
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5 col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5 sm:col-span-2">
               <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">Full Name</Label>
               <Input
                 placeholder="John Smith"
@@ -478,20 +481,20 @@ export default function UserManagementPage() {
     );
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="flex items-center justify-between max-w-screen-xl mx-auto">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Users className="w-5 h-5 text-orange-500" />
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <UserManagementIcon className="w-5 h-5 text-orange-500 shrink-0" />
               User Management
             </h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">{users.length} total users</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">{users.length} total users</p>
           </div>
           <Button
             onClick={() => setShowCreate(true)}
-            className="bg-orange-500 hover:bg-orange-600 text-white"
+            className="w-full sm:w-auto bg-orange-500 hover:bg-orange-600 text-white"
           >
             <Plus className="w-4 h-4" />
             Create User
@@ -499,7 +502,7 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      <div className="max-w-screen-xl mx-auto px-6 py-6 space-y-5">
+      <div className="w-full px-4 sm:px-6 py-6 space-y-5 flex-grow">
         {/* Search */}
         <div className="flex items-center gap-4">
           <div className="relative flex-1 max-w-sm">
@@ -518,17 +521,19 @@ export default function UserManagementPage() {
           value={roleFilter}
           onValueChange={(v: string) => setRoleFilter(v as UserRole | "ALL")}
         >
-          <TabsList className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
-            {ROLE_TABS.map((t) => (
-              <TabsTrigger
-                key={t.value}
-                value={t.value}
-                className="rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                {t.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
+              {ROLE_TABS.map((t) => (
+                <TabsTrigger
+                  key={t.value}
+                  value={t.value}
+                  className="shrink-0 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
+                >
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
           <TabsContent value={roleFilter} className="mt-5">
             <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
@@ -545,7 +550,7 @@ export default function UserManagementPage() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm whitespace-nowrap">
                       <thead className="bg-slate-800 dark:bg-slate-700">
                         <tr>
                           {["User", "Role(s)", "Status", "Station", "Last Login", "Actions"].map(
@@ -611,8 +616,8 @@ export default function UserManagementPage() {
                             <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                               {user.last_login
                                 ? formatDistanceToNow(parseISO(user.last_login), {
-                                    addSuffix: true,
-                                  })
+                                  addSuffix: true,
+                                })
                                 : "Never"}
                             </td>
                             <td className="px-4 py-3">
@@ -666,6 +671,10 @@ export default function UserManagementPage() {
             </Card>
           </TabsContent>
         </Tabs>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
 
       <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />

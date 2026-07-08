@@ -269,7 +269,11 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
                 Auto
               </button>
             )}
-            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+            <button
+              onClick={onClose}
+              aria-label="Close scanner"
+              className="p-3 -m-3 rounded-full text-slate-400 hover:text-white transition-colors"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -323,7 +327,7 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
           {/* Auto-scan viewfinder (QR mode) */}
           {phase === "live" && mode === "qr" && autoScanActive && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-52 h-52 relative">
+              <div className="w-[45%] aspect-square relative">
                 {/* Corner marks */}
                 {[
                   "top-0 left-0 border-t-2 border-l-2 rounded-tl-lg",

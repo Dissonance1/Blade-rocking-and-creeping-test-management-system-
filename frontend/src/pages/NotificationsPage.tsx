@@ -13,16 +13,18 @@ import {
   AlertTriangle,
   Info,
 } from "lucide-react";
+import { BellIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, parseISO, format, isToday, isYesterday } from "date-fns";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 
 import { notificationService } from "@/services/notificationService";
 import { useNotificationStore } from "@/store/notificationStore";
 import type { Notification, NotificationType } from "@/types";
 import { cn } from "@/utils/cn";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Notification icon ────────────────────────────────────────────────────────
 
@@ -150,10 +152,10 @@ function NotificationItem({
     <div
       onClick={handleClick}
       className={cn(
-        "flex items-start gap-4 px-5 py-4 transition-colors cursor-pointer",
+        "flex items-start gap-3 sm:gap-4 px-4 sm:px-5 py-4 transition-colors cursor-pointer",
         notification.is_read
-          ? "hover:bg-slate-50 dark:hover:bg-slate-700/20"
-          : "bg-orange-50 dark:bg-slate-700/30 hover:bg-orange-100/60 dark:hover:bg-slate-700/50 border-l-2 border-orange-500"
+          ? "hover:bg-slate-50 dark:hover:bg-slate-800/50"
+          : "bg-orange-50 dark:bg-slate-800/30 hover:bg-orange-100/60 dark:hover:bg-slate-800/60 border-l-2 border-orange-500"
       )}
     >
       <NotifIcon type={notification.notification_type} />
@@ -162,7 +164,7 @@ function NotificationItem({
         <div className="flex items-start justify-between gap-2">
           <p
             className={cn(
-              "text-sm font-medium",
+              "text-sm font-medium min-w-0",
               notification.is_read ? "text-slate-600 dark:text-slate-300" : "text-slate-900 dark:text-white"
             )}
           >
@@ -174,7 +176,7 @@ function NotificationItem({
         </div>
         <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5 line-clamp-2">{notification.body}</p>
         {notification.blade_id && (
-          <p className="text-orange-500 dark:text-orange-400 text-xs mt-1 font-mono">
+          <p className="text-orange-500 dark:text-orange-400 text-xs mt-1 font-mono truncate">
             Blade: {notification.blade_id}
           </p>
         )}
@@ -226,13 +228,13 @@ export default function NotificationsPage() {
   const groups = groupByDate(notifications);
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="flex items-center justify-between max-w-2xl mx-auto">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 w-full max-w-[1600px] mx-auto">
           <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Bell className="w-5 h-5 text-orange-500" />
+            <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
+              <BellIcon className="w-5 h-5 text-orange-500 shrink-0" />
               Notifications
               {unreadCount > 0 && (
                 <span className="ml-1 rounded-full bg-orange-500 text-white text-xs px-2 py-0.5 font-semibold tabular-nums">
@@ -240,7 +242,6 @@ export default function NotificationsPage() {
                 </span>
               )}
             </h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">{notifications.length} total</p>
           </div>
           {unreadCount > 0 && (
             <Button
@@ -248,12 +249,12 @@ export default function NotificationsPage() {
               size="sm"
               onClick={() => markAllReadMutation.mutate()}
               disabled={markAllReadMutation.isPending}
-              className="border-2 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              className="w-full sm:w-auto border-2 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
               {markAllReadMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                <CheckCheck className="w-4 h-4" />
+                <CheckCheck className="w-4 h-4 mr-1.5" />
               )}
               Mark All Read
             </Button>
@@ -261,32 +262,33 @@ export default function NotificationsPage() {
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto py-6 px-4">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20 text-slate-400 dark:text-slate-500">
-            <Loader2 className="w-6 h-6 animate-spin mr-2" />
-            Loading notifications…
-          </div>
-        ) : notifications.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500">
-            <BellOff className="w-16 h-16 mb-4 opacity-20" />
-            <p className="text-lg font-medium">All caught up!</p>
-            <p className="text-sm mt-1">No notifications to show</p>
-          </div>
-        ) : (
-          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-            <CardContent className="p-0">
+      {/* Content */}
+      <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-4 sm:px-6 py-4 flex flex-col">
+        <div className="bg-white/70 dark:bg-black/40 backdrop-blur-xl rounded-2xl border border-white/60 dark:border-white/10 shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-20 text-slate-400 dark:text-slate-500">
+              <Loader2 className="w-6 h-6 animate-spin mr-2" />
+              Loading notifications…
+            </div>
+          ) : notifications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500">
+              <BellOff className="w-16 h-16 mb-4 opacity-20" />
+              <p className="text-lg font-medium">All caught up!</p>
+              <p className="text-sm mt-1">No notifications to show</p>
+            </div>
+          ) : (
+            <div>
               {Object.entries(groups).map(([date, items], groupIdx) => (
                 <div key={date}>
-                  {groupIdx > 0 && <Separator className="bg-slate-200 dark:bg-slate-700/50" />}
+                  {groupIdx > 0 && <Separator className="bg-slate-100 dark:bg-slate-800/50 m-0" />}
                   {/* Date header */}
-                  <div className="px-5 py-2.5 bg-slate-50 dark:bg-slate-800/40">
-                    <p className="text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  <div className="px-4 sm:px-5 py-2 bg-slate-100/50 dark:bg-black/60 border-b border-slate-100 dark:border-slate-800/60 sticky top-0 z-10 backdrop-blur-md">
+                    <p className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider">
                       {date}
                     </p>
                   </div>
                   {/* Items */}
-                  <div className="divide-y divide-slate-100 dark:divide-slate-700/30">
+                  <div className="divide-y divide-slate-100/50 dark:divide-slate-800/30">
                     {items.map((n) => (
                       <NotificationItem
                         key={n.id}
@@ -297,9 +299,13 @@ export default function NotificationsPage() {
                   </div>
                 </div>
               ))}
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
     </div>
   );

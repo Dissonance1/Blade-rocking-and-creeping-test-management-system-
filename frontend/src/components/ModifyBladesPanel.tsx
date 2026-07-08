@@ -5,6 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogClose,
+} from "@/components/ui/dialog";
 import type { BladeListItem, BladeStatus } from "@/types";
 import { cn } from "@/utils/cn";
 
@@ -144,6 +153,7 @@ export function ModifyBladesPanel({
   });
   const [staged, setStaged] = useState<Map<string, BladeModification>>(new Map());
   const [remarks, setRemarks] = useState("");
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const filteredBlades = useMemo(() => {
     const q = modSearch.toLowerCase();
@@ -250,9 +260,9 @@ export function ModifyBladesPanel({
           </div>
 
           {/* Blade table — 6 columns only; all fields editable via inline form */}
-          <div className={cn("rounded-lg border border-slate-200 dark:border-slate-700/50", !fullPage && "max-h-72 overflow-y-auto")}>
-            <table className="w-full text-xs">
-              <thead className="bg-slate-100 dark:bg-slate-700/60 sticky top-0 z-10">
+          <div className={cn("rounded-lg border border-slate-200 dark:border-slate-700/50 overflow-x-auto", !fullPage && "max-h-72 overflow-y-auto")}>
+            <table className="w-full text-xs relative">
+              <thead className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-20 shadow-sm">
                 <tr>
                   {["Serial No.", "Melt No.", "Weight (g)", "SM (g·cm)", "Status", ""].map((h) => (
                     <th
@@ -473,7 +483,7 @@ export function ModifyBladesPanel({
           </div>
 
           {/* Submit */}
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               disabled={!canSubmit || isSubmitting}
@@ -485,7 +495,13 @@ export function ModifyBladesPanel({
             </Button>
             <Button
               size="sm" variant="ghost"
-              onClick={onCancel}
+              onClick={() => {
+                if (staged.size > 0) {
+                  setShowCancelConfirm(true);
+                } else {
+                  onCancel();
+                }
+              }}
               className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
             >
               Cancel
@@ -493,6 +509,31 @@ export function ModifyBladesPanel({
           </div>
         </>
       )}
+
+      <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard Changes?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to cancel? You have {staged.size} unsaved modification{staged.size !== 1 && "s"} that will be lost.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Back to editing</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowCancelConfirm(false);
+                onCancel();
+              }}
+            >
+              Discard changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 

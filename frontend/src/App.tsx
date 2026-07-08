@@ -16,6 +16,8 @@ export default function App() {
 
   /* Sync theme class whenever the theme value changes */
   useEffect(() => {
+    sessionStorage.removeItem("route-error-reload-attempted");
+    
     if (theme === "dark") {
       document.documentElement.classList.add("dark");
     } else {

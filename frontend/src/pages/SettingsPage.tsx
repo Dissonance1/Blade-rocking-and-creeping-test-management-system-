@@ -8,7 +8,6 @@ import {
   User as UserIcon,
   Lock,
   Bell,
-  Settings as SettingsIcon,
   Check,
   Loader2,
   AlertCircle,
@@ -16,6 +15,8 @@ import {
   EyeOff,
   Shield,
 } from "lucide-react";
+import Footer from "@/layouts/components/Navbar/Footer";
+import { SettingsIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,16 +71,16 @@ function Section({
 }) {
   return (
     <Card id={id} className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm scroll-mt-6">
-      <CardHeader className="pb-4 border-b border-slate-100 dark:border-slate-700/50">
+      <CardHeader className="pb-4 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-700/50">
         <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
-          <div className={`w-7 h-7 rounded-lg ${accentColor} flex items-center justify-center`}>
+          <div className={`w-7 h-7 rounded-lg ${accentColor} flex items-center justify-center shrink-0`}>
             {icon}
           </div>
           {title}
         </CardTitle>
         <CardDescription className="text-slate-500 dark:text-slate-400">{description}</CardDescription>
       </CardHeader>
-      <CardContent className="pt-4">{children}</CardContent>
+      <CardContent className="pt-4 px-4 sm:px-6">{children}</CardContent>
     </Card>
   );
 }
@@ -161,19 +162,21 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <SettingsIcon className="w-5 h-5 text-orange-500" />
-            Settings
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm">Manage your account and preferences</p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <SettingsIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              Settings
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">Manage your account and preferences</p>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
+      <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
         {/* Profile section */}
         <Section
           id="profile"
@@ -465,6 +468,10 @@ export default function SettingsPage() {
             </div>
           </Section>
         )}
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
     </div>
   );

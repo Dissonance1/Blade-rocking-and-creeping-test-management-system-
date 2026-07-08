@@ -26,6 +26,7 @@ import {
   WifiOff,
   RefreshCw,
 } from "lucide-react";
+import { BladeEntryIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import Footer from "@/layouts/components/Navbar/Footer";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 
 import { bladeService } from "@/services/bladeService";
 import { ocrService, type OcrScanResult } from "@/services/ocrService";
@@ -357,14 +360,14 @@ function CameraModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
       <div className="relative bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-4 w-full max-w-2xl mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
-            <Camera className="w-4 h-4 text-orange-500" />
-            Capture — {fieldLabel}
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2 min-w-0 truncate">
+            <Camera className="w-4 h-4 text-orange-500 shrink-0" />
+            <span className="truncate">Capture — {fieldLabel}</span>
           </h3>
           <button
             onClick={handleClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+            className="shrink-0 flex items-center justify-center w-11 h-11 -m-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -401,13 +404,14 @@ function CameraModal({
         </div>
 
         {/* Actions */}
-        <div className="flex justify-center gap-3 mt-4">
+        <div className="flex flex-col sm:flex-row justify-center gap-3 mt-4">
           {!captured ? (
             <Button
               type="button"
+              size="lg"
               onClick={handleCapture}
               disabled={!ready || !!camError}
-              className="bg-orange-500 hover:bg-orange-600 text-white px-10"
+              className="w-full sm:w-auto bg-orange-500 hover:bg-orange-600 text-white px-10"
             >
               <Camera className="w-4 h-4" />
               Capture
@@ -417,16 +421,18 @@ function CameraModal({
               <Button
                 type="button"
                 variant="outline"
+                size="lg"
                 onClick={handleRetake}
-                className="border-2 border-slate-300 dark:border-slate-600"
+                className="w-full sm:w-auto border-2 border-slate-300 dark:border-slate-600"
               >
                 <RefreshCw className="w-4 h-4" />
                 Retake
               </Button>
               <Button
                 type="button"
+                size="lg"
                 onClick={handleUse}
-                className="bg-emerald-500 hover:bg-emerald-600 text-white px-10"
+                className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-600 text-white px-10"
               >
                 <Check className="w-4 h-4" />
                 Use Photo
@@ -490,17 +496,17 @@ const STEPS = [
 
 function StepIndicator({ current }: { current: number }) {
   return (
-    <div className="flex items-center gap-0">
+    <div className="flex items-start w-full sm:w-auto">
       {STEPS.map((step, idx) => {
         const Icon = step.icon;
         const done = step.id < current;
         const active = step.id === current;
         return (
-          <div key={step.id} className="flex items-center">
-            <div className="flex flex-col items-center">
+          <div key={step.id} className="flex items-start flex-1 sm:flex-none">
+            <div className="flex flex-col items-center flex-1 sm:flex-none sm:w-24">
               <div
                 className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center border-2 transition-colors",
+                  "w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center border-2 transition-colors shrink-0",
                   done
                     ? "bg-emerald-500 border-emerald-500 text-white"
                     : active
@@ -508,11 +514,11 @@ function StepIndicator({ current }: { current: number }) {
                     : "bg-slate-100 dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400"
                 )}
               >
-                {done ? <Check className="w-5 h-5" /> : <Icon className="w-4 h-4" />}
+                {done ? <Check className="w-4 h-4 sm:w-5 sm:h-5" /> : <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
               </div>
               <span
                 className={cn(
-                  "text-xs mt-1.5 font-medium whitespace-nowrap",
+                  "text-[10px] sm:text-xs mt-1.5 font-medium text-center leading-tight px-0.5",
                   active
                     ? "text-orange-500 dark:text-orange-400"
                     : done
@@ -526,7 +532,7 @@ function StepIndicator({ current }: { current: number }) {
             {idx < STEPS.length - 1 && (
               <div
                 className={cn(
-                  "w-24 h-0.5 mb-5 mx-2",
+                  "h-0.5 mt-4 sm:mt-5 flex-1 sm:w-24 sm:flex-none mx-1 sm:mx-2",
                   done ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"
                 )}
               />
@@ -550,7 +556,7 @@ function FieldRow({
   required?: boolean | undefined;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1">
       <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">
         {label}
         {required && <span className="text-red-500 ml-0.5">*</span>}
@@ -894,13 +900,13 @@ export default function BladeEntryPage() {
   const values = getValues();
 
   const inputCls =
-    "bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400";
+    "h-9 text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400";
 
   const autoFilledInputCls = (field: string) =>
     cn(inputCls, autoFilledFields.has(field) && "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10");
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Camera modals */}
       <CameraModal
         open={serialCameraOpen}
@@ -916,57 +922,56 @@ export default function BladeEntryPage() {
       />
 
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="flex items-center justify-between max-w-4xl mx-auto">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">New Blade Entry</h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">OH Station — Initial intake form</p>
-            {/* OCR save folder indicator */}
-            <div className="mt-1 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-              <Camera className="w-3 h-3" />
-              {folderName ? (
-                <>
-                  <span>OCR saves to: <span className="font-medium text-slate-600 dark:text-slate-300">{folderName}</span></span>
-                  <button onClick={changeFolder} className="text-orange-500 hover:underline">Change</button>
-                </>
-              ) : (
-                <span>OCR images: folder will be selected on first scan</span>
-              )}
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <BladeEntryIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              New Blade Entry
+            </h1>
+            <div className="flex flex-wrap items-center gap-2 mt-0.5 text-xs text-slate-500 dark:text-slate-400 tracking-tight min-w-0">
+              <p>OH Station — Initial intake form</p>
+              <span className="hidden sm:inline text-slate-300 dark:text-slate-600">&bull;</span>
+              {/* OCR save folder indicator */}
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Camera className="w-3.5 h-3.5 shrink-0" />
+                {folderName ? (
+                  <>
+                    <span className="whitespace-nowrap">OCR saves to:</span>
+                    <span className="font-medium text-slate-600 dark:text-slate-300 truncate max-w-[10rem] sm:max-w-xs">{folderName}</span>
+                    <button onClick={changeFolder} className="text-orange-500 hover:underline shrink-0 ml-1">Change</button>
+                  </>
+                ) : (
+                  <span>OCR images: folder will be selected on first scan</span>
+                )}
+              </div>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate(-1)}
-            className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back
-          </Button>
+
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        <div className="flex justify-center mb-8">
+      <div className="w-full px-4 sm:px-6 py-4 max-w-4xl mx-auto flex flex-col">
+        <div className="flex justify-center mb-4 overflow-x-auto shrink-0">
           <StepIndicator current={step} />
         </div>
 
         {/* Step 1 — Identity */}
         {step === 1 && (
           <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-            <CardHeader>
+            <CardHeader className="py-3 px-4 sm:px-6">
               <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2">
                 <ClipboardList className="w-5 h-5 text-orange-500" />
                 Blade Identity
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-5">
+            <CardContent className="space-y-3 px-4 sm:px-6 pb-4">
 
               {/* Batch Number — full width row */}
               <FieldRow label="Batch Number">
-                <div className="flex gap-2 items-center">
+                <div className="flex flex-wrap gap-2 items-center">
                   <Input
-                    className={cn(inputCls, "max-w-xs")}
+                    className={cn(inputCls, "flex-1 min-w-0 sm:max-w-xs")}
                     {...register("batch_number")}
                   />
                   {batchLookupPending && (
@@ -987,7 +992,7 @@ export default function BladeEntryPage() {
                 )}
               </FieldRow>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {/* Serial Number */}
                 <FieldRow
                   label="Serial Number"
@@ -997,9 +1002,9 @@ export default function BladeEntryPage() {
                   }
                   required
                 >
-                  <div className="flex gap-2 items-center">
+                  <div className="flex flex-wrap gap-2 items-center">
                     <Input
-                      className={cn(inputCls, "uppercase")}
+                      className={cn(inputCls, "uppercase flex-1 min-w-0")}
                       {...register("serial_number")}
                       onBlur={checkSerial}
                     />
@@ -1026,8 +1031,8 @@ export default function BladeEntryPage() {
 
                 {/* Melt Number */}
                 <FieldRow label="Melt Number" error={errors.melt_number?.message} required>
-                  <div className="flex gap-2">
-                    <Input className={inputCls} {...register("melt_number")} />
+                  <div className="flex flex-wrap gap-2">
+                    <Input className={cn(inputCls, "flex-1 min-w-0")} {...register("melt_number")} />
                     <OcrButton
                       scanning={meltScan.scanning}
                       onClick={() => setMeltCameraOpen(true)}
@@ -1133,7 +1138,7 @@ export default function BladeEntryPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 {/* Raw weight input — drives auto-fill, live from scale */}
                 <FieldRow
                   label={
@@ -1238,6 +1243,7 @@ export default function BladeEntryPage() {
                       placeholder="0.00"
                       className={cn(
                         inputCls,
+                        "pr-12",
                         rawWeight && Number(rawWeight) > 0 &&
                           "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10"
                       )}
@@ -1270,6 +1276,7 @@ export default function BladeEntryPage() {
                       placeholder="0.00"
                       className={cn(
                         inputCls,
+                        "pr-12",
                         rawWeight && Number(rawWeight) > 0 &&
                           "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10"
                       )}
@@ -1292,8 +1299,8 @@ export default function BladeEntryPage() {
 
               {/* Height data */}
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                  <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium flex flex-wrap items-center gap-2">
                     Height Positions (mm)
                     {dtiConn ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -1334,14 +1341,14 @@ export default function BladeEntryPage() {
                       <div
                         key={idx}
                         className={cn(
-                          "flex items-center gap-3 p-1.5 rounded-lg transition-colors",
+                          "flex flex-wrap items-center gap-2 sm:gap-3 p-2 sm:p-1.5 rounded-lg transition-colors",
                           dtiConn && !isLocked && "cursor-pointer",
                           isActive && !isLocked && "bg-emerald-50/40 dark:bg-emerald-900/10 ring-1 ring-emerald-400",
                           isLocked && dtiConn && "bg-amber-50/30 dark:bg-amber-900/10",
                         )}
                         onClick={() => { if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
                       >
-                        <span className="text-slate-500 dark:text-slate-400 text-sm w-20 shrink-0">
+                        <span className="text-slate-500 dark:text-slate-400 text-sm w-full sm:w-20 shrink-0">
                           Position {idx + 1}
                         </span>
                         <Input
@@ -1352,9 +1359,9 @@ export default function BladeEntryPage() {
                               rows.map((r, i) => i === idx ? { ...r, pos: Number(e.target.value) } : r)
                             )
                           }
-                          className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white w-32"
+                          className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white w-20 sm:w-32"
                         />
-                        <span className="text-slate-500 dark:text-slate-400 text-sm">→</span>
+                        <span className="text-slate-500 dark:text-slate-400 text-sm shrink-0">→</span>
                         <Input
                           type="number"
                           step="0.001"
@@ -1368,7 +1375,7 @@ export default function BladeEntryPage() {
                           onClick={(e) => { e.stopPropagation(); if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
                           placeholder="Value (mm)"
                           className={cn(
-                            "bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white flex-1 transition-colors",
+                            "bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white flex-1 min-w-[90px] transition-colors",
                             isActive && !isLocked
                               ? "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10"
                               : isLocked && dtiConn
@@ -1447,7 +1454,7 @@ export default function BladeEntryPage() {
                 <CardTitle className="text-slate-900 dark:text-white text-base">Blade Identity</CardTitle>
               </CardHeader>
               <CardContent>
-                <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                   {(
                     [
                       ["Batch Number", values.batch_number ?? "—"],
@@ -1477,7 +1484,7 @@ export default function BladeEntryPage() {
                 <CardTitle className="text-slate-900 dark:text-white text-base">Measurements</CardTitle>
               </CardHeader>
               <CardContent>
-                <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                   {(
                     [
                       ...(rawWeight && Number(rawWeight) > 0
@@ -1512,9 +1519,8 @@ export default function BladeEntryPage() {
             )}
           </div>
         )}
-
         {/* Navigation */}
-        <div className="flex items-center justify-between mt-8">
+        <div className="mt-6 sm:mt-8 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <Button
             variant="outline"
             onClick={() => setStep((s) => Math.max(1, s - 1))}
@@ -1527,7 +1533,7 @@ export default function BladeEntryPage() {
 
           <div className="flex items-center gap-3">
             {step < 3 && (
-              <Button type="button" onClick={goNext} className="bg-orange-500 hover:bg-orange-600 text-white">
+              <Button type="button" onClick={goNext} className="bg-orange-500 hover:bg-orange-600 text-white shadow-sm shadow-orange-200 dark:shadow-none">
                 Next
                 <ChevronRight className="w-4 h-4" />
               </Button>
@@ -1537,7 +1543,7 @@ export default function BladeEntryPage() {
                 type="button"
                 onClick={handleSubmit((v) => createMutation.mutate(v))}
                 disabled={createMutation.isPending}
-                className="bg-emerald-500 hover:bg-emerald-600 text-white px-10"
+                className="bg-emerald-500 hover:bg-emerald-600 text-white px-10 shadow-sm shadow-emerald-200 dark:shadow-none"
               >
                 {createMutation.isPending ? (
                   <>
@@ -1554,6 +1560,10 @@ export default function BladeEntryPage() {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
     </div>
   );

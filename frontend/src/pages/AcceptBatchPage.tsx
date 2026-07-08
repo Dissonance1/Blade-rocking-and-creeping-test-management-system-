@@ -1,14 +1,24 @@
-
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import { CheckCircle2, ArrowLeft, Loader2, AlertCircle, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
 import { cn } from "@/utils/cn";
 import type { BladeStatus, BladeListItem } from "@/types";
+import Footer from "@/layouts/components/Navbar/Footer";
 
 const STATUS_CLS: Partial<Record<BladeStatus, string>> = {
   SENT_TO_ASSEMBLY: "bg-violet-500 text-white",
@@ -25,7 +35,7 @@ function SplitBladeTable({ blades }: { blades: BladeListItem[] }) {
   const cols = ["#", "Serial", "Melt No.", "Wt (g)", "SM (g·cm)", "Status"];
 
   const renderHalf = (rows: BladeListItem[], offset: number) => (
-    <table className="w-full text-xs">
+    <table className="w-full text-xs whitespace-nowrap">
       <thead className="bg-slate-800 dark:bg-slate-700">
         <tr>
           {cols.map((h) => (
@@ -77,7 +87,7 @@ function SplitBladeTable({ blades }: { blades: BladeListItem[] }) {
   );
 
   return (
-    <div className="grid grid-cols-2 divide-x divide-slate-200 dark:divide-slate-700 overflow-hidden">
+    <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 dark:divide-slate-700 overflow-hidden">
       <div className="overflow-x-auto">{renderHalf(left, 0)}</div>
       <div className="overflow-x-auto">{renderHalf(right, half)}</div>
     </div>
@@ -117,91 +127,132 @@ export default function AcceptBatchPage() {
   if (!batchNumber) return null;
 
   return (
-    <div className="max-w-screen-xl mx-auto space-y-6">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/assembly-queue")}
-          className="mt-1 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex-shrink-0"
-        >
-          <ArrowLeft className="w-4 h-4 mr-1.5" />
-          Back to Queue
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-            Accept Batch{" "}
-            <span className="font-mono text-orange-500">{batchNumber}</span>
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Review all blade details, then confirm acceptance. Slot assignment is done in the Slot Allocation page.
-          </p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 py-2.5">
+        <div className="max-w-screen-xl mx-auto w-full px-4 sm:px-6 relative flex flex-col sm:flex-row items-center justify-center min-h-[44px]">
+          <div className="sm:absolute sm:left-6 sm:top-1/2 sm:-translate-y-1/2 self-start sm:self-auto mb-2 sm:mb-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/assembly-queue")}
+              className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 -ml-3 sm:ml-0"
+            >
+              <ArrowLeft className="w-4 h-4 mr-1.5" />
+              Back to Queue
+            </Button>
+          </div>
+          <div className="min-w-0 text-center flex flex-col items-center">
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white truncate">
+              Accept Batch{" "}
+              <span className="font-mono text-orange-500">{batchNumber}</span>
+            </h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+              Review all blade details, then confirm acceptance. Slot assignment is done in the Slot Allocation page.
+            </p>
+          </div>
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-32">
-          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-        </div>
-      ) : batchBlades.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-3">
-          <AlertCircle className="w-8 h-8 opacity-50" />
-          <p>No blades found for batch {batchNumber}.</p>
-          <Button variant="outline" size="sm" onClick={() => navigate("/assembly-queue")}>
-            Back to Queue
-          </Button>
-        </div>
-      ) : (
-        <>
-          {/* Split blade details table */}
-          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-            <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <h2 className="font-semibold text-slate-900 dark:text-white text-sm">Blade Details</h2>
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                {batchBlades.length} blade{batchBlades.length !== 1 ? "s" : ""}
-              </span>
-            </div>
-            <SplitBladeTable blades={batchBlades} />
-          </div>
+      <div className="flex-1 w-full px-4 sm:px-6 py-5 flex flex-col gap-5">
+        <div className="max-w-screen-xl mx-auto w-full space-y-6">
 
-          {/* Confirm accept */}
-          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <p className="font-semibold text-slate-900 dark:text-white">
-                Ready to accept this batch?
-              </p>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                This will mark{" "}
-                <span className="font-mono text-orange-500">{batchNumber}</span>{" "}
-                as accepted and notify OH. Then go to{" "}
-                <strong>Slot Allocation</strong> to assign disc slots.
-              </p>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-32">
+              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
             </div>
-            <div className="flex gap-3 flex-shrink-0">
-              <Button
-                variant="outline"
-                onClick={() => navigate("/assembly-queue")}
-                className="border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={() => acceptMutation.mutate()}
-                disabled={acceptMutation.isPending}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white"
-              >
-                {acceptMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                ) : (
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
-                )}
-                Confirm Accept
+          ) : batchBlades.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-3">
+              <AlertCircle className="w-8 h-8 opacity-50" />
+              <p>No blades found for batch {batchNumber}.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/assembly-queue")}>
+                Back to Queue
               </Button>
             </div>
-          </div>
-        </>
-      )}
+          ) : (
+            <>
+              {/* Split blade details table */}
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <h2 className="font-semibold text-slate-900 dark:text-white text-sm">Blade Details</h2>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    {batchBlades.length} blade{batchBlades.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <SplitBladeTable blades={batchBlades} />
+              </div>
+
+              {/* Confirm accept */}
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-900 dark:text-white">
+                    Ready to accept this batch?
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                    This will mark{" "}
+                    <span className="font-mono text-orange-500">{batchNumber}</span>{" "}
+                    as accepted and notify OH. Then go to{" "}
+                    <strong>Slot Allocation</strong> to assign disc slots.
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto shrink-0">
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full sm:w-auto border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300"
+                      >
+                        Cancel
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-[400px] border-0 shadow-2xl shadow-slate-900/10 dark:shadow-black/50 p-5 sm:p-6 rounded-3xl">
+                      <DialogHeader className="sm:text-center flex flex-col items-center">
+                        <div className="mx-auto w-12 h-12 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-500 rounded-full flex items-center justify-center mb-4 ring-4 ring-red-50 dark:ring-red-500/10">
+                          <AlertTriangle className="w-6 h-6" />
+                        </div>
+                        <DialogTitle className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white">Cancel Acceptance?</DialogTitle>
+                        <DialogDescription className="text-sm mt-1.5 text-slate-500 dark:text-slate-400">
+                          The batch will remain in the assembly queue until it is explicitly accepted. No changes will be saved.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <DialogFooter className="mt-6 sm:justify-center flex-col sm:flex-row gap-2.5">
+                        <DialogClose asChild>
+                          <Button variant="outline" className="w-full sm:w-auto h-10 px-5 text-sm rounded-xl font-semibold border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800">
+                            Keep reviewing
+                          </Button>
+                        </DialogClose>
+                        <Button
+                          variant="destructive"
+                          onClick={() => navigate("/assembly-queue")}
+                          className="w-full sm:w-auto h-10 px-5 text-sm rounded-xl font-semibold bg-red-600 hover:bg-red-700 text-white"
+                        >
+                          Yes, cancel
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                  <Button
+                    onClick={() => acceptMutation.mutate()}
+                    disabled={acceptMutation.isPending}
+                    className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white"
+                  >
+                    {acceptMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                    )}
+                    Confirm Accept
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+
+        </div>
+      </div>
+      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
+        <Footer />
+      </div>
     </div>
   );
 }

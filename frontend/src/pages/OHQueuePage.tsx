@@ -15,7 +15,10 @@ import {
   Send,
   AlertTriangle,
   Trash2,
+  Check,
 } from "lucide-react";
+import { OhQueueIcon } from "@/components/common/CustomIcons";
+import Footer from "@/layouts/components/Navbar/Footer";
 import { formatDistanceToNow, differenceInDays, parseISO } from "date-fns";
 import { toast } from "sonner";
 
@@ -372,13 +375,16 @@ export default function OHQueuePage() {
       .filter((b) => !batchFilter || b.batch_number === batchFilter).length;
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="border-b border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/40 px-6 py-4 shadow-sm">
-        <div className="flex items-center justify-between max-w-screen-xl mx-auto flex-wrap gap-3">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">OH Station Queue</h1>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">Overhaul station blade management</p>
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
+              <OhQueueIcon className="w-5 h-5 text-orange-500 shrink-0" />
+              OH Station Queue
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">Overhaul station blade management</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             {selected.size > 0 && (
@@ -406,7 +412,7 @@ export default function OHQueuePage() {
         </div>
       </div>
 
-      <div className="max-w-screen-xl mx-auto px-6 py-6">
+      <div className="w-full px-4 sm:px-6 py-6">
         {/* Filters row */}
         <div className="flex flex-wrap gap-3 mb-5">
           {/* Search */}
@@ -591,7 +597,7 @@ export default function OHQueuePage() {
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                      <table className="w-full text-sm whitespace-nowrap">
                         <thead className="bg-slate-800 dark:bg-slate-700">
                           <tr>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase w-8">
@@ -787,6 +793,10 @@ export default function OHQueuePage() {
             </TabsContent>
           ))}
         </Tabs>
+      </div>
+
+      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
+        <Footer />
       </div>
 
       {/* Delete blade confirmation dialog */}
