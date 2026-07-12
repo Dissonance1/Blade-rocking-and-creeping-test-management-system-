@@ -16,14 +16,14 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_roles
+from app.core.dependencies import _user_role_names, get_current_user, require_roles
 from app.db.session import get_db
 from app.models.blade import Blade
-from app.models.enums import BladeStatus, RoleName
+from app.models.enums import BladeStatus, BladeType, RoleName
 from app.models.user import User
 from app.schemas.assembly import (
     AssemblyBladeRecordResponse,
@@ -198,7 +198,6 @@ async def list_batch_blades(
 )
 async def verify_blade(
     blade_id: uuid.UUID,
-    batch_number: str,
     body: BladeVerifyRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(*_ASSEMBLY_ROLES)),
@@ -206,7 +205,7 @@ async def verify_blade(
     blade = await _get_blade_or_404(blade_id, db)
     svc = AssemblyService(db)
     try:
-        result = await svc.verify_blade(blade, batch_number, body)
+        result = await svc.verify_blade(blade, blade.batch_number, body)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     await db.commit()
@@ -220,7 +219,6 @@ async def verify_blade(
 )
 async def accept_blade(
     blade_id: uuid.UUID,
-    batch_number: str,
     body: BladeAcceptRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(*_ASSEMBLY_ROLES)),
@@ -230,7 +228,7 @@ async def accept_blade(
     try:
         result = await svc.accept_blade(
             blade=blade,
-            batch_number=batch_number,
+            batch_number=blade.batch_number,
             payload=body,
             operator=current_user,
             station_id=None,
@@ -248,7 +246,6 @@ async def accept_blade(
 )
 async def reject_blade(
     blade_id: uuid.UUID,
-    batch_number: str,
     body: BladeRejectRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(*_ASSEMBLY_ROLES)),
@@ -258,7 +255,7 @@ async def reject_blade(
     try:
         result = await svc.reject_blade(
             blade=blade,
-            batch_number=batch_number,
+            batch_number=blade.batch_number,
             payload=body,
             operator=current_user,
             station_id=None,
@@ -281,11 +278,62 @@ async def reject_blade(
 async def start_setmaking(
     batch_number: str,
     body: StartSetMakingRequest,
+    blade_type: BladeType | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(*_ASSEMBLY_ROLES)),
+    current_user: User = Depends(get_current_user),
 ) -> SetMakingResponse:
+    """
+    Validate set-making readiness and return confirmation.
+
+    ``blade_type=HPTR``: gated to OH_OPERATOR/SUPER_ADMIN. HPTR never leaves
+    OH, so readiness means every HPTR blade in the batch has reached
+    MEASUREMENTS_RECORDED (or beyond).
+
+    Omitted / ``blade_type=LPTR`` (default): unchanged existing behavior,
+    gated to ASSEMBLY_OPERATOR/SUPER_ADMIN, readiness means every blade has
+    been assembly_verified.
+    """
+    user_roles = _user_role_names(current_user)
+    is_hptr = blade_type == BladeType.HPTR
+    if RoleName.SUPER_ADMIN not in user_roles:
+        required_role = RoleName.OH_OPERATOR if is_hptr else RoleName.ASSEMBLY_OPERATOR
+        if required_role not in user_roles:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail=f"{required_role} or SUPER_ADMIN role required",
+            )
+
     svc = AssemblyService(db)
     progress = await svc.get_batch_progress(batch_number)
+
+    if is_hptr:
+        if not progress.hptr_set_making_ready:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Batch is not ready for HPTR set-making. "
+                    f"{progress.hptr_measurements_recorded}/{progress.hptr_total} HPTR blades "
+                    f"have recorded measurements."
+                ),
+            )
+
+        log.info(
+            "assembly.setmaking_triggered",
+            batch_number=batch_number,
+            blade_type="HPTR",
+            measured=progress.hptr_measurements_recorded,
+            operator_id=str(current_user.id),
+        )
+
+        return SetMakingResponse(
+            batch_number=batch_number,
+            status="INITIATED",
+            total_blades=progress.hptr_measurements_recorded,
+            message=(
+                f"All {progress.hptr_measurements_recorded} HPTR blades measured. "
+                "Proceed to slot assignment and balancing in OH."
+            ),
+        )
 
     if not progress.set_making_ready:
         raise HTTPException(

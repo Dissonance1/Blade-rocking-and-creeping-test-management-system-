@@ -11,7 +11,6 @@ import {
   FlaskConical,
   Package,
 } from "lucide-react";
-import Footer from "@/layouts/components/Navbar/Footer";
 import { RockingCreepIcon } from "@/components/common/CustomIcons";
 import { toast } from "sonner";
 
@@ -35,7 +34,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300";
+  const cls = STATUS_COLORS[status] ?? "bg-slate-100 text-slate-600 dark:bg-background dark:text-slate-300";
   const label = status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return (
     <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium", cls)}>
@@ -163,9 +162,9 @@ export default function RockingCreepPage() {
   ).length;
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Page header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -182,7 +181,7 @@ export default function RockingCreepPage() {
       <div className="w-full px-4 sm:px-6 py-6 sm:py-8 space-y-6">
 
       {/* Batch selector + stats bar */}
-      <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
+      <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60">
         <CardContent className="pt-4 pb-4">
           <div className="flex flex-wrap items-center gap-4">
             {/* Batch selector */}
@@ -197,7 +196,7 @@ export default function RockingCreepPage() {
                     setSelectedBatch(e.target.value);
                     setRowState({});
                   }}
-                  className="w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                  className="w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
                 >
                   <option value="">— choose a batch —</option>
                   {batches.map((b) => (
@@ -215,7 +214,7 @@ export default function RockingCreepPage() {
             {/* Stats pills (only when a batch is loaded) */}
             {selectedBatch && !isLoading && (
               <div className="flex items-center gap-3 text-sm">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-slate-700 px-3 py-1 font-medium text-slate-700 dark:text-slate-300">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-background px-3 py-1 font-medium text-slate-700 dark:text-slate-300">
                   <Package className="w-3.5 h-3.5" />
                   {totalCount} blades
                 </span>
@@ -253,7 +252,7 @@ export default function RockingCreepPage() {
 
       {/* Table */}
       {selectedBatch && !isLoading && entries.length > 0 && (
-        <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 overflow-hidden">
+        <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 overflow-hidden">
           <CardHeader className="pb-0 pt-4 px-4 border-b border-slate-100 dark:border-slate-700/50">
             <CardTitle className="text-base text-slate-900 dark:text-white flex items-center gap-2">
               Batch {selectedBatch}
@@ -263,7 +262,7 @@ export default function RockingCreepPage() {
           <CardContent className="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-sm whitespace-nowrap">
-                <thead className="bg-slate-800 dark:bg-slate-900">
+                <thead className="bg-slate-800 dark:bg-background">
                   <tr>
                     {[
                       "Serial Number",
@@ -303,8 +302,8 @@ export default function RockingCreepPage() {
                         className={cn(
                           "transition-colors",
                           rowIdx % 2 === 0
-                            ? "bg-white dark:bg-slate-800/40"
-                            : "bg-slate-50 dark:bg-slate-800/20",
+                            ? "bg-white dark:bg-background"
+                            : "bg-slate-50 dark:bg-background",
                           (row.saved || hasSavedData) && "border-l-2 border-l-emerald-400"
                         )}
                       >
@@ -371,7 +370,7 @@ export default function RockingCreepPage() {
                                   patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
                                 )
                               }
-                              className="w-28 bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
+                              className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
                             />
                           ) : (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
@@ -394,7 +393,7 @@ export default function RockingCreepPage() {
                                   patchRow(prev, entry.blade_id, { creep: e.target.value, saved: false })
                                 )
                               }
-                              className="w-28 bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
+                              className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
                             />
                           ) : (
                             <span className="text-xs text-slate-400 dark:text-slate-500 italic">
@@ -459,9 +458,6 @@ export default function RockingCreepPage() {
         </div>
       )}
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   </div>
 );

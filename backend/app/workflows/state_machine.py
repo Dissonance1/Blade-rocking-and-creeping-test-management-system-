@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import BladeStatus
+from app.models.enums import BladeStatus, BladeType
 
 if TYPE_CHECKING:
     from app.models.blade import Blade
@@ -58,10 +58,12 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     # Assembly receipt flow (720 Hanger)
     BladeStatus.SENT_TO_ASSEMBLY: {
         BladeStatus.ASSEMBLY_RECEIVED,   # batch marked received at Assembly
+        BladeStatus.SLOT_ASSIGNED,       # batch bulk slot assignment (skips per-blade verify)
         BladeStatus.REJECTED,
     },
     BladeStatus.ASSEMBLY_RECEIVED: {
         BladeStatus.ASSEMBLY_VERIFIED,   # per-blade: scan → accept/modify
+        BladeStatus.SLOT_ASSIGNED,       # batch bulk slot assignment (skips per-blade verify)
         BladeStatus.REJECTED,            # per-blade: reject at Assembly
         BladeStatus.ON_HOLD,
     },
@@ -72,6 +74,7 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     # Balancing & return flow
     BladeStatus.SLOT_ASSIGNED: {
         BladeStatus.BALANCING_IN_PROGRESS,
+        BladeStatus.BALANCING_COMPLETED,  # operator can report "balanced" directly, skipping the in-progress step
         BladeStatus.RETURNED_TO_OH,
     },
     BladeStatus.BALANCING_IN_PROGRESS: {
@@ -80,6 +83,7 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     },
     BladeStatus.BALANCING_COMPLETED: {BladeStatus.RETURNED_TO_OH},
     BladeStatus.RETURNED_TO_OH: {
+        BladeStatus.SLOT_ASSIGNED,       # rework: re-slot after returning to OH
         BladeStatus.FINAL_VERIFICATION,
         BladeStatus.REJECTED,
     },
@@ -95,6 +99,28 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     },
     BladeStatus.REOPENED: {BladeStatus.OH_INSPECTION},
     BladeStatus.COMPLETED: set(),
+}
+
+# ---------------------------------------------------------------------------
+# Blade-type-conditional extra edges
+#
+# HPTR blades never leave OH — they skip the assembly-transit statuses
+# entirely. These edges are additive on top of ALLOWED_TRANSITIONS and only
+# apply when the blade's type matches; LPTR blades must not gain them.
+# ---------------------------------------------------------------------------
+
+EXTRA_TRANSITIONS_BY_TYPE: dict[BladeType, dict[BladeStatus, set[BladeStatus]]] = {
+    BladeType.HPTR: {
+        BladeStatus.MEASUREMENTS_RECORDED: {BladeStatus.SLOT_ASSIGNED},
+        BladeStatus.BALANCING_COMPLETED: {
+            BladeStatus.FINAL_VERIFICATION,
+            # Physical balancing testing found the set still unbalanced —
+            # OH rejects the saved slot allocation and redoes it from scratch.
+            BladeStatus.MEASUREMENTS_RECORDED,
+        },
+        BladeStatus.SLOT_ASSIGNED: {BladeStatus.MEASUREMENTS_RECORDED},
+        BladeStatus.BALANCING_IN_PROGRESS: {BladeStatus.MEASUREMENTS_RECORDED},
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -188,7 +214,7 @@ class WorkflowEngine:
 
         from_status = blade.status
 
-        if not await self.can_transition(from_status, to_status):
+        if not await self.can_transition(from_status, to_status, blade.blade_type):
             log.warning(
                 "workflow.invalid_transition",
                 blade_id=str(blade.id),
@@ -233,15 +259,6 @@ class WorkflowEngine:
             to_status=to_status.value,
         )
 
-        # 3. Dispatch notification (best-effort, non-blocking)
-        await self._dispatch_notification(
-            blade=updated_blade,
-            from_status=from_status,
-            to_status=to_status,
-            user=user,
-            station_id=station_id,
-        )
-
         return updated_blade, workflow_log
 
     # ------------------------------------------------------------------
@@ -252,76 +269,23 @@ class WorkflowEngine:
         self,
         from_status: BladeStatus,
         to_status: BladeStatus,
+        blade_type: BladeType | None = None,
     ) -> bool:
-        """Return ``True`` if moving from *from_status* → *to_status* is allowed."""
-        return to_status in ALLOWED_TRANSITIONS.get(from_status, set())
+        """Return ``True`` if moving from *from_status* → *to_status* is allowed.
+
+        *blade_type* additionally unlocks the HPTR-only shortcut edges in
+        ``EXTRA_TRANSITIONS_BY_TYPE`` (e.g. skipping the assembly-transit
+        statuses). Omitting it preserves the base, type-agnostic map.
+        """
+        if to_status in ALLOWED_TRANSITIONS.get(from_status, set()):
+            return True
+        if blade_type is not None:
+            extra = EXTRA_TRANSITIONS_BY_TYPE.get(blade_type, {})
+            if to_status in extra.get(from_status, set()):
+                return True
+        return False
 
     @staticmethod
     def get_allowed_transitions(status: BladeStatus) -> set[BladeStatus]:
         """Return the set of statuses reachable from *status*."""
         return set(ALLOWED_TRANSITIONS.get(status, set()))
-
-    # ------------------------------------------------------------------
-    # Notification helper
-    # ------------------------------------------------------------------
-
-    async def _dispatch_notification(
-        self,
-        blade: "Blade",
-        from_status: BladeStatus,
-        to_status: BladeStatus,
-        user: "User",
-        station_id: uuid.UUID,
-    ) -> None:
-        """
-        Fire-and-forget notification event.
-
-        The notification payload is intentionally minimal; downstream
-        consumers should re-fetch full blade data as needed.  If notification
-        dispatch raises an exception it is caught and logged so that the
-        calling transaction is not rolled back.
-        """
-        try:
-            from app.models.enums import NotificationType
-            from app.models.notification import Notification
-
-            # Map transitions to notification types
-            _transition_to_notification: dict[BladeStatus, NotificationType] = {
-                # ASSEMBLY_RECEIVED omitted — assembly_service fires one batch-level notification instead
-                BladeStatus.ASSEMBLY_VERIFIED: NotificationType.WORKFLOW_UPDATED,
-                BladeStatus.SLOT_ASSIGNED: NotificationType.SLOT_PENDING,
-                BladeStatus.BALANCING_COMPLETED: NotificationType.BALANCING_DONE,
-                BladeStatus.REJECTED: NotificationType.BLADE_REJECTED,
-                BladeStatus.FINAL_VERIFICATION: NotificationType.VERIFICATION_PENDING,
-            }
-
-            notif_type = _transition_to_notification.get(to_status)
-            if notif_type is None:
-                return  # No notification for this transition
-
-            notification = Notification(
-                blade_id=blade.id,
-                notification_type=notif_type,
-                title=f"Blade {blade.serial_number}: {to_status.value}",
-                body=(
-                    f"Blade {blade.serial_number} transitioned "
-                    f"from {from_status.value} to {to_status.value}."
-                ),
-            )
-            self.db.add(notification)
-            await self.db.flush()
-
-            log.debug(
-                "workflow.notification_dispatched",
-                blade_id=str(blade.id),
-                notification_type=notif_type.value,
-            )
-
-        except Exception as exc:  # noqa: BLE001
-            log.error(
-                "workflow.notification_dispatch_failed",
-                blade_id=str(blade.id),
-                to_status=to_status.value,
-                error=str(exc),
-                exc_info=True,
-            )

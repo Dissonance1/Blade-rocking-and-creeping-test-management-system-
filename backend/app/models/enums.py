@@ -86,6 +86,7 @@ class BatchEventType(str, enum.Enum):
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
     MODIFIED = "MODIFIED"
+    SLOTS_ALLOCATED = "SLOTS_ALLOCATED"
 
 
 class AssemblyVerificationStatus(str, enum.Enum):

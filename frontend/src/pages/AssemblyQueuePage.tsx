@@ -15,8 +15,6 @@ import {
   PackageSearch,
   PackageCheck,
   Eye,
-  Activity,
-  AlertTriangle,
 } from "lucide-react";
 import { AssemblyQueueIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, parseISO } from "date-fns";
@@ -33,7 +31,6 @@ import { assemblyService } from "@/services/assemblyService";
 import type { BladeStatus } from "@/types";
 import { cn } from "@/utils/cn";
 import { toast } from "sonner";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
@@ -75,7 +72,7 @@ function QuickStat({
   gradient: string;
 }) {
   return (
-    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
       <div className="flex items-center gap-2.5 min-w-0">
         <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shadow-lg text-white shrink-0", gradient)}>
           {icon}
@@ -234,9 +231,9 @@ export default function AssemblyQueuePage() {
   }, [allBlades, activeTab, search, currentTab.statuses]);
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="w-full max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -296,7 +293,7 @@ export default function AssemblyQueuePage() {
                 return (
                   <Card
                     key={batch.batch_number}
-                    className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20"
+                    className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20"
                   >
                     <CardContent className="p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -345,16 +342,6 @@ export default function AssemblyQueuePage() {
                                 Mark Received
                               </Button>
                             )}
-                            {batch.current_status === "RECEIVED_BY_ASSEMBLY" && (
-                              <Button
-                                size="sm"
-                                className="bg-blue-600 hover:bg-blue-500 text-white text-xs h-8"
-                                onClick={() => navigate(`/assembly/verify/${batch.batch_number}`)}
-                              >
-                                <PackageCheck className="w-3 h-3 mr-1" />
-                                Verify Blades
-                              </Button>
-                            )}
                             <Button
                               size="sm"
                               variant="outline"
@@ -397,7 +384,7 @@ export default function AssemblyQueuePage() {
                             value={batchRemarks}
                             onChange={(e) => setBatchRemarks(e.target.value)}
                             placeholder="Reason required…"
-                            className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[60px] text-sm"
+                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[60px] text-sm"
                           />
                           <div className="flex gap-2">
                             <Button
@@ -409,7 +396,7 @@ export default function AssemblyQueuePage() {
                               className={cn(
                                 "text-white",
                                 (!batchRemarks.trim() || rejectMutation.isPending)
-                                  ? "bg-slate-400 dark:bg-slate-600 cursor-not-allowed opacity-100"
+                                  ? "bg-slate-400 dark:bg-background cursor-not-allowed opacity-100"
                                   : "bg-red-600 hover:bg-red-500"
                               )}
                             >
@@ -445,7 +432,7 @@ export default function AssemblyQueuePage() {
               placeholder="Search serial or melt number…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-sm"
+              className="pl-9 bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-sm"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -453,7 +440,7 @@ export default function AssemblyQueuePage() {
             <select
               value={batchFilter}
               onChange={(e) => setBatchFilter(e.target.value)}
-              className="rounded-md border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px] shadow-sm"
+              className="rounded-md border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px] shadow-sm"
             >
               <option value="">All Batches</option>
               {batchNumbers.map((bn) => (
@@ -465,7 +452,7 @@ export default function AssemblyQueuePage() {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
-          <TabsList className="shrink-0 flex-wrap bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 h-auto p-1 mb-3 rounded-xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 self-start">
+          <TabsList className="shrink-0 flex-wrap bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 h-auto p-1 mb-3 rounded-xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 self-start">
             {ASSEMBLY_TABS.map((tab) => (
               <TabsTrigger
                 key={tab.id}
@@ -476,7 +463,7 @@ export default function AssemblyQueuePage() {
                   {tab.icon}
                 </div>
                 <span className="font-medium group-data-[state=active]:text-white">{tab.label}</span>
-                <span className="ml-1 rounded-full bg-slate-100 dark:bg-slate-700 group-data-[state=active]:bg-white/20 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300 group-data-[state=active]:text-white border border-transparent group-data-[state=active]:border-white/10">
+                <span className="ml-1 rounded-full bg-slate-100 dark:bg-background group-data-[state=active]:bg-white/20 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300 group-data-[state=active]:text-white border border-transparent group-data-[state=active]:border-white/10">
                   {tabCount(tab.statuses)}
                 </span>
               </TabsTrigger>
@@ -485,7 +472,7 @@ export default function AssemblyQueuePage() {
 
           {ASSEMBLY_TABS.map((tab) => (
             <TabsContent key={tab.id} value={tab.id} className="flex-1 min-h-0 flex flex-col mt-0 data-[state=inactive]:hidden">
-              <Card className="flex-1 min-h-0 flex flex-col bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+              <Card className="flex-1 min-h-0 flex flex-col bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
                 <CardContent className="flex-1 min-h-0 overflow-y-auto p-0">
                   {isLoading ? (
                     <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500 h-full">
@@ -500,7 +487,7 @@ export default function AssemblyQueuePage() {
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm whitespace-nowrap">
-                        <thead className="bg-slate-800 dark:bg-slate-700">
+                        <thead className="bg-slate-800 dark:bg-background">
                           <tr>
                             {[
                               "Serial Number",
@@ -508,6 +495,7 @@ export default function AssemblyQueuePage() {
                               "Weight (g)",
                               "Static Moment (g·cm)",
                               "Status",
+                              "Type",
                               "Part Number",
                               "Nomenclature",
                               "Received",
@@ -531,7 +519,7 @@ export default function AssemblyQueuePage() {
                               key={blade.id}
                               className={cn(
                                 "transition-colors hover:bg-blue-50 dark:hover:bg-slate-700/30",
-                                rowIdx % 2 === 0 ? "bg-white dark:bg-slate-800/40" : "bg-slate-50 dark:bg-slate-800/20"
+                                rowIdx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50 dark:bg-background"
                               )}
                             >
                               <td className="px-4 py-3">
@@ -554,6 +542,16 @@ export default function AssemblyQueuePage() {
                               </td>
                               <td className="px-4 py-3">
                                 <StatusBadge status={blade.status} />
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={cn(
+                                  "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+                                  blade.blade_type === "HPTR"
+                                    ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                                    : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                                )}>
+                                  {blade.blade_type ?? "LPTR"}
+                                </span>
                               </td>
                               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{blade.part_number}</td>
                               <td className="px-4 py-3 text-slate-500 dark:text-slate-400 max-w-[160px] truncate">
@@ -600,12 +598,6 @@ export default function AssemblyQueuePage() {
             </TabsContent>
           ))}
         </Tabs>
-      </div>
-
-      <div className="shrink-0 px-4 sm:px-6 pb-3">
-        <div className="w-full">
-          <Footer />
-        </div>
       </div>
 
     </div>

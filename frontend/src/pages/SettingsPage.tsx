@@ -15,7 +15,6 @@ import {
   EyeOff,
   Shield,
 } from "lucide-react";
-import Footer from "@/layouts/components/Navbar/Footer";
 import { SettingsIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
@@ -70,7 +69,7 @@ function Section({
   accentColor?: string;
 }) {
   return (
-    <Card id={id} className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm scroll-mt-6">
+    <Card id={id} className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm scroll-mt-6">
       <CardHeader className="pb-4 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-700/50">
         <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
           <div className={`w-7 h-7 rounded-lg ${accentColor} flex items-center justify-center shrink-0`}>
@@ -162,9 +161,9 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -215,7 +214,7 @@ export default function SettingsPage() {
             <div className="space-y-1.5">
               <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">Full Name</Label>
               <Input
-                className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                 {...regProfile("full_name")}
               />
               {profileErrors.full_name && (
@@ -230,7 +229,7 @@ export default function SettingsPage() {
                 <Input
                   value={user?.email ?? ""}
                   readOnly
-                  className="bg-slate-100 dark:bg-slate-700/20 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                  className="bg-slate-100 dark:bg-background border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
                 />
               </div>
               <div className="space-y-1.5">
@@ -238,7 +237,7 @@ export default function SettingsPage() {
                 <Input
                   value={user?.username ?? ""}
                   readOnly
-                  className="bg-slate-100 dark:bg-slate-700/20 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                  className="bg-slate-100 dark:bg-background border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
                 />
               </div>
             </div>
@@ -292,7 +291,7 @@ export default function SettingsPage() {
                 <Input
                   type={showOld ? "text" : "password"}
                   placeholder="••••••••"
-                  className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white pr-10 focus:border-orange-400"
+                  className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white pr-10 focus:border-orange-400"
                   {...regPwd("old_password")}
                 />
                 <button
@@ -316,7 +315,7 @@ export default function SettingsPage() {
                   <Input
                     type={showNew ? "text" : "password"}
                     placeholder="••••••••"
-                    className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white pr-10 focus:border-orange-400"
+                    className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white pr-10 focus:border-orange-400"
                     {...regPwd("new_password")}
                   />
                   <button
@@ -337,7 +336,7 @@ export default function SettingsPage() {
                 <Input
                   type="password"
                   placeholder="••••••••"
-                  className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                  className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                   {...regPwd("confirm_password")}
                 />
                 {pwdErrors.confirm_password && (
@@ -470,9 +469,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   );
 }

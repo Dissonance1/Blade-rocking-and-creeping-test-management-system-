@@ -14,7 +14,7 @@ backend/app/
   core/config.py       All env vars (Pydantic Settings)
   models/              SQLAlchemy ORM (20 files)
   schemas/             Pydantic I/O schemas (10 files)
-  api/v1/endpoints/    REST handlers (12 files)
+  api/v1/endpoints/    REST handlers (16 files: assembly, auth, batches, blades, dti, measurements, notifications, ocr, reports, slots, stations, sync, users, weighing, workflows, audit_logs)
   repositories/        DB queries (5 files)
   services/            Business logic
   workflows/state_machine.py   Blade status transitions

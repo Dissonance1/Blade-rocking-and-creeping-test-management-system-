@@ -35,9 +35,12 @@ reportlab==4.2.2
 weasyprint==62.3
 pillow==10.4.0
 
-# OCR — PaddleOCR (PP-OCRv4, CPU-only)
+# OCR — PaddleOCR (PP-OCRv4, CPU-only, dual English/Cyrillic fusion)
 paddlepaddle==2.6.2
 paddleocr==2.9.1
+opencv-contrib-python-headless==4.10.0.84
+numpy>=1.23.5,<2.0.0
+pyzbar==0.1.9
 
 # File handling
 python-magic==0.4.27

@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.models.enums import BladeStatus
+from app.models.enums import BladeStatus, BladeType
 from app.workflows.state_machine import (
     ALLOWED_TRANSITIONS,
+    EXTRA_TRANSITIONS_BY_TYPE,
     WorkflowEngine,
     WorkflowTransitionError,
 )
@@ -190,7 +191,7 @@ GET_ALLOWED_CASES: list[tuple[BladeStatus, set[BladeStatus]]] = [
     ),
     (
         BladeStatus.SENT_TO_ASSEMBLY,
-        {BladeStatus.SLOT_ASSIGNED, BladeStatus.REJECTED},
+        {BladeStatus.ASSEMBLY_RECEIVED, BladeStatus.SLOT_ASSIGNED, BladeStatus.REJECTED},
     ),
     (
         BladeStatus.SLOT_ASSIGNED,
@@ -206,7 +207,7 @@ GET_ALLOWED_CASES: list[tuple[BladeStatus, set[BladeStatus]]] = [
     ),
     (
         BladeStatus.RETURNED_TO_OH,
-        {BladeStatus.FINAL_VERIFICATION, BladeStatus.REJECTED},
+        {BladeStatus.SLOT_ASSIGNED, BladeStatus.FINAL_VERIFICATION, BladeStatus.REJECTED},
     ),
     (
         BladeStatus.FINAL_VERIFICATION,
@@ -218,7 +219,7 @@ GET_ALLOWED_CASES: list[tuple[BladeStatus, set[BladeStatus]]] = [
     ),
     (
         BladeStatus.ON_HOLD,
-        {BladeStatus.OH_INSPECTION, BladeStatus.MEASUREMENTS_RECORDED},
+        {BladeStatus.OH_INSPECTION, BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.ASSEMBLY_RECEIVED},
     ),
     (
         BladeStatus.REOPENED,
@@ -271,6 +272,67 @@ async def test_can_transition_terminal_state() -> None:
     for tgt in ALL_STATUSES:
         result = await engine.can_transition(BladeStatus.COMPLETED, tgt)
         assert result is False, f"COMPLETED → {tgt.value} should be False"
+
+
+# ---------------------------------------------------------------------------
+# 7b. HPTR-only shortcut edges (blade never leaves OH)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hptr_can_skip_straight_to_slot_assigned() -> None:
+    """HPTR blades may go MEASUREMENTS_RECORDED → SLOT_ASSIGNED directly."""
+    engine = WorkflowEngine(db=None)  # type: ignore[arg-type]
+    result = await engine.can_transition(
+        BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.SLOT_ASSIGNED, BladeType.HPTR
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_lptr_cannot_skip_straight_to_slot_assigned() -> None:
+    """LPTR blades must NOT gain the HPTR-only shortcut edge."""
+    engine = WorkflowEngine(db=None)  # type: ignore[arg-type]
+    result = await engine.can_transition(
+        BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.SLOT_ASSIGNED, BladeType.LPTR
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_no_blade_type_preserves_base_map_only() -> None:
+    """Omitting blade_type must not unlock any HPTR-only edge (backward-compat default)."""
+    engine = WorkflowEngine(db=None)  # type: ignore[arg-type]
+    result = await engine.can_transition(
+        BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.SLOT_ASSIGNED
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_hptr_can_skip_balancing_completed_to_final_verification() -> None:
+    """HPTR blades may go BALANCING_COMPLETED → FINAL_VERIFICATION directly (never RETURNED_TO_OH)."""
+    engine = WorkflowEngine(db=None)  # type: ignore[arg-type]
+    result = await engine.can_transition(
+        BladeStatus.BALANCING_COMPLETED, BladeStatus.FINAL_VERIFICATION, BladeType.HPTR
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_lptr_cannot_skip_balancing_completed_to_final_verification() -> None:
+    """LPTR blades must still go through RETURNED_TO_OH before FINAL_VERIFICATION."""
+    engine = WorkflowEngine(db=None)  # type: ignore[arg-type]
+    result = await engine.can_transition(
+        BladeStatus.BALANCING_COMPLETED, BladeStatus.FINAL_VERIFICATION, BladeType.LPTR
+    )
+    assert result is False
+
+
+def test_extra_transitions_only_defined_for_hptr() -> None:
+    """EXTRA_TRANSITIONS_BY_TYPE must not define shortcut edges for LPTR."""
+    assert BladeType.LPTR not in EXTRA_TRANSITIONS_BY_TYPE
+    assert BladeType.HPTR in EXTRA_TRANSITIONS_BY_TYPE
 
 
 # ---------------------------------------------------------------------------

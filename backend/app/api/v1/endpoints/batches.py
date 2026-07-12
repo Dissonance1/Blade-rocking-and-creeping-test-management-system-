@@ -12,6 +12,7 @@ POST /batches/{batch_number}/modify             — Assembly flags modifications
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Any
 
 import structlog
@@ -19,9 +20,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_roles
+from app.core.dependencies import _user_role_names, get_current_user, require_roles
 from app.db.session import get_db
-from app.models.enums import BatchEventType, BladeStatus, NotificationType
+from app.models.enums import BatchEventType, BladeStatus, BladeType, NotificationType
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -52,6 +53,7 @@ def _status_label(status_val: str) -> str:
         "ACCEPTED": "Accepted",
         "REJECTED": "Rejected",
         "MODIFIED": "Modified",
+        "SLOTS_ALLOCATED": "Slots Allocated",
     }.get(status_val, status_val)
 
 
@@ -181,7 +183,11 @@ async def list_batches(
                 func.count(Blade.id).label("blade_count"),
                 func.sum(
                     case(
-                        (Blade.status.in_(list(_ASSEMBLY_STATUSES)), 1),
+                        (
+                            Blade.status.in_(list(_ASSEMBLY_STATUSES))
+                            & (Blade.blade_type == BladeType.LPTR),
+                            1,
+                        ),
                         else_=0,
                     )
                 ).label("blades_sent"),
@@ -191,6 +197,12 @@ async def list_batches(
                         else_=0,
                     )
                 ).label("blades_completed"),
+                func.sum(
+                    case(
+                        (Blade.blade_type == BladeType.HPTR, 1),
+                        else_=0,
+                    )
+                ).label("hptr_count"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.batch_number.isnot(None), Blade.deleted_at.is_(None))
@@ -279,6 +291,26 @@ async def list_batches(
     ).scalars().all()
     bg_map = {bg.batch_number: bg for bg in bg_rows}
 
+    # ── HPTR blades already slot-allocated per batch (active allocations) ──
+    from app.models.slot_allocation import SlotAllocation
+
+    hptr_slotted_rows = (
+        await db.execute(
+            select(
+                Blade.batch_number,
+                func.count(SlotAllocation.id).label("hptr_slotted_count"),
+            )
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.batch_number.in_(batch_numbers),
+                Blade.blade_type == BladeType.HPTR,
+                SlotAllocation.is_active.is_(True),
+            )
+            .group_by(Blade.batch_number)
+        )
+    ).all()
+    hptr_slotted_map = {r.batch_number: r.hptr_slotted_count for r in hptr_slotted_rows}
+
     # ── Assemble response ──────────────────────────────────────────────────
     result = []
     for row in blade_rows:
@@ -294,6 +326,8 @@ async def list_batches(
             "blade_count": row.blade_count,
             "blades_sent": row.blades_sent or 0,
             "blades_completed": row.blades_completed or 0,
+            "hptr_count": row.hptr_count or 0,
+            "hptr_slotted_count": hptr_slotted_map.get(bn, 0),
             "current_status": cur_status,
             "current_status_label": _status_label(cur_status),
             "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
@@ -333,7 +367,11 @@ async def get_batch(
                 func.count(Blade.id).label("blade_count"),
                 func.sum(
                     case(
-                        (Blade.status.in_(list(_ASSEMBLY_STATUSES)), 1),
+                        (
+                            Blade.status.in_(list(_ASSEMBLY_STATUSES))
+                            & (Blade.blade_type == BladeType.LPTR),
+                            1,
+                        ),
                         else_=0,
                     )
                 ).label("blades_sent"),
@@ -485,10 +523,12 @@ async def send_batch_to_assembly(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
     """
-    Transitions all OH-side blades in the batch to ``SENT_TO_ASSEMBLY`` in a
-    single operation.  Only blades in CREATED, OH_INSPECTION,
+    Transitions all OH-side LPTR blades in the batch to ``SENT_TO_ASSEMBLY`` in
+    a single operation.  Only LPTR blades in CREATED, OH_INSPECTION,
     MEASUREMENTS_RECORDED, or REOPENED status are eligible.  Blades already
-    in Assembly-side statuses are skipped.
+    in Assembly-side statuses are skipped.  HPTR blades never leave OH — they
+    are always skipped here and counted separately as ``hptr_skipped_count``;
+    use the OH Slot Allocation / Set Making tools for them instead.
 
     Returns a summary: total blade count, how many were sent, how many skipped.
     """
@@ -517,8 +557,12 @@ async def send_batch_to_assembly(
 
     sent_count = 0
     skipped_count = 0
+    hptr_skipped_count = 0
 
     for blade in blades:
+        if blade.blade_type == BladeType.HPTR:
+            hptr_skipped_count += 1
+            continue
         if blade.status.value in _OH_ELIGIBLE_STATUSES:
             prev_status = blade.status
             blade.status = BladeStatus.SENT_TO_ASSEMBLY
@@ -538,8 +582,9 @@ async def send_batch_to_assembly(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"No eligible blades found in batch '{batch_number}'. "
-                f"All {skipped_count} blades are already in Assembly or completed."
+                f"No eligible LPTR blades found in batch '{batch_number}'. "
+                f"{skipped_count} LPTR blade(s) already in Assembly or completed, "
+                f"{hptr_skipped_count} HPTR blade(s) stay in OH."
             ),
         )
 
@@ -551,7 +596,11 @@ async def send_batch_to_assembly(
         event_type=BatchEventType.SENT_TO_ASSEMBLY,
         action_by_id=current_user.id,
         remarks=remarks,
-        changes={"sent_count": sent_count, "skipped_count": skipped_count},
+        changes={
+            "sent_count": sent_count,
+            "skipped_count": skipped_count,
+            "hptr_skipped_count": hptr_skipped_count,
+        },
     )
     db.add(ev)
     await db.commit()
@@ -595,15 +644,23 @@ async def send_batch_to_assembly(
 
     background_tasks.add_task(_notify_assembly, batch_number, actor_name, sent_count, skipped_count)
 
-    logger.info("batch_sent_to_assembly", batch=batch_number, sent=sent_count, skipped=skipped_count)
+    logger.info(
+        "batch_sent_to_assembly",
+        batch=batch_number,
+        sent=sent_count,
+        skipped=skipped_count,
+        hptr_skipped=hptr_skipped_count,
+    )
     return {
         "batch_number": batch_number,
         "total_blades": len(blades),
         "sent_count": sent_count,
         "skipped_count": skipped_count,
+        "hptr_skipped_count": hptr_skipped_count,
         "message": (
             f"{sent_count} blade(s) sent to Assembly."
             + (f" {skipped_count} already in Assembly." if skipped_count else "")
+            + (f" {hptr_skipped_count} HPTR blade(s) stay in OH." if hptr_skipped_count else "")
         ),
     }
 
@@ -622,24 +679,62 @@ async def assign_batch_slot(
     batch_number: str,
     body: dict,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
     """
-    Runs the balancing algorithm over all SENT_TO_ASSEMBLY blades in the
-    batch and assigns each one a computed disc slot.
+    Assigns computed disc slots to the batch's eligible blades of one
+    ``blade_type``. LPTR and HPTR use genuinely different allocation logic
+    (different physical rotors, different balancing procedures) — see the
+    branch-specific docstrings on ``_assign_lptr_batch_slot`` /
+    ``_assign_hptr_batch_slot`` below.
+    """
+    blade_type_str: str = body.get("blade_type", "LPTR")
+    try:
+        blade_type = BladeType(blade_type_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid blade_type '{blade_type_str}'. Must be 'LPTR' or 'HPTR'.",
+        )
+
+    user_roles = _user_role_names(current_user)
+    if "SUPER_ADMIN" not in user_roles:
+        required_role = "ASSEMBLY_OPERATOR" if blade_type == BladeType.LPTR else "OH_OPERATOR"
+        if required_role not in user_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"{required_role} or SUPER_ADMIN role required for {blade_type.value} slot assignment",
+            )
+
+    if blade_type == BladeType.LPTR:
+        return await _assign_lptr_batch_slot(batch_number, body, current_user, db, background_tasks)
+    return await _assign_hptr_batch_slot(batch_number, body, current_user, db)
+
+
+async def _assign_lptr_batch_slot(
+    batch_number: str,
+    body: dict,
+    current_user: Any,
+    db: AsyncSession,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """
+    Runs the heavy/light interleave balancing algorithm over the batch's
+    eligible LPTR blades and assigns each one a computed disc slot.
 
     Algorithm: sort blades by static_moment_gcm descending (heaviest first),
     then assign slots starting at ``imbalance_slot`` and stepping through
     positions: slot_i = ((K - 1 + i) % N) + 1.
 
-    Also transitions each blade from SENT_TO_ASSEMBLY → SLOT_ASSIGNED.
+    Requires ASSEMBLY_OPERATOR/SUPER_ADMIN (checked by the caller). The batch
+    must already be ACCEPTED/MODIFIED by Assembly, and eligible blades are
+    those in SENT_TO_ASSEMBLY/ASSEMBLY_RECEIVED/ASSEMBLY_VERIFIED.
     """
-    import math
     from app.models.blade import Blade
     from app.models.batch_event import BatchEvent as BatchEventModel
     from app.models.slot_allocation import SlotAllocation
-    from app.models.workflow import WorkflowLog
+    from app.workflows.state_machine import WorkflowEngine
 
     imbalance_slot: int = int(body.get("imbalance_slot", 0))
     total_slots: int = int(body.get("total_slots", 80))
@@ -661,7 +756,13 @@ async def assign_batch_slot(
     ).scalar_one_or_none()
 
     batch_status = latest_event.event_type.value if latest_event else "CREATED"
-    _ACCEPTED_STATUSES = {BatchEventType.ACCEPTED.value, BatchEventType.MODIFIED.value}
+    # SLOTS_ALLOCATED is included so re-running/recomputing slot balancing after
+    # the first pass doesn't get blocked by its own prior event.
+    _ACCEPTED_STATUSES = {
+        BatchEventType.ACCEPTED.value,
+        BatchEventType.MODIFIED.value,
+        BatchEventType.SLOTS_ALLOCATED.value,
+    }
     if batch_status not in _ACCEPTED_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -671,16 +772,17 @@ async def assign_batch_slot(
                 f"Please accept the batch first."
             ),
         )
-
     _ELIGIBLE_FOR_SLOT = [
         BladeStatus.SENT_TO_ASSEMBLY,
         BladeStatus.ASSEMBLY_RECEIVED,
         BladeStatus.ASSEMBLY_VERIFIED,
     ]
+
     blades = (
         await db.execute(
             select(Blade).where(
                 Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.LPTR,
                 Blade.status.in_(_ELIGIBLE_FOR_SLOT),
                 Blade.deleted_at.is_(None),
             )
@@ -690,7 +792,7 @@ async def assign_batch_slot(
     if not blades:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No eligible blades found in batch '{batch_number}' — all blades may already have slots assigned.",
+            detail=f"No eligible LPTR blades found in batch '{batch_number}' — all blades may already have slots assigned.",
         )
 
     # Fetch latest INITIAL measurement static_moment_gcm for each blade
@@ -757,20 +859,33 @@ async def assign_batch_slot(
         db.add(alloc)
 
         # Transition blade status
-        prev_status = blade.status
-        blade.status = BladeStatus.SLOT_ASSIGNED
-        log = WorkflowLog(
-            blade_id=blade.id,
-            from_status=prev_status,
+        await WorkflowEngine(db).transition(
+            blade=blade,
             to_status=BladeStatus.SLOT_ASSIGNED,
-            action_by_id=current_user.id,
+            user=current_user,
+            station_id=None,
             remarks=(
                 f"Slot {computed_slot} assigned via batch balancing "
                 f"(imbalance at slot {K}, disc has {N} slots)"
             ),
         )
-        db.add(log)
 
+    await db.commit()
+
+    # Record the batch-level audit event for "Slots Allocated" so it shows up
+    # in the batch's Event History alongside Sent/Received/Accepted/Rejected.
+    ev = BatchEventModel(
+        batch_number=batch_number,
+        event_type=BatchEventType.SLOTS_ALLOCATED,
+        action_by_id=current_user.id,
+        remarks=f"{len(sorted_blades)} blade(s) assigned to computed disc slots.",
+        changes={
+            "blades_assigned": len(sorted_blades),
+            "imbalance_slot": K,
+            "total_slots": N,
+        },
+    )
+    db.add(ev)
     await db.commit()
 
     # Notify Super Admin that all slots in the batch are now assigned.
@@ -797,16 +912,359 @@ async def assign_batch_slot(
     logger.info(
         "batch_slots_assigned",
         batch=batch_number,
+        blade_type="LPTR",
         blades=len(sorted_blades),
         imbalance_slot=K,
         total_slots=N,
     )
     return {
         "batch_number": batch_number,
+        "blade_type": "LPTR",
         "blades_assigned": len(sorted_blades),
         "imbalance_slot": K,
         "total_slots": N,
-        "message": f"{len(sorted_blades)} blade(s) assigned to computed disc slots.",
+        "message": f"{len(sorted_blades)} LPTR blade(s) assigned to computed disc slots.",
+    }
+
+
+async def _assign_hptr_batch_slot(
+    batch_number: str,
+    body: dict,
+    current_user: Any,
+    db: AsyncSession,
+) -> dict:
+    """
+    Persists the operator-confirmed HPTR blade-to-slot mapping.
+
+    Unlike LPTR, HPTR slot allocation is NOT purely algorithmic: the OH
+    Slot Allocation tab computes an initial mapping client-side (sort by
+    weight descending, pair heaviest with ``start_slot`` and lightest with
+    its opposite slot 45 positions away on the 90-slot rotor, alternating
+    inward), then the Set Making tab lets the operator manually swap blades
+    between the two halves (W1 = slots 1-45, W2 = slots 46-90) until the
+    half containing ``start_slot`` is heavier by 1.5-2.0 g. Because those
+    swaps are manual and un-recomputable server-side, this endpoint simply
+    validates and persists whatever final ``assignments`` the frontend
+    submits — it does not run the allocation algorithm itself.
+
+    Requires OH_OPERATOR/SUPER_ADMIN (checked by the caller). HPTR never
+    leaves OH, so there is no Assembly-acceptance gate. Eligible blades are
+    those at MEASUREMENTS_RECORDED. No batch-level BatchEvent is written
+    (Assembly's accept/modify/slots-allocated event trail is Assembly-only).
+    """
+    from app.models.blade import Blade
+    from app.models.measurement import Measurement
+    from app.models.slot_allocation import SlotAllocation
+    from app.workflows.state_machine import WorkflowEngine
+
+    try:
+        start_slot = int(body["start_slot"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="start_slot (int) is required for HPTR slot assignment",
+        )
+    total_slots = int(body.get("total_slots", 90))
+    unbalance_value = body.get("unbalance_value")
+    assignments = body.get("assignments")
+
+    if start_slot < 1 or start_slot > total_slots:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"start_slot must be between 1 and {total_slots}",
+        )
+    if not isinstance(assignments, list) or not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="assignments (non-empty list of {blade_id, slot_number}) is required for HPTR slot assignment",
+        )
+
+    try:
+        parsed = [
+            (uuid.UUID(str(a["blade_id"])), int(a["slot_number"]))
+            for a in assignments
+        ]
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Each assignment must have a valid blade_id (uuid) and slot_number (int)",
+        )
+
+    slot_by_blade_id: dict = dict(parsed)
+    if len(slot_by_blade_id) != len(parsed):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Duplicate blade_id in assignments",
+        )
+    slot_numbers = [s for _, s in parsed]
+    if len(set(slot_numbers)) != len(slot_numbers):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Duplicate slot_number in assignments",
+        )
+    if any(s < 1 or s > total_slots for s in slot_numbers):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"All slot_number values must be between 1 and {total_slots}",
+        )
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.HPTR,
+                Blade.status == BladeStatus.MEASUREMENTS_RECORDED,
+                Blade.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No eligible HPTR blades found in batch '{batch_number}' — all blades may already have slots assigned.",
+        )
+
+    eligible_ids = {b.id for b in blades}
+    if set(slot_by_blade_id.keys()) != eligible_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "assignments must cover exactly the batch's eligible HPTR blades "
+                f"({len(eligible_ids)} expected, {len(slot_by_blade_id)} received)."
+            ),
+        )
+
+    # Fetch latest INITIAL weight_grams per blade, purely to report the W1/W2
+    # split back to the caller for audit/confirmation — the swap decision
+    # itself already happened client-side before this call.
+    from sqlalchemy import func as sa_func
+
+    blade_ids = list(eligible_ids)
+    subq = (
+        select(
+            Measurement.blade_id,
+            sa_func.max(Measurement.measured_at).label("latest_at"),
+        )
+        .where(
+            Measurement.blade_id.in_(blade_ids),
+            Measurement.measurement_type == "INITIAL",
+        )
+        .group_by(Measurement.blade_id)
+        .subquery()
+    )
+    meas_rows = (
+        await db.execute(
+            select(Measurement.blade_id, Measurement.weight_grams)
+            .join(
+                subq,
+                (Measurement.blade_id == subq.c.blade_id)
+                & (Measurement.measured_at == subq.c.latest_at),
+            )
+        )
+    ).all()
+    weight_map: dict = {row.blade_id: float(row.weight_grams or 0) for row in meas_rows}
+
+    half = total_slots // 2  # W1 = 1..half, W2 = half+1..total_slots
+    w1_total = 0.0
+    w2_total = 0.0
+    for blade in blades:
+        slot = slot_by_blade_id[blade.id]
+        weight = weight_map.get(blade.id, 0.0)
+        if slot <= half:
+            w1_total += weight
+        else:
+            w2_total += weight
+
+    for blade in blades:
+        slot_number = str(slot_by_blade_id[blade.id])
+
+        existing = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.is_active = False
+            existing.previous_slot_number = existing.slot_number
+
+        alloc = SlotAllocation(
+            blade_id=blade.id,
+            slot_number=slot_number,
+            allocated_by_id=current_user.id,
+        )
+        db.add(alloc)
+
+        await WorkflowEngine(db).transition(
+            blade=blade,
+            to_status=BladeStatus.SLOT_ASSIGNED,
+            user=current_user,
+            station_id=None,
+            remarks=(
+                f"HPTR slot {slot_number} assigned "
+                f"(start slot {start_slot}"
+                + (f", unbalance {unbalance_value} g" if unbalance_value is not None else "")
+                + ")"
+            ),
+        )
+
+    await db.commit()
+
+    weight_diff = round(abs(w1_total - w2_total), 3)
+    logger.info(
+        "batch_hptr_slots_assigned",
+        batch=batch_number,
+        blades=len(blades),
+        start_slot=start_slot,
+        w1_total=round(w1_total, 3),
+        w2_total=round(w2_total, 3),
+        weight_diff=weight_diff,
+    )
+    return {
+        "batch_number": batch_number,
+        "blade_type": "HPTR",
+        "blades_assigned": len(blades),
+        "start_slot": start_slot,
+        "w1_total": round(w1_total, 3),
+        "w2_total": round(w2_total, 3),
+        "weight_diff": weight_diff,
+        "message": f"{len(blades)} HPTR blade(s) assigned to computed disc slots.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{batch_number}/reject-hptr-slots
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{batch_number}/reject-hptr-slots",
+    status_code=status.HTTP_200_OK,
+    summary="Reject a batch's saved HPTR slot allocation and reset it for redo",
+)
+async def reject_hptr_slots(
+    batch_number: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Physical balancing testing found the set still unbalanced — deactivate
+    every active HPTR slot allocation in the batch and revert those blades
+    to ``MEASUREMENTS_RECORDED`` so OH can redo Slot Allocation from
+    scratch (a new start/"unbalanced" slot, recompute, re-save).
+
+    Each blade's ``serial_number`` is also renamed to whatever slot number
+    it was just occupying — the rotor position it was last physically
+    tested at becomes its identifier for the next round, repeating every
+    reject cycle until the set balances.
+
+    This is a reset, not a formal QA rejection — no rejection reason is
+    recorded against the blades themselves, just an optional free-text note
+    for the audit trail.
+    """
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+    from app.workflows.state_machine import WorkflowEngine
+
+    reason = (body or {}).get("reason") or "Physical balancing failed — slot allocation redone"
+
+    blades = (
+        await db.execute(
+            select(Blade)
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.HPTR,
+                Blade.deleted_at.is_(None),
+                SlotAllocation.is_active.is_(True),
+                Blade.status.in_([
+                    BladeStatus.SLOT_ASSIGNED,
+                    BladeStatus.BALANCING_IN_PROGRESS,
+                    BladeStatus.BALANCING_COMPLETED,
+                ]),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active HPTR slot allocation found for batch '{batch_number}'",
+        )
+
+    alloc_by_blade_id: dict[uuid.UUID, Any] = {}
+    for blade in blades:
+        alloc = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if alloc:
+            alloc_by_blade_id[blade.id] = alloc
+
+    # Renaming serial_number to the last slot_number is a permutation of
+    # values already in use within this batch+type — done directly it would
+    # transiently violate the (batch_number, blade_type, serial_number)
+    # unique constraint mid-transaction (e.g. blade A renamed to "5" before
+    # blade B, which currently holds "5", has been renamed away). Stage
+    # through unique placeholders first so every rename lands cleanly.
+    for blade in blades:
+        blade.serial_number = f"TMP-{blade.id}"
+    await db.flush()
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        alloc = alloc_by_blade_id.get(blade.id)
+        if alloc:
+            blade.serial_number = alloc.slot_number
+            alloc.is_active = False
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.MEASUREMENTS_RECORDED,
+            user=current_user,
+            station_id=None,
+            remarks=reason,
+        )
+
+    await db.commit()
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+
+    async def _notify_hptr_slots_rejected(_batch: str, _count: int, _actor: str) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Batch {_batch} — HPTR slot allocation rejected",
+                    body=(
+                        f"{_actor} rejected the saved HPTR slot allocation for batch {_batch} "
+                        f"({_count} blade(s) reset to Measurements Recorded). Redo slot allocation."
+                    ),
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                    metadata={"batch_number": _batch},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_hptr_slots_rejected_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_hptr_slots_rejected, batch_number, len(blades), actor_name)
+
+    logger.info("batch_hptr_slots_rejected", batch=batch_number, blades_reset=len(blades))
+    return {
+        "batch_number": batch_number,
+        "blades_reset": len(blades),
+        "message": f"{len(blades)} HPTR blade(s) reset to Measurements Recorded — redo slot allocation.",
     }
 
 

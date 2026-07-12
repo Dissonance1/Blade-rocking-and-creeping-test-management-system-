@@ -58,9 +58,18 @@ export const assemblyService = {
       .post<AssemblyBladeRecord>(`/assembly/blades/${bladeId}/reject`, data)
       .then((r) => r.data),
 
-  /** Trigger set-making — only succeeds when all blades are ASSEMBLY_VERIFIED */
-  startSetMaking: (batchNumber: string, notes?: string) =>
+  /**
+   * Trigger set-making readiness confirmation.
+   * LPTR (default): only succeeds when all blades are ASSEMBLY_VERIFIED.
+   * HPTR: only succeeds when all HPTR blades in the batch have recorded
+   * measurements — HPTR never leaves OH, so there's no Assembly verification step.
+   */
+  startSetMaking: (batchNumber: string, notes?: string, bladeType?: "LPTR" | "HPTR") =>
     api
-      .post<SetMakingResponse>(`/assembly/batches/${batchNumber}/start-setmaking`, { notes })
+      .post<SetMakingResponse>(
+        `/assembly/batches/${batchNumber}/start-setmaking`,
+        { notes },
+        { params: bladeType ? { blade_type: bladeType } : undefined }
+      )
       .then((r) => r.data),
 };

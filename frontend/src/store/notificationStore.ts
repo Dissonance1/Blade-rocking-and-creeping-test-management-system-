@@ -30,11 +30,11 @@ export const useNotificationStore = create<NotificationState>((set) => ({
       };
     }),
 
+  // Read notifications disappear from view entirely rather than sticking
+  // around greyed out — the store only ever holds the unread set.
   markAsRead: (id: string) =>
     set((state) => {
-      const notifications = state.notifications.map((n) =>
-        n.id === id ? { ...n, is_read: true } : n
-      );
+      const notifications = state.notifications.filter((n) => n.id !== id);
       return {
         notifications,
         unreadCount: notifications.filter((n) => !n.is_read).length,
@@ -42,10 +42,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
     }),
 
   markAllAsRead: () =>
-    set((state) => ({
-      notifications: state.notifications.map((n) => ({ ...n, is_read: true })),
-      unreadCount: 0,
-    })),
+    set({ notifications: [], unreadCount: 0 }),
 
   removeNotification: (id: string) =>
     set((state) => {

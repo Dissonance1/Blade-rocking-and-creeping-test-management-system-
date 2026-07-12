@@ -1,0 +1,8 @@
+# OAK-1 camera companion service — install into its own venv, separate from
+# backend/requirements.txt. This never runs inside the FastAPI process or
+# Docker; depthai is pinned to a legacy 2.31.x/2.32.x build to match this
+# unit's onboard bootloader firmware (see scripts/oak1_camera_service.py).
+depthai==2.32.0.0
+opencv-contrib-python-headless==4.10.0.84
+flask==3.0.3
+flask-cors==4.0.1

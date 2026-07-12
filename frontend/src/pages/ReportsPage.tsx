@@ -14,12 +14,9 @@ import {
   XCircle,
   Clock,
   AlertCircle,
-  BarChart,
   BarChart3,
-  CalendarIcon,
 } from "lucide-react";
 import { NotepadIcon } from "@/components/common/CustomIcons";
-import Footer from "@/layouts/components/Navbar/Footer";
 import { format, parseISO, subDays } from "date-fns";
 
 import { Button } from "@/components/ui/button";
@@ -175,9 +172,9 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm border-b border-slate-200 dark:border-slate-700/60">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5 shadow-sm border-b border-slate-200 dark:border-slate-700/60">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -192,7 +189,7 @@ export default function ReportsPage() {
       <div className="w-full px-4 sm:px-6 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 mb-6">
-            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
+            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-background border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
               <TabsTrigger
                 value="generate"
                 className="shrink-0 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
@@ -220,7 +217,7 @@ export default function ReportsPage() {
                 {/* Left: form */}
                 <div className="lg:col-span-2 space-y-5">
                   {/* Report type */}
-                  <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                     <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Report Format</CardTitle>
                     </CardHeader>
@@ -239,7 +236,7 @@ export default function ReportsPage() {
                                   "flex flex-1 items-center gap-3 rounded-xl border-2 px-4 py-3 transition-colors",
                                   field.value === type
                                     ? "border-orange-500 bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300"
-                                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
+                                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
                                 )}
                               >
                                 {type === "PDF" ? (
@@ -262,7 +259,7 @@ export default function ReportsPage() {
                   </Card>
 
                   {/* Date range */}
-                  <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                     <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Date Range</CardTitle>
                     </CardHeader>
@@ -272,7 +269,7 @@ export default function ReportsPage() {
                           <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">From</Label>
                           <Input
                             type="date"
-                            className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                             {...register("date_from")}
                           />
                           {errors.date_from && (
@@ -283,7 +280,7 @@ export default function ReportsPage() {
                           <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">To</Label>
                           <Input
                             type="date"
-                            className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                             {...register("date_to")}
                           />
                           {errors.date_to && (
@@ -295,7 +292,7 @@ export default function ReportsPage() {
                   </Card>
 
                   {/* Status filter */}
-                  <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                     <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">
                         Status Filter{" "}
@@ -333,7 +330,7 @@ export default function ReportsPage() {
 
                 {/* Right: options + submit */}
                 <div className="space-y-5">
-                  <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                     <CardHeader className="pb-3 px-4 sm:px-6">
                       <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Options</CardTitle>
                     </CardHeader>
@@ -357,7 +354,7 @@ export default function ReportsPage() {
                   </Card>
 
                   {/* Summary preview */}
-                  <Card className="bg-slate-800 dark:bg-slate-700/40 border border-slate-700 dark:border-slate-700/60 rounded-xl">
+                  <Card className="bg-slate-800 dark:bg-background border border-slate-700 dark:border-slate-700/60 rounded-xl">
                     <CardContent className="p-4 space-y-2 text-sm">
                       <p className="text-slate-400 text-xs font-medium uppercase tracking-wide">
                         Report Preview
@@ -411,7 +408,7 @@ export default function ReportsPage() {
 
           {/* My reports tab */}
           <TabsContent value="my-reports">
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
               <CardHeader className="flex-row items-center justify-between pb-3 px-4 sm:px-6">
                 <CardTitle className="text-slate-900 dark:text-white text-base">My Reports</CardTitle>
                 <Button
@@ -438,7 +435,7 @@ export default function ReportsPage() {
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm whitespace-nowrap">
-                      <thead className="bg-slate-800 dark:bg-slate-700">
+                      <thead className="bg-slate-800 dark:bg-background">
                         <tr>
                           {["Name", "Type", "Status", "Created", "Size", "Actions"].map(
                             (h) => (
@@ -461,7 +458,7 @@ export default function ReportsPage() {
                             key={report.id}
                             className={cn(
                               "transition-colors hover:bg-blue-50 dark:hover:bg-slate-700/30",
-                              rowIdx % 2 === 0 ? "bg-white dark:bg-slate-800/40" : "bg-slate-50 dark:bg-slate-800/20"
+                              rowIdx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50 dark:bg-background"
                             )}
                           >
                             <td className="px-4 py-3 text-slate-900 dark:text-white font-medium">
@@ -524,9 +521,6 @@ export default function ReportsPage() {
         </Tabs>
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   );
 }

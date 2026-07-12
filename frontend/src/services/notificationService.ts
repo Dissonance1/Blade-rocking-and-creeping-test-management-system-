@@ -7,6 +7,12 @@ export const notificationService = {
     return data.items ?? [];
   },
 
+  /** Same endpoint, but returns `total` too so callers can drive a "Load more". */
+  listPaginated: async (params: NotificationQueryParams = {}): Promise<PaginatedResponse<Notification>> => {
+    const { data } = await api.get<PaginatedResponse<Notification>>("/notifications/", { params });
+    return data;
+  },
+
   // Backend uses POST, not PATCH
   markRead: async (id: string): Promise<void> => {
     await api.post(`/notifications/${id}/read`);

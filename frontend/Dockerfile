@@ -36,6 +36,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 RUN cat > /etc/nginx/conf.d/default.conf << 'EOF'
 server {
     listen 80;
+    listen [::]:80;
     server_name _;
 
     root /usr/share/nginx/html;

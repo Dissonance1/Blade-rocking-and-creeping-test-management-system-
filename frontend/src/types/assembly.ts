@@ -37,6 +37,10 @@ export interface BatchProgressResponse {
   assembly_rejected: number;
   pending: number;
   set_making_ready: boolean;
+  /** HPTR never leaves OH — readiness means every HPTR blade in the batch has recorded measurements. */
+  hptr_total: number;
+  hptr_measurements_recorded: number;
+  hptr_set_making_ready: boolean;
 }
 
 // ---------------------------------------------------------------------------

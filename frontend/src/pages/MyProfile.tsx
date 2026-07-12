@@ -1,11 +1,9 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import Footer from "@/layouts/components/Navbar/Footer";
 import { useAuthStore } from "@/store/authStore";
 import KTIcon from "@/components/common/KTIcon";
 import { Check } from "lucide-react";
@@ -22,16 +20,12 @@ export default function MyProfile() {
 
   if (!user) return null;
 
-  const initials = user.full_name
-    ? user.full_name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
-    : user.username.slice(0, 2).toUpperCase();
-
   const primaryRole = user.roles[0];
   const roleLabel = primaryRole ? primaryRole.replace("_", " ") : "USER";
 
   return (
     <div className="max-w-3xl mx-auto w-full h-full flex flex-col justify-center pb-12">
-      <Card className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm">
+      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-800 shadow-sm">
         <CardHeader className="pb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-orange-500 flex items-center justify-center text-white shrink-0 shadow-sm">
@@ -53,7 +47,7 @@ export default function MyProfile() {
         <CardContent className="pt-6 space-y-8">
           {/* User Info Section */}
           <div className="flex items-center gap-5">
-            <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+            <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-background flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
               <img src="/media/avatars/Avatar.png" alt="Avatar" className="w-full h-full object-cover scale-125" />
             </div>
             <div className="flex flex-col gap-1 min-w-0">
@@ -81,7 +75,7 @@ export default function MyProfile() {
                 id="fullName" 
                 value={fullName} 
                 onChange={(e) => setFullName(e.target.value)} 
-                className="bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-700"
+                className="bg-white dark:bg-background border-slate-200 dark:border-slate-700"
               />
             </div>
             
@@ -92,16 +86,16 @@ export default function MyProfile() {
                   id="email" 
                   value={user.email} 
                   readOnly 
-                  className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 cursor-not-allowed focus-visible:ring-0"
+                  className="bg-slate-50 dark:bg-background text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 cursor-not-allowed focus-visible:ring-0"
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="username" className="text-slate-600 dark:text-slate-300">Username (read-only)</Label>
-                <Input 
-                  id="username" 
-                  value={user.username} 
-                  readOnly 
-                  className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 cursor-not-allowed focus-visible:ring-0"
+                <Input
+                  id="username"
+                  value={user.username}
+                  readOnly
+                  className="bg-slate-50 dark:bg-background text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 cursor-not-allowed focus-visible:ring-0"
                 />
               </div>
             </div>
@@ -115,9 +109,6 @@ export default function MyProfile() {
         </CardContent>
       </Card>
 
-      <div className="shrink-0 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   );
 }

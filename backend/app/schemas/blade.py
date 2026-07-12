@@ -271,6 +271,7 @@ class BladeListItem(BaseSchema):
     created_at: datetime
     updated_at: datetime
     batch_number: str | None = None
+    blade_type: BladeType = BladeType.LPTR
     # Latest INITIAL measurement values (populated by list endpoint)
     weight_grams: float | None = None
     static_moment_gcm: float | None = None

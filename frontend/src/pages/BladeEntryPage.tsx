@@ -8,8 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
-  Plus,
-  Trash2,
   Loader2,
   AlertCircle,
   ClipboardList,
@@ -25,24 +23,25 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
+  Cpu,
+  Video,
 } from "lucide-react";
 import { BladeEntryIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import Footer from "@/layouts/components/Navbar/Footer";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 
 import { bladeService } from "@/services/bladeService";
 import { ocrService, type OcrScanResult } from "@/services/ocrService";
 import { extractApiError } from "@/services/api";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/utils/cn";
-import { useDTISocket } from "@/hooks/useDTISocket";
+import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
+
+type CameraSource = "browser" | "oak1";
 
 // ─── Weighing machine hook ────────────────────────────────────────────────────
 
@@ -241,7 +240,7 @@ function useOcrFolder() {
   const saveOcrResult = useCallback(async (
     result: OcrScanResult,
     basename: string,
-    scanType: "serial_number" | "melt_number",
+    scanType: "melt_number",
   ): Promise<void> => {
     const dir = await getDir();
     if (!dir) return;
@@ -286,6 +285,10 @@ function CameraModal({
   const [camError, setCamError] = useState<string | null>(null);
   const [captured, setCaptured] = useState<{ blob: Blob; url: string } | null>(null);
 
+  // ── OAK-1 companion-service source (optional — falls back to browser webcam) ─
+  const [oak1Available, setOak1Available] = useState(false);
+  const [source, setSource] = useState<CameraSource | null>(null);
+
   const startCamera = useCallback(() => {
     setCamError(null);
     setReady(false);
@@ -312,16 +315,55 @@ function CameraModal({
     streamRef.current = null;
   }, []);
 
+  // Resolve which camera source to use each time the modal opens. `source`
+  // starts `null` (undecided) so the browser camera isn't opened — and
+  // doesn't trigger a permission prompt — before the OAK-1 health check
+  // (never throws) has had a chance to prefer it instead.
   useEffect(() => {
-    if (!open) return;
-    setCaptured(null);
-    startCamera();
-    return stopCamera;
-  }, [open, startCamera, stopCamera]);
+    if (!open) {
+      setSource(null);
+      return undefined;
+    }
+    let cancelled = false;
+    checkOak1Health().then((available) => {
+      if (cancelled) return;
+      setOak1Available(available);
+      setSource(available ? "oak1" : "browser");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
-  const handleCapture = useCallback(() => {
+  useEffect(() => {
+    if (!open || source === null) return undefined;
+    setCaptured(null);
+    if (source === "browser") {
+      startCamera();
+      return stopCamera;
+    }
+    // source === "oak1": nothing to open — the companion service already
+    // keeps the OAK-1 pipeline running; the <img> stream's onLoad drives `ready`.
+    setCamError(null);
+    setReady(false);
+    return undefined;
+  }, [open, source, startCamera, stopCamera]);
+
+  const handleCapture = useCallback(async () => {
+    if (!ready) return;
+
+    if (source === "oak1") {
+      try {
+        const blob = await captureOak1Snapshot();
+        setCaptured({ blob, url: URL.createObjectURL(blob) });
+      } catch {
+        setCamError("Could not capture from OAK-1. Check the companion service and try again.");
+      }
+      return;
+    }
+
     const video = videoRef.current;
-    if (!video || !ready) return;
+    if (!video) return;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -331,12 +373,15 @@ function CameraModal({
       stopCamera();
       setCaptured({ blob, url: URL.createObjectURL(blob) });
     }, "image/jpeg", 0.92);
-  }, [ready, stopCamera]);
+  }, [ready, stopCamera, source]);
 
   const handleRetake = useCallback(() => {
     setCaptured(null);
-    startCamera();
-  }, [startCamera]);
+    if (source === "browser") startCamera();
+    // source === "oak1": clearing `captured` remounts the stream <img> below;
+    // reset `ready` so the loading spinner shows until it re-fires onLoad.
+    else setReady(false);
+  }, [startCamera, source]);
 
   const handleUse = useCallback(() => {
     if (!captured) return;
@@ -351,6 +396,7 @@ function CameraModal({
     stopCamera();
     setCaptured(null);
     setReady(false);
+    setSource(null);
     onClose();
   }, [stopCamera, onClose]);
 
@@ -358,19 +404,36 @@ function CameraModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
-      <div className="relative bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-4 w-full max-w-2xl mx-4">
+      <div className="relative bg-white dark:bg-background rounded-2xl shadow-2xl p-4 w-full max-w-2xl mx-4">
         {/* Header */}
         <div className="flex items-center justify-between gap-2 mb-3">
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2 min-w-0 truncate">
             <Camera className="w-4 h-4 text-orange-500 shrink-0" />
             <span className="truncate">Capture — {fieldLabel}</span>
           </h3>
-          <button
-            onClick={handleClose}
-            className="shrink-0 flex items-center justify-center w-11 h-11 -m-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {oak1Available && (
+              <button
+                onClick={() => setSource((p) => (p === "oak1" ? "browser" : "oak1"))}
+                title={source === "oak1" ? "Switch to browser camera" : "Switch to OAK-1 industrial camera"}
+                className={cn(
+                  "flex items-center gap-1 text-xs rounded-full px-2 py-0.5 transition-colors",
+                  source === "oak1"
+                    ? "bg-orange-100 text-orange-600 dark:bg-orange-500/20 dark:text-orange-400"
+                    : "bg-slate-100 text-slate-500 dark:bg-background dark:text-slate-400"
+                )}
+              >
+                {source === "oak1" ? <Cpu className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+                {source === "oak1" ? "OAK-1" : "Browser"}
+              </button>
+            )}
+            <button
+              onClick={handleClose}
+              className="flex items-center justify-center w-11 h-11 -m-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Error */}
@@ -385,13 +448,24 @@ function CameraModal({
         <div className="relative bg-black rounded-xl overflow-hidden" style={{ aspectRatio: "16/9" }}>
           {!captured ? (
             <>
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
+              {source === "browser" && (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+              )}
+              {source === "oak1" && (
+                <img
+                  src={getOak1StreamUrl()}
+                  onLoad={() => setReady(true)}
+                  onError={() => setReady(false)}
+                  alt="OAK-1 live preview"
+                  className="w-full h-full object-cover"
+                />
+              )}
               {!ready && !camError && (
                 <div className="absolute inset-0 flex items-center justify-center">
                   <Loader2 className="w-8 h-8 text-white animate-spin" />
@@ -465,7 +539,6 @@ const step1Schema = z.object({
   work_order_number: z.string().min(1, "Work order number is required"),
   shop_order_number: z.string().min(1, "Shop order number is required"),
   part_number: z.string().min(1, "Part number is required"),
-  nomenclature: z.string().min(1, "Nomenclature is required"),
   engine_number: z.string().optional(),
   engine_hours: hoursField,
   component_hours: z.string().optional().refine(
@@ -478,9 +551,6 @@ const step1Schema = z.object({
 const step2Schema = z.object({
   weight_grams: z.preprocess(Number, z.number().positive("Weight must be positive")),
   static_moment_gcm: z.preprocess(Number, z.number().nonnegative("Must be ≥ 0")),
-  height_positions: z.array(z.preprocess(Number, z.number())).optional(),
-  height_values_mm: z.array(z.preprocess(Number, z.number())).optional(),
-  notes: z.string().optional(),
 });
 
 const fullSchema = step1Schema.merge(step2Schema);
@@ -511,7 +581,7 @@ function StepIndicator({ current }: { current: number }) {
                     ? "bg-emerald-500 border-emerald-500 text-white"
                     : active
                     ? "bg-orange-500 border-orange-500 text-white"
-                    : "bg-slate-100 dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400"
+                    : "bg-slate-100 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400"
                 )}
               >
                 {done ? <Check className="w-4 h-4 sm:w-5 sm:h-5" /> : <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
@@ -533,7 +603,7 @@ function StepIndicator({ current }: { current: number }) {
               <div
                 className={cn(
                   "h-0.5 mt-4 sm:mt-5 flex-1 sm:w-24 sm:flex-none mx-1 sm:mx-2",
-                  done ? "bg-emerald-500" : "bg-slate-200 dark:bg-slate-700"
+                  done ? "bg-emerald-500" : "bg-slate-200 dark:bg-background"
                 )}
               />
             )}
@@ -604,7 +674,7 @@ function ScanResult({
     "text-red-500 dark:text-red-400";
 
   return (
-    <div className="mt-2 flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60">
+    <div className="mt-2 flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-background">
       {scan.preview && (
         <img
           src={scan.preview}
@@ -672,24 +742,8 @@ export default function BladeEntryPage() {
   // OCR scan states
   const { folderName, saveImage, saveOcrResult, changeFolder } = useOcrFolder();
 
-  const [serialScan, setSerialScan] = useState<ScanState>(EMPTY_SCAN);
   const [meltScan, setMeltScan] = useState<ScanState>(EMPTY_SCAN);
-  const [serialCameraOpen, setSerialCameraOpen] = useState(false);
   const [meltCameraOpen, setMeltCameraOpen] = useState(false);
-
-  const handleSerialCapture = async (file: File, blob: Blob) => {
-    const preview = URL.createObjectURL(blob);
-    const basename = `ocr-serial-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
-    setSerialScan({ scanning: true, result: null, preview, applied: false });
-    saveImage(blob, basename); // save JPG immediately, fire-and-forget
-    try {
-      const result = await ocrService.scanSerial(file);
-      setSerialScan({ scanning: false, result, preview, applied: false });
-      saveOcrResult(result, basename, "serial_number"); // save JSON sidecar
-    } catch {
-      setSerialScan({ scanning: false, result: null, preview: null, applied: false });
-    }
-  };
 
   const handleMeltCapture = async (file: File, blob: Blob) => {
     const preview = URL.createObjectURL(blob);
@@ -705,12 +759,6 @@ export default function BladeEntryPage() {
     }
   };
 
-  const [heightRows, setHeightRows] = useState<{ pos: number; val: number }[]>([
-    { pos: 1, val: 0 },
-    { pos: 2, val: 0 },
-    { pos: 3, val: 0 },
-  ]);
-
   const {
     register,
     handleSubmit,
@@ -723,8 +771,6 @@ export default function BladeEntryPage() {
   } = useForm<FormValues>({
     resolver: zodResolver(fullSchema),
     defaultValues: {
-      height_positions: [1, 2, 3],
-      height_values_mm: [0, 0, 0],
       blade_type: "LPTR",
     },
     mode: "onTouched",
@@ -744,30 +790,12 @@ export default function BladeEntryPage() {
 
   const { status: scaleStatus, locked: scaleLocked, toggleLock } = useWeighingScale(applyWeight);
 
-  // ── DTI gauge ─────────────────────────────────────────────────────────────
-  const [dtiStation] = useState<string>(
-    () => localStorage.getItem("dti_station") ?? "1"
-  );
-  const { lastReading: dtiReading, connected: dtiConn } = useDTISocket(dtiStation);
-
-  // Which row is receiving live gauge readings (null = all locked / gauge off)
-  const [activeRowIdx, setActiveRowIdx] = useState<number | null>(0);
-  // Per-row locked state — locked rows are frozen and won't be overwritten by gauge
-  const [lockedRows, setLockedRows] = useState<boolean[]>(() => heightRows.map(() => false));
-
-  // Fill the active row with the latest gauge reading (if not locked)
-  useEffect(() => {
-    if (!dtiReading || activeRowIdx === null) return;
-    if (lockedRows[activeRowIdx]) return;
-    setHeightRows(rows =>
-      rows.map((r, i) => i === activeRowIdx ? { ...r, val: dtiReading.value } : r)
-    );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dtiReading]);
-
   const batchNumber = watch("batch_number");
 
-  // Batch lookup — debounced API call to PostgreSQL batch_groups table
+  // Batch lookup — debounced API call to PostgreSQL batch_groups table.
+  // Also auto-assigns the next serial number for this batch + blade type
+  // (each batch numbers its LPTR and HPTR blades 1..90 independently), so
+  // the operator no longer has to type it in.
   useEffect(() => {
     const key = batchNumber?.trim() ?? "";
     if (!key) {
@@ -779,19 +807,23 @@ export default function BladeEntryPage() {
     batchDebounceRef.current = setTimeout(async () => {
       setBatchLookupPending(true);
       try {
-        const result = await bladeService.batchLookup(key);
+        const [result, nextSerial] = await Promise.all([
+          bladeService.batchLookup(key),
+          bladeService.nextSerialNumber(key, bladeType).catch(() => null),
+        ]);
+        const filled = new Set<string>();
         if (result.found) {
-          const filled = new Set<string>();
           if (result.work_order_number) { setValue("work_order_number", result.work_order_number); filled.add("work_order_number"); }
           if (result.part_number)       { setValue("part_number",       result.part_number!);      filled.add("part_number"); }
           if (result.engine_number)     { setValue("engine_number",     result.engine_number!);    filled.add("engine_number"); }
-          if (result.nomenclature)      { setValue("nomenclature",      result.nomenclature!);     filled.add("nomenclature"); }
-          setBatchAutoFilled(true);
-          setAutoFilledFields(filled);
-        } else {
-          setBatchAutoFilled(false);
-          setAutoFilledFields(new Set());
         }
+        if (nextSerial) {
+          setValue("serial_number", nextSerial, { shouldValidate: true });
+          setSerialUnique(null);
+          filled.add("serial_number");
+        }
+        setBatchAutoFilled(result.found);
+        setAutoFilledFields(filled);
       } catch {
         /* silent */
       } finally {
@@ -799,7 +831,7 @@ export default function BladeEntryPage() {
       }
     }, 500);
     return () => { if (batchDebounceRef.current) clearTimeout(batchDebounceRef.current); };
-  }, [batchNumber, setValue]);
+  }, [batchNumber, bladeType, setValue]);
 
   const createMutation = useMutation({
     mutationFn: async (values: FormValues) => {
@@ -812,7 +844,6 @@ export default function BladeEntryPage() {
         work_order_number: values.work_order_number,
         shop_order_number: values.shop_order_number,
         part_number: values.part_number,
-        nomenclature: values.nomenclature,
         blade_type: bladeType,
         ...(values.batch_number ? { batch_number: values.batch_number } : {}),
         ...(values.engine_number ? { engine_number: values.engine_number } : {}),
@@ -824,18 +855,9 @@ export default function BladeEntryPage() {
         measurement_type: "INITIAL",
         weight_grams: values.weight_grams,
         static_moment_gcm: values.static_moment_gcm,
-        height_data: (() => {
-          const filled = heightRows.filter((r) => r.val !== 0 && r.val != null);
-          if (filled.length === 0) return undefined;
-          return Object.fromEntries(heightRows.map((r, i) => [`H${i + 1}`, r.val]));
-        })(),
-        ...(values.notes ? { notes: values.notes } : {}),
       });
 
       // Attach OCR scan images to the blade (non-blocking on failure)
-      if (serialScan.result?.scan_id) {
-        await bladeService.attachOcrScan(blade.id, serialScan.result.scan_id, "serial_number").catch(() => {});
-      }
       if (meltScan.result?.scan_id) {
         await bladeService.attachOcrScan(blade.id, meltScan.result.scan_id, "melt_number").catch(() => {});
       }
@@ -850,7 +872,6 @@ export default function BladeEntryPage() {
           work_order_number: getValues("work_order_number") ?? "",
           part_number:       getValues("part_number")       ?? "",
           engine_number:     getValues("engine_number")     ?? "",
-          nomenclature:      getValues("nomenclature")      ?? "",
         }).catch(() => { /* non-critical */ });
       }
       navigate(`/blades/${blade.id}`);
@@ -859,9 +880,10 @@ export default function BladeEntryPage() {
 
   const checkSerial = async () => {
     const serial = getValues("serial_number");
-    if (!serial) return;
+    const batch = getValues("batch_number");
+    if (!serial || !batch) return;
     setCheckingSerial(true);
-    const unique = await bladeService.checkSerialUnique(serial);
+    const unique = await bladeService.checkSerialUnique(serial, batch, bladeType);
     setSerialUnique(unique);
     setCheckingSerial(false);
   };
@@ -873,7 +895,6 @@ export default function BladeEntryPage() {
       "work_order_number",
       "shop_order_number",
       "part_number",
-      "nomenclature",
       "engine_hours",
     ];
     const step2Fields: (keyof FormValues)[] = [
@@ -900,20 +921,14 @@ export default function BladeEntryPage() {
   const values = getValues();
 
   const inputCls =
-    "h-9 text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400";
+    "h-9 text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400";
 
   const autoFilledInputCls = (field: string) =>
     cn(inputCls, autoFilledFields.has(field) && "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10");
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Camera modals */}
-      <CameraModal
-        open={serialCameraOpen}
-        fieldLabel="Serial Number"
-        onCapture={handleSerialCapture}
-        onClose={() => setSerialCameraOpen(false)}
-      />
       <CameraModal
         open={meltCameraOpen}
         fieldLabel="Melt Number"
@@ -922,7 +937,7 @@ export default function BladeEntryPage() {
       />
 
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -951,14 +966,14 @@ export default function BladeEntryPage() {
         </div>
       </div>
 
-      <div className="w-full px-4 sm:px-6 py-4 max-w-4xl mx-auto flex flex-col">
+      <div className="w-full px-4 sm:px-6 pt-4 pb-16 max-w-4xl mx-auto flex flex-col">
         <div className="flex justify-center mb-4 overflow-x-auto shrink-0">
           <StepIndicator current={step} />
         </div>
 
         {/* Step 1 — Identity */}
         {step === 1 && (
-          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+          <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
             <CardHeader className="py-3 px-4 sm:px-6">
               <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2">
                 <ClipboardList className="w-5 h-5 text-orange-500" />
@@ -1004,29 +1019,17 @@ export default function BladeEntryPage() {
                 >
                   <div className="flex flex-wrap gap-2 items-center">
                     <Input
-                      className={cn(inputCls, "uppercase flex-1 min-w-0")}
+                      className={cn(autoFilledInputCls("serial_number"), "uppercase flex-1 min-w-0")}
                       {...register("serial_number")}
                       onBlur={checkSerial}
-                    />
-                    <OcrButton
-                      scanning={serialScan.scanning}
-                      onClick={() => setSerialCameraOpen(true)}
                     />
                     {checkingSerial && (
                       <Loader2 className="w-4 h-4 animate-spin text-slate-500 dark:text-slate-400 shrink-0" />
                     )}
-                    {serialUnique === true && !serialScan.scanning && (
+                    {serialUnique === true && (
                       <Check className="w-4 h-4 text-emerald-500 shrink-0" />
                     )}
                   </div>
-                  <ScanResult
-                    scan={serialScan}
-                    onUse={(v) => {
-                      setValue("serial_number", v.toUpperCase(), { shouldValidate: true });
-                      setSerialScan((s) => ({ ...s, applied: true }));
-                    }}
-                    onDismiss={() => setSerialScan(EMPTY_SCAN)}
-                  />
                 </FieldRow>
 
                 {/* Melt Number */}
@@ -1063,11 +1066,6 @@ export default function BladeEntryPage() {
                   <Input className={autoFilledInputCls("part_number")} {...register("part_number")} />
                 </FieldRow>
 
-                {/* Nomenclature */}
-                <FieldRow label="Nomenclature" error={errors.nomenclature?.message} required>
-                  <Input className={autoFilledInputCls("nomenclature")} {...register("nomenclature")} />
-                </FieldRow>
-
                 {/* Blade type — LPTR vs HPTR */}
                 <FieldRow label="Blade Type" required>
                   <div className="grid grid-cols-2 gap-2">
@@ -1080,7 +1078,7 @@ export default function BladeEntryPage() {
                           "rounded-xl border-2 py-3 px-4 text-sm font-semibold transition-all",
                           bladeType === t
                             ? "border-orange-500 bg-orange-500 text-white shadow-md"
-                            : "border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-700/50 hover:border-orange-400"
+                            : "border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-background hover:border-orange-400"
                         )}
                       >
                         <span className="block text-base font-bold">{t}</span>
@@ -1125,7 +1123,7 @@ export default function BladeEntryPage() {
 
         {/* Step 2 — Measurements */}
         {step === 2 && (
-          <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+          <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
             <CardHeader>
               <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2">
                 <Ruler className="w-5 h-5 text-orange-500" />
@@ -1296,152 +1294,6 @@ export default function BladeEntryPage() {
                 </FieldRow>
 
               </div>
-
-              {/* Height data */}
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-                  <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium flex flex-wrap items-center gap-2">
-                    Height Positions (mm)
-                    {dtiConn ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                        <Wifi className="w-3 h-3" />
-                        DTI Live
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400">
-                        <WifiOff className="w-3 h-3" />
-                        DTI offline
-                      </span>
-                    )}
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="border-2 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
-                      onClick={() => {
-                        setHeightRows((rows) => [
-                          ...rows,
-                          { pos: (rows[rows.length - 1]?.pos ?? 0) + 1, val: 0 },
-                        ]);
-                        setLockedRows((prev) => [...prev, false]);
-                      }}
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Position
-                    </Button>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  {heightRows.map((row, idx) => {
-                    const isActive = dtiConn && activeRowIdx === idx;
-                    const isLocked = lockedRows[idx] ?? false;
-                    return (
-                      <div
-                        key={idx}
-                        className={cn(
-                          "flex flex-wrap items-center gap-2 sm:gap-3 p-2 sm:p-1.5 rounded-lg transition-colors",
-                          dtiConn && !isLocked && "cursor-pointer",
-                          isActive && !isLocked && "bg-emerald-50/40 dark:bg-emerald-900/10 ring-1 ring-emerald-400",
-                          isLocked && dtiConn && "bg-amber-50/30 dark:bg-amber-900/10",
-                        )}
-                        onClick={() => { if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
-                      >
-                        <span className="text-slate-500 dark:text-slate-400 text-sm w-full sm:w-20 shrink-0">
-                          Position {idx + 1}
-                        </span>
-                        <Input
-                          type="number"
-                          value={row.pos}
-                          onChange={(e) =>
-                            setHeightRows((rows) =>
-                              rows.map((r, i) => i === idx ? { ...r, pos: Number(e.target.value) } : r)
-                            )
-                          }
-                          className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white w-20 sm:w-32"
-                        />
-                        <span className="text-slate-500 dark:text-slate-400 text-sm shrink-0">→</span>
-                        <Input
-                          type="number"
-                          step="0.001"
-                          value={row.val}
-                          readOnly={isLocked && dtiConn}
-                          onChange={(e) =>
-                            setHeightRows((rows) =>
-                              rows.map((r, i) => i === idx ? { ...r, val: Number(e.target.value) } : r)
-                            )
-                          }
-                          onClick={(e) => { e.stopPropagation(); if (dtiConn && !isLocked) setActiveRowIdx(idx); }}
-                          placeholder="Value (mm)"
-                          className={cn(
-                            "bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white flex-1 min-w-[90px] transition-colors",
-                            isActive && !isLocked
-                              ? "border-emerald-400 bg-emerald-50/40 dark:bg-emerald-900/10"
-                              : isLocked && dtiConn
-                              ? "border-amber-400 bg-amber-50/40 dark:bg-amber-900/10"
-                              : "border-slate-300 dark:border-slate-600",
-                          )}
-                        />
-                        {dtiConn && (
-                          <button
-                            type="button"
-                            title={isLocked ? "Unlock: resume live reading" : "Lock: freeze this reading"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isLocked) {
-                                setLockedRows((prev) => { const n = [...prev]; n[idx] = false; return n; });
-                                setActiveRowIdx(idx);
-                              } else {
-                                setLockedRows((prev) => { const n = [...prev]; n[idx] = true; return n; });
-                                const next = heightRows.findIndex((_, i) => i > idx && !(lockedRows[i] ?? false));
-                                setActiveRowIdx(next === -1 ? null : next);
-                              }
-                            }}
-                            className={cn(
-                              "shrink-0 flex items-center justify-center w-9 h-9 rounded-lg border-2 transition-colors",
-                              isLocked
-                                ? "border-amber-400 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
-                                : "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
-                            )}
-                          >
-                            {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                          </button>
-                        )}
-                        {idx > 0 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setHeightRows((rows) => rows.filter((_, i) => i !== idx));
-                              setLockedRows((prev) => prev.filter((_, i) => i !== idx));
-                              setActiveRowIdx((prev) => {
-                                if (prev === null) return null;
-                                if (prev === idx) return Math.max(0, idx - 1);
-                                if (prev > idx) return prev - 1;
-                                return prev;
-                              });
-                            }}
-                            className="text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <FieldRow label="Inspection Remarks">
-                <Textarea
-                  placeholder="Enter any inspection notes or observations…"
-                  className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[100px]"
-                  {...register("notes")}
-                />
-              </FieldRow>
             </CardContent>
           </Card>
         )}
@@ -1449,7 +1301,7 @@ export default function BladeEntryPage() {
         {/* Step 3 — Review */}
         {step === 3 && (
           <div className="space-y-4">
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
               <CardHeader>
                 <CardTitle className="text-slate-900 dark:text-white text-base">Blade Identity</CardTitle>
               </CardHeader>
@@ -1463,7 +1315,6 @@ export default function BladeEntryPage() {
                       ["Work Order", values.work_order_number],
                       ["Shop Order", values.shop_order_number],
                       ["Part Number", values.part_number],
-                      ["Nomenclature", values.nomenclature],
                       ["Blade Type", bladeType],
                       ["Engine Number", values.engine_number ?? "—"],
                       ["Engine Hours", values.engine_hours ?? "—"],
@@ -1479,7 +1330,7 @@ export default function BladeEntryPage() {
               </CardContent>
             </Card>
 
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
               <CardHeader>
                 <CardTitle className="text-slate-900 dark:text-white text-base">Measurements</CardTitle>
               </CardHeader>
@@ -1500,12 +1351,6 @@ export default function BladeEntryPage() {
                     </div>
                   ))}
                 </dl>
-                {values.notes && (
-                  <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-                    <dt className="text-slate-500 dark:text-slate-400 text-sm mb-1">Remarks</dt>
-                    <dd className="text-slate-900 dark:text-white text-sm">{values.notes}</dd>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
@@ -1562,9 +1407,6 @@ export default function BladeEntryPage() {
         </div>
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   );
 }

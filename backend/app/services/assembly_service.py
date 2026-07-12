@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.assembly_blade_record import AssemblyBladeRecord
 from app.models.assembly_receipt import AssemblyBatchReceipt
 from app.models.blade import Blade
-from app.models.enums import AssemblyVerificationStatus, BladeStatus
+from app.models.enums import AssemblyVerificationStatus, BladeStatus, BladeType
 from app.models.measurement import Measurement
 from app.models.user import User
 from app.repositories.assembly_repository import AssemblyRepository
@@ -411,6 +411,42 @@ class AssemblyService:
         assembly_rejected = status_counts.get(BladeStatus.REJECTED, 0)
         pending = assembly_received  # still awaiting scan
 
+        # HPTR never leaves OH — its "set making ready" gate is simply "every
+        # HPTR blade in the batch has reached MEASUREMENTS_RECORDED (or
+        # beyond, since blades already slotted/balanced still count as
+        # measured)". Computed directly from Blade rows, not from the
+        # Assembly-only AssemblyBatchReceipt/total_expected snapshot.
+        from sqlalchemy import func, select
+
+        hptr_total = (
+            await self.db.execute(
+                select(func.count(Blade.id)).where(
+                    Blade.batch_number == batch_number,
+                    Blade.blade_type == BladeType.HPTR,
+                    Blade.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        hptr_measurements_recorded = (
+            await self.db.execute(
+                select(func.count(Blade.id)).where(
+                    Blade.batch_number == batch_number,
+                    Blade.blade_type == BladeType.HPTR,
+                    Blade.deleted_at.is_(None),
+                    Blade.status.in_(
+                        [
+                            BladeStatus.MEASUREMENTS_RECORDED,
+                            BladeStatus.SLOT_ASSIGNED,
+                            BladeStatus.BALANCING_IN_PROGRESS,
+                            BladeStatus.BALANCING_COMPLETED,
+                            BladeStatus.FINAL_VERIFICATION,
+                            BladeStatus.COMPLETED,
+                        ]
+                    ),
+                )
+            )
+        ).scalar_one()
+
         return BatchProgressResponse(
             batch_number=batch_number,
             total_expected=total_expected,
@@ -419,4 +455,7 @@ class AssemblyService:
             assembly_rejected=assembly_rejected,
             pending=pending,
             set_making_ready=(assembly_verified >= total_expected),
+            hptr_total=hptr_total,
+            hptr_measurements_recorded=hptr_measurements_recorded,
+            hptr_set_making_ready=(hptr_total > 0 and hptr_measurements_recorded >= hptr_total),
         )

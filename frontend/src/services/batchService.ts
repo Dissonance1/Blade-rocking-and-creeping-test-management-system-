@@ -8,7 +8,8 @@ export interface BatchEvent {
     | "RECEIVED_BY_ASSEMBLY"
     | "ACCEPTED"
     | "REJECTED"
-    | "MODIFIED";
+    | "MODIFIED"
+    | "SLOTS_ALLOCATED";
   action_by: { id: string; username: string; full_name: string } | null;
   remarks: string | null;
   changes: Record<string, unknown> | null;
@@ -21,13 +22,16 @@ export type BatchStatus =
   | "RECEIVED_BY_ASSEMBLY"
   | "ACCEPTED"
   | "REJECTED"
-  | "MODIFIED";
+  | "MODIFIED"
+  | "SLOTS_ALLOCATED";
 
 export interface BatchSummary {
   batch_number: string;
   blade_count: number;
   blades_sent: number;
   blades_completed: number;
+  hptr_count: number;
+  hptr_slotted_count: number;
   current_status: BatchStatus;
   current_status_label: string;
   first_blade_at: string | null;
@@ -48,6 +52,24 @@ export interface BatchSendResult {
   total_blades: number;
   sent_count: number;
   skipped_count: number;
+  /** HPTR blades in the batch — always skipped, since HPTR never leaves OH. */
+  hptr_skipped_count: number;
+  message: string;
+}
+
+export interface HptrSlotAssignment {
+  blade_id: string;
+  slot_number: number;
+}
+
+export interface HptrAssignSlotResult {
+  batch_number: string;
+  blade_type: "HPTR";
+  blades_assigned: number;
+  start_slot: number;
+  w1_total: number;
+  w2_total: number;
+  weight_diff: number;
   message: string;
 }
 
@@ -133,7 +155,33 @@ export const batchService = {
   ): Promise<{ batch_number: string; blades_assigned: number; message: string }> => {
     const { data } = await api.post(
       `/batches/${batchNumber}/assign-slot`,
-      { imbalance_slot: imbalanceSlot, total_slots: totalSlots }
+      { blade_type: "LPTR", imbalance_slot: imbalanceSlot, total_slots: totalSlots }
+    );
+    return data;
+  },
+
+  /**
+   * Persists the operator-confirmed HPTR blade-to-slot mapping. Unlike LPTR,
+   * HPTR allocation isn't computed server-side — the Slot Allocation/Set
+   * Making tabs compute the mapping (and any manual W1/W2 swaps) client-side
+   * via `hptrBalancing.ts`, and this call just saves the final result.
+   */
+  assignHptrSlots: async (
+    batchNumber: string,
+    startSlot: number,
+    totalSlots: number,
+    assignments: HptrSlotAssignment[],
+    unbalanceValue?: number
+  ): Promise<HptrAssignSlotResult> => {
+    const { data } = await api.post(
+      `/batches/${batchNumber}/assign-slot`,
+      {
+        blade_type: "HPTR",
+        start_slot: startSlot,
+        total_slots: totalSlots,
+        unbalance_value: unbalanceValue,
+        assignments,
+      }
     );
     return data;
   },
@@ -142,6 +190,19 @@ export const batchService = {
     const { data } = await api.get<BladeRockingCreepEntry[]>(
       `/batches/${batchNumber}/rocking-creep`
     );
+    return data;
+  },
+
+  /**
+   * Physical balancing testing found the set still unbalanced — deactivates
+   * the batch's saved HPTR slot allocation and resets the blades to
+   * Measurements Recorded so OH can redo Slot Allocation from scratch.
+   */
+  rejectHptrSlots: async (
+    batchNumber: string,
+    reason?: string
+  ): Promise<{ batch_number: string; blades_reset: number; message: string }> => {
+    const { data } = await api.post(`/batches/${batchNumber}/reject-hptr-slots`, { reason });
     return data;
   },
 };

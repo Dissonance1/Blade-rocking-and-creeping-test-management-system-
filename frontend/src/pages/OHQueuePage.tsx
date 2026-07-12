@@ -15,10 +15,8 @@ import {
   Send,
   AlertTriangle,
   Trash2,
-  Check,
 } from "lucide-react";
 import { OhQueueIcon } from "@/components/common/CustomIcons";
-import Footer from "@/layouts/components/Navbar/Footer";
 import { formatDistanceToNow, differenceInDays, parseISO } from "date-fns";
 import { toast } from "sonner";
 
@@ -124,7 +122,7 @@ function SendBatchDialog({
 
   return (
     <Dialog open={!!batchNumber} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 max-w-md">
+      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 max-w-md">
         <DialogHeader>
           <DialogTitle className="text-slate-900 dark:text-white flex items-center gap-2">
             <Send className="w-5 h-5 text-violet-500" />
@@ -134,7 +132,7 @@ function SendBatchDialog({
 
         <div className="space-y-4 py-2">
           {/* Batch info */}
-          <div className="rounded-lg bg-slate-100 dark:bg-slate-700/40 p-3 text-sm space-y-1">
+          <div className="rounded-lg bg-slate-100 dark:bg-background p-3 text-sm space-y-1">
             <div className="flex justify-between">
               <span className="text-slate-500 dark:text-slate-400">Batch</span>
               <span className="font-semibold font-mono text-orange-500 dark:text-orange-300">
@@ -160,7 +158,7 @@ function SendBatchDialog({
 
           {/* Progress bar — only when there are sendable blades */}
           {!alreadySent && (
-            <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+            <div className="h-2 rounded-full bg-slate-200 dark:bg-background overflow-hidden">
               <div
                 className={cn("h-full rounded-full transition-all", isFull ? "bg-emerald-500" : "bg-amber-400")}
                 style={{ width: `${Math.min((bladeCount / BATCH_MAX) * 100, 100)}%` }}
@@ -170,7 +168,7 @@ function SendBatchDialog({
 
           {/* Already sent to Assembly */}
           {alreadySent && (
-            <div className="flex items-start gap-2 rounded-lg bg-slate-100 dark:bg-slate-700/40 border border-slate-300 dark:border-slate-600 p-3 text-sm">
+            <div className="flex items-start gap-2 rounded-lg bg-slate-100 dark:bg-background border border-slate-300 dark:border-slate-600 p-3 text-sm">
               <CheckCircle2 className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
               <p className="text-slate-600 dark:text-slate-300">
                 All blades in this batch have already been sent to Assembly.
@@ -375,9 +373,9 @@ export default function OHQueuePage() {
       .filter((b) => !batchFilter || b.batch_number === batchFilter).length;
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5 shadow-sm">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -422,7 +420,7 @@ export default function OHQueuePage() {
               placeholder="Search serial or melt number…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
+              className="pl-9 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
             />
           </div>
 
@@ -432,7 +430,7 @@ export default function OHQueuePage() {
             <select
               value={batchFilter}
               onChange={(e) => setBatchFilter(e.target.value)}
-              className="rounded-md border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px]"
+              className="rounded-md border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px]"
             >
               <option value="">All Batches</option>
               {batchNumbers.map((bn) => (
@@ -477,6 +475,9 @@ export default function OHQueuePage() {
                   const pct = Math.min((batch.blade_count / BATCH_MAX) * 100, 100);
                   const isFull = batch.blade_count >= BATCH_MAX;
                   const remaining = BATCH_MAX - batch.blade_count;
+                  // HPTR blades never leave OH — a batch made up entirely of
+                  // HPTR blades has nothing to send to Assembly.
+                  const isPureHptr = batch.blade_count > 0 && batch.hptr_count === batch.blade_count;
                   return (
                     <div
                       key={batch.batch_number}
@@ -484,7 +485,7 @@ export default function OHQueuePage() {
                         "rounded-xl border shadow-sm p-4",
                         isRejected
                           ? "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30"
-                          : "bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60"
+                          : "bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
                       )}
                     >
                       <div className="flex items-start justify-between mb-1.5">
@@ -518,7 +519,7 @@ export default function OHQueuePage() {
                       </div>
 
                       {!isRejected && (
-                        <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden mb-3">
+                        <div className="h-1.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden mb-3">
                           <div
                             className={cn("h-full rounded-full transition-all", isFull ? "bg-emerald-500" : "bg-orange-400")}
                             style={{ width: `${pct}%` }}
@@ -532,7 +533,18 @@ export default function OHQueuePage() {
                         </p>
                       )}
 
-                      {!isRejected && (
+                      {!isRejected && isPureHptr && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full text-xs h-8 border-2 border-orange-400 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-500/10"
+                          onClick={() => navigate("/oh/slot-allocation")}
+                        >
+                          <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
+                          HPTR stays in OH — go to Slot Allocation
+                        </Button>
+                      )}
+                      {!isRejected && !isPureHptr && (
                         <Button
                           size="sm"
                           className={cn(
@@ -557,7 +569,7 @@ export default function OHQueuePage() {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 mb-5 rounded-xl shadow-sm">
+          <TabsList className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700 h-auto p-1 mb-5 rounded-xl shadow-sm">
             {TABS.map((tab) => (
               <TabsTrigger
                 key={tab.id}
@@ -566,7 +578,7 @@ export default function OHQueuePage() {
               >
                 {tab.icon}
                 {tab.label}
-                <span className="ml-1 rounded-full bg-slate-100 dark:bg-slate-700 data-[state=active]:bg-orange-400 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300">
+                <span className="ml-1 rounded-full bg-slate-100 dark:bg-background data-[state=active]:bg-orange-400 px-1.5 py-0.5 text-xs tabular-nums text-slate-600 dark:text-slate-300">
                   {tabCount(tab.statuses)}
                 </span>
               </TabsTrigger>
@@ -575,7 +587,7 @@ export default function OHQueuePage() {
 
           {TABS.map((tab) => (
             <TabsContent key={tab.id} value={tab.id}>
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+              <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                 <CardContent className="p-0">
                   {!batchFilter ? (
                     <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
@@ -598,7 +610,7 @@ export default function OHQueuePage() {
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm whitespace-nowrap">
-                        <thead className="bg-slate-800 dark:bg-slate-700">
+                        <thead className="bg-slate-800 dark:bg-background">
                           <tr>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase w-8">
                               <input
@@ -624,6 +636,9 @@ export default function OHQueuePage() {
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
                               Status
+                            </th>
+                            <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
+                              Type
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
                               Batch
@@ -654,14 +669,14 @@ export default function OHQueuePage() {
                                 className={cn(
                                   "transition-colors hover:bg-blue-50 dark:hover:bg-slate-700/30",
                                   rowIdx % 2 === 0
-                                    ? "bg-white dark:bg-slate-800/40"
-                                    : "bg-slate-50 dark:bg-slate-800/20"
+                                    ? "bg-white dark:bg-background"
+                                    : "bg-slate-50 dark:bg-background"
                                 )}
                               >
                                 <td className="px-4 py-3">
                                   <input
                                     type="checkbox"
-                                    className="rounded border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700"
+                                    className="rounded border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background"
                                     checked={selected.has(blade.id)}
                                     onChange={() => toggleSelect(blade.id)}
                                   />
@@ -691,6 +706,16 @@ export default function OHQueuePage() {
                                       <span className="text-[10px] text-violet-500 font-medium">Ready to send</span>
                                     )}
                                   </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span className={cn(
+                                    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+                                    blade.blade_type === "HPTR"
+                                      ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                                      : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                                  )}>
+                                    {blade.blade_type ?? "LPTR"}
+                                  </span>
                                 </td>
                                 <td className="px-4 py-3">
                                   {blade.batch_number ? (
@@ -793,10 +818,6 @@ export default function OHQueuePage() {
             </TabsContent>
           ))}
         </Tabs>
-      </div>
-
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
       </div>
 
       {/* Delete blade confirmation dialog */}

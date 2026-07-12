@@ -1,4 +1,3 @@
-import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { formatDistanceToNow, parseISO, isToday, isYesterday } from "date-fns";
@@ -45,7 +44,7 @@ function NotifIcon({ type }: { type: Notification["notification_type"] }) {
       );
     default:
       return (
-        <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 flex items-center justify-center shrink-0">
+        <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-background text-slate-500 flex items-center justify-center shrink-0">
           <Bell className="w-4 h-4" />
         </div>
       );
@@ -78,10 +77,12 @@ export function NotificationsDropdown() {
   const storeMarkAllRead = useNotificationStore((s) => s.markAllAsRead);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
 
+  // Only unread notifications are shown — once read, an item disappears
+  // rather than sticking around greyed out.
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["notifications"],
     queryFn: async () => {
-      const data = await notificationService.list();
+      const data = await notificationService.list({ unread_only: true, limit: 50 });
       // Ensure latest notifications are at the top
       const sorted = [...data].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setNotifications(sorted);
@@ -94,7 +95,10 @@ export function NotificationsDropdown() {
     mutationFn: (id: string) => notificationService.markRead(id),
     onSuccess: (_, id) => {
       storeMarkAsRead(id);
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      queryClient.setQueryData<Notification[]>(["notifications"], (old) =>
+        (old ?? []).filter((n) => n.id !== id)
+      );
+      queryClient.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
     },
   });
 
@@ -102,7 +106,8 @@ export function NotificationsDropdown() {
     mutationFn: notificationService.markAllRead,
     onSuccess: () => {
       storeMarkAllRead();
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      queryClient.setQueryData<Notification[]>(["notifications"], []);
+      queryClient.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
     },
   });
 
@@ -119,7 +124,7 @@ export function NotificationsDropdown() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative h-11 w-11 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+          className="relative h-11 w-11 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-background dark:text-slate-300 dark:hover:bg-slate-600"
           aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         >
           <BellIcon className="text-2xl sm:text-[26px] leading-none" />
@@ -131,7 +136,7 @@ export function NotificationsDropdown() {
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-80 sm:w-96 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xl rounded-xl p-0">
+      <DropdownMenuContent align="end" className="w-80 sm:w-96 bg-white dark:bg-background border-slate-200 dark:border-slate-800 shadow-xl rounded-xl p-0">
         <DropdownMenuLabel className="font-normal p-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BellIcon className="text-[22px] text-orange-500 shrink-0" />
@@ -180,7 +185,7 @@ export function NotificationsDropdown() {
               {Object.entries(groups).map(([date, items], groupIdx) => (
                 <div key={date}>
                   {groupIdx > 0 && <DropdownMenuSeparator className="bg-slate-100 dark:bg-slate-800 m-0" />}
-                  <div className="px-3 py-1.5 bg-slate-50/50 dark:bg-black/10 border-y border-slate-100 dark:border-slate-800/60 first:border-t-0 sticky top-0 z-10 backdrop-blur-md">
+                  <div className="px-3 py-1.5 bg-slate-50/50 dark:bg-background border-y border-slate-100 dark:border-slate-800/60 first:border-t-0 sticky top-0 z-10 backdrop-blur-md">
                     <p className="text-slate-500 dark:text-slate-400 text-[10px] font-bold uppercase tracking-wider">
                       {date}
                     </p>

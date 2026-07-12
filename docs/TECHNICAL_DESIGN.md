@@ -1,7 +1,7 @@
 # Technical Design Document
 ## Blade Rocking & Creep Test Management System
 
-**Version:** 1.3  
+**Version:** 1.5  
 **Owner:** Meridian Data Labs  
 **Contact:** amit@meridiandatalabs.com
 
@@ -53,7 +53,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 - Blade registration and identity verification (serial number, melt number, part number)
 - Multi-stage dimensional measurement capture with automated static moment calculation
 - Batch-level tracking: **180 blades per batch** (90 LPTR + 90 HPTR) moving between OH and Assembly
-- OCR scan of blade markings (serial, melt number) with mismatch detection — backend-only, no camera bridge script
+- OCR scan of blade markings (serial, melt number) with mismatch detection — dual-language PP-OCRv4 engine (English + Cyrillic); optional Luxonis OAK-1 industrial camera bridge on OH station
 - Live weight capture from Adam Equipment iScale i-04 (0.1 g) via serial bridge
 - Live DTI readings from Sylvac BT gauge (0.001 mm) via serial bridge
 - Assembly verification loop: receive batch → scan/validate vs OH records → accept / modify / reject per blade
@@ -75,7 +75,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
   ┌──────────────────────────────────────────────────────────────┐
   │  701 Hanger — OH Measurement Station                         │
   │                                                              │
-  │  Hardware: iScale i-04 · Sylvac BT DTI · OCR Camera (USB)   │
+  │  Hardware: iScale i-04 · Sylvac BT DTI · Luxonis OAK-1 (opt)│
   │                                                              │
   │  ┌───────────────┐   ┌─────────────────────────────────┐    │
   │  │  React 18 SPA │   │  FastAPI + Celery + NGINX        │    │
@@ -86,6 +86,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
   │  Bridge scripts:     │  └────────────┘  └───────────┘  │    │
   │  weighing_bridge.py  └─────────────────────────────────┘    │
   │  dti_bridge.py                                               │
+  │  oak1_camera_service.py  (if OAK-1 attached)                │
   └──────────────────────────────┬───────────────────────────────┘
                                  │
                           LAN (TCP/IP)
@@ -148,7 +149,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 | Task Queue | Celery 5.4 + Redis | Background report generation |
 | State Machine | Custom (workflows/state_machine.py) | Blade status transition enforcement |
 | Notifications | WebSocket (in-memory pool) + DB | Real-time push + persistent unread count |
-| OCR | Pluggable backend (mock / Tesseract / PaddleOCR) | Blade marking extraction — no camera bridge script |
+| OCR | PP-OCRv4 dual-language (English + Cyrillic, local models) | Blade marking extraction; OAK-1 companion service provides frames |
 | Hardware | pyserial | iScale i-04 weighing + Sylvac BT DTI serial bridges |
 
 ### Request Lifecycle
@@ -217,6 +218,7 @@ blead_rocking/
 │   │   │   └── state_machine.py     # ALLOWED_TRANSITIONS + WorkflowEngine
 │   │   ├── notifications/           # WebSocket manager + persistence
 │   │   ├── ocr/                     # Pluggable OCR provider registry
+│   │   │   └── models/ppocrv4/      # Bundled PP-OCRv4 weights (det, cls, rec_en, rec_ru ~26 MB)
 │   │   ├── reports/                 # Excel/PDF generator + Celery tasks
 │   │   ├── middleware/              # Audit logging, rate limiting
 │   │   └── tests/                   # pytest suite (conftest + 5 test files)
@@ -229,11 +231,11 @@ blead_rocking/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
 │   │   ├── routes/
-│   │   │   └── index.tsx            # All 17 application routes
+│   │   │   └── index.tsx            # All 18 application routes
 │   │   ├── components/              # Reusable UI (Radix UI + Tailwind)
-│   │   ├── pages/                   # Route-level views (17 pages)
+│   │   ├── pages/                   # Route-level views (18 pages)
 │   │   ├── hooks/                   # Custom React hooks
-│   │   ├── services/                # Axios API client + React Query
+│   │   ├── services/                # Axios API client + React Query (incl. oak1Camera.ts)
 │   │   ├── stores/                  # Zustand state
 │   │   └── types/                   # TypeScript type definitions
 │   ├── package.json
@@ -243,6 +245,9 @@ blead_rocking/
 │   ├── deploy.sh                    # Production deployment helper
 │   ├── dti_bridge.py               # DTI gauge RS-232 → API bridge
 │   ├── manage_batches.py            # Batch management CLI
+│   ├── oak1_camera_service.py      # OAK-1 camera companion service (Flask, port 8089)
+│   ├── oak1_ocr_test.py            # OAK-1 OCR validation/test script
+│   ├── oak1_requirements.txt       # OAK-1 venv deps (depthai, flask, flask-cors, cv2)
 │   ├── reset_and_seed_full.py       # Full DB reset + re-seed
 │   ├── seed_data.py                 # Dev data seeder
 │   ├── seed_demo_data.py            # Demo data for presentations
@@ -301,7 +306,7 @@ User ◄──► Role (user_roles junction)                         ◄┘
 | `component_hours` | VARCHAR(64) | Blade individual hours at removal |
 | `batch_number` | VARCHAR(64) | Grouping key for assembly batches |
 | `blade_type` | ENUM | `LPTR` or `HPTR` |
-| `status` | ENUM | 13 states (see state machine) |
+| `status` | ENUM | 15 states (see state machine) |
 | `current_station_id` | UUID FK → stations | |
 | `created_by_id` | UUID FK → users | |
 | `assigned_to_id` | UUID FK → users | |
@@ -346,6 +351,28 @@ Four built-in roles:
 | `QA_VIEWER` | Read-only access across all entities |
 
 User fields include `last_login` timestamp (updated on each successful authentication).
+
+### AssemblyBladeRecord
+
+Tracks per-blade verification state during the Assembly receipt process. Created when a batch is received at 720 Hanger. One record per blade per batch.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `blade_id` | UUID FK | |
+| `batch_number` | VARCHAR(64) | |
+| `status` | ENUM | `AssemblyVerificationStatus`: PENDING, ACCEPTED, MODIFIED, REJECTED |
+| `qr_scan_result` | VARCHAR(64) | Serial number scanned by QR gun |
+| `ocr_blade_number` | VARCHAR(64) | Blade number from OCR |
+| `assembly_weight` | NUMERIC | Weight measured at Assembly |
+| `assembly_dti_h1`–`h4` | NUMERIC | Height positions measured at Assembly |
+| `oh_weight` | NUMERIC | OH FINAL weight (copied at receipt time) |
+| `oh_dti_h1`–`h4` | NUMERIC | OH FINAL DTI values (copied at receipt time) |
+| `weight_delta` | NUMERIC | `assembly_weight - oh_weight` |
+| `verification_notes` | TEXT | Operator notes on discrepancies |
+| `verified_by_id` | UUID FK → users | |
+| `verified_at` | TIMESTAMP | |
+
+`MODIFIED` status is set when accept is called with field overrides that differ from OH values.
 
 ### SlotAllocation
 
@@ -452,7 +479,11 @@ Defined in `backend/app/workflows/state_machine.py`.
 ```
 CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
                                                         │
-                                              SLOT_ASSIGNED
+                                             ASSEMBLY_RECEIVED       ← POST /assembly/batches/.../receive
+                                                        │
+                                             ASSEMBLY_VERIFIED       ← POST /assembly/blades/.../accept
+                                                        │
+                                              SLOT_ASSIGNED          ← POST /batches/.../assign-slot (HAL)
                                                         │
                                            BALANCING_IN_PROGRESS
                                                         │
@@ -464,10 +495,14 @@ CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
                                                         │                    │
                                                COMPLETED ◄───────────────────┘
 
-Any rejectable state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
-                                                           → SENT_TO_ASSEMBLY
+ASSEMBLY_RECEIVED → REJECTED   (via POST /assembly/blades/.../reject)
+
+Any other active state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
+                                                              → SENT_TO_ASSEMBLY
 Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORDED
 ```
+
+**15 total states:** CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, SENT_TO_ASSEMBLY, ASSEMBLY_RECEIVED, ASSEMBLY_VERIFIED, SLOT_ASSIGNED, BALANCING_IN_PROGRESS, BALANCING_COMPLETED, RETURNED_TO_OH, FINAL_VERIFICATION, COMPLETED, REJECTED, ON_HOLD, REOPENED.
 
 ### Allowed Transitions Matrix
 
@@ -480,7 +515,10 @@ Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORD
 | MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | |
 | MEASUREMENTS_RECORDED | REJECTED | Any operator | |
 | MEASUREMENTS_RECORDED | ON_HOLD | Any operator | |
-| SENT_TO_ASSEMBLY | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | Via HAL batch assign |
+| SENT_TO_ASSEMBLY | ASSEMBLY_RECEIVED | System | Via POST /assembly/batches/.../receive |
+| ASSEMBLY_RECEIVED | ASSEMBLY_VERIFIED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../accept |
+| ASSEMBLY_RECEIVED | REJECTED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../reject |
+| ASSEMBLY_VERIFIED | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | Via HAL batch assign-slot |
 | SLOT_ASSIGNED | BALANCING_IN_PROGRESS | ASSEMBLY_OPERATOR | |
 | BALANCING_IN_PROGRESS | BALANCING_COMPLETED | ASSEMBLY_OPERATOR | |
 | BALANCING_COMPLETED | RETURNED_TO_OH | ASSEMBLY_OPERATOR | |
@@ -515,105 +553,118 @@ This section describes the end-to-end workflow that the **Assembly Station (720 
 
 ```
 POST /assembly/batches/{batch_number}/receive
-→ Marks batch as RECEIVED
+→ All blades in batch: SENT_TO_ASSEMBLY → ASSEMBLY_RECEIVED
+→ Creates AssemblyBladeRecord per blade (copies OH FINAL measurements)
 → Creates BatchEvent(event_type=RECEIVED_BY_ASSEMBLY)
 → Notifies OH_OPERATORs
 
 GET /assembly/batches/{batch_number}/progress
-→ Returns per-blade verification status (verified / pending / rejected count)
+→ Returns { total_expected, assembly_received, assembly_verified, rejected }
+   total_expected falls back to 180 if no receipt record exists
 ```
 
-### Step 2 — Verify Each Blade
+### Step 2 — Verify Each Blade (assessment only — no status change)
 
-The operator QR-scans each blade's barcode or manually selects it, then the system compares Assembly measurements against the original OH records:
+The operator QR-scans each blade, enters Assembly-side measurements, and calls verify. **This step does NOT change `blade.status`** — it only updates the `AssemblyBladeRecord` and returns a suggested action.
 
 ```
-POST /assembly/blades/{blade_id}/verify
-body: { weight_grams, height_data, serial_number_scan }
+POST /assembly/blades/{blade_id}/verify?batch_number=BXXX
+body: { assembly_weight, assembly_dti_h1..h4, qr_scan_result, ocr_blade_number }
 
 AssemblyService.verify_blade():
-  1. Fetch OH FINAL measurement (weight, DTI H1–Hn)
-  2. Compare weight: tolerance ±0.5 g
-  3. Compare height positions: tolerance ±0.010 mm per position
-  4. Check serial_number_scan matches blade.serial_number (QR/OCR)
-  5. Return suggested action: ACCEPT | REVIEW | REJECT
+  1. Load AssemblyBladeRecord (contains oh_weight, oh_dti_h1..h4 copied at receipt)
+  2. Compare assembly_weight vs oh_weight: tolerance ±0.5 g
+  3. Compare each assembly_dti_Hn vs oh_dti_Hn: tolerance ±0.010 mm
+  4. Check qr_scan_result matches blade.serial_number
+  5. Check ocr_blade_number matches blade.serial_number
+  6. Compute weight_delta; set verification_notes for any out-of-tolerance field
+  7. Return suggested_action:
+       "REJECT"  — identity mismatch (QR or OCR serial doesn't match)
+       "ACCEPT"  — all values within tolerance
+       "REVIEW"  — within tolerance but discrepancies warrant human sign-off
+  Blade remains ASSEMBLY_RECEIVED until accept or reject is called.
 ```
 
-### Step 3 — Accept, Modify, or Reject
+### Step 3 — Accept or Reject (status-changing)
 
 ```
-POST /assembly/blades/{blade_id}/accept
-  → Optional field overrides (weight, height_data) if within tolerance
-  → If overrides present: creates BatchEvent(event_type=MODIFIED)
-  → Transitions blade: SENT_TO_ASSEMBLY → ASSEMBLY_VERIFIED (internal sub-state)
+POST /assembly/blades/{blade_id}/accept?batch_number=BXXX
+  → body: optional field overrides { assembly_weight, assembly_dti_h1..h4 }
+  → AssemblyBladeRecord.status → ACCEPTED (or MODIFIED if overrides differ from OH)
+  → blade.status: ASSEMBLY_RECEIVED → ASSEMBLY_VERIFIED
+  → Note: station_id is NOT recorded on this workflow log entry (known limitation)
 
-POST /assembly/blades/{blade_id}/reject
+POST /assembly/blades/{blade_id}/reject?batch_number=BXXX
   → body: { rejection_reason_id, remarks }
-  → Transitions blade → REJECTED
+  → AssemblyBladeRecord.status → REJECTED
+  → blade.status: ASSEMBLY_RECEIVED → REJECTED
   → Creates BatchEvent(event_type=REJECTED)
   → Notifies OH_OPERATORs
+  → Note: station_id is NOT recorded on this workflow log entry (known limitation)
 
-POST /batches/{batch_number}/accept   (bulk accept remaining)
-POST /batches/{batch_number}/reject   (bulk reject)
-POST /batches/{batch_number}/modify   (batch-level field modifications)
+POST /batches/{batch_number}/accept   (bulk accept all remaining ASSEMBLY_RECEIVED blades)
+POST /batches/{batch_number}/reject   (bulk reject entire batch)
+POST /batches/{batch_number}/modify   (batch-level field modifications, creates MODIFIED events)
 ```
 
-### Step 4 — Start Set-Making
-
-Once all blades are verified, the ASSEMBLY_OPERATOR triggers set-making:
+### Step 4 — Start Set-Making (gate check only)
 
 ```
 POST /assembly/batches/{batch_number}/start-setmaking
-→ Validates: all blades in batch are ASSEMBLY_VERIFIED
-→ Transitions all blades to SLOT_ASSIGNED (via HAL algorithm)
-→ Creates SlotAllocation records
-→ Notifies OH that slot assignment is complete
+→ Validates: assembly_verified count >= total_expected (ALL blades must be verified)
+→ Returns SetMakingResponse { status: "INITIATED" }
+→ Does NOT run HAL or create slots — that is a separate call.
+   The operator then calls POST /batches/{batch_number}/assign-slot to run HAL.
 ```
 
-### HAL Algorithm (Heavy-light Alternating Layout)
+### Step 5 — HAL Slot Assignment
 
-Implemented in `backend/app/api/v1/endpoints/batches.py` at the `assign_batch_slot` endpoint.
+**Endpoint:** `POST /batches/{batch_number}/assign-slot`  
+**Implemented in:** `backend/app/api/v1/endpoints/batches.py`
 
-**Purpose:** Distribute turbine blades around the disc such that heavy blades are placed opposite lighter blades, minimising first-order imbalance before dynamic balancing.
+**Gate check:** The batch must have its latest `BatchEvent.event_type` in `{ACCEPTED, MODIFIED}`. Any other event type raises HTTP 422.
 
-**Algorithm:**
+**Eligible blade statuses:** `SENT_TO_ASSEMBLY`, `ASSEMBLY_RECEIVED`, `ASSEMBLY_VERIFIED` — all three are valid inputs to the HAL step.
+
+**HAL Algorithm (Heavy-light Alternating Layout):**
+
+Purpose: distribute blades around the disc so heavy blades sit opposite lighter blades, minimising first-order imbalance before dynamic balancing.
 
 ```python
-# 1. Sort blades by static_moment_gcm descending (heaviest first)
-sorted_blades = sorted(blades, key=lambda b: -sm_map[str(b.id)])
+# Inputs (request body):
+#   imbalance_slot: int   REQUIRED — 1 to total_slots (no default; omitting → HTTP 422)
+#   total_slots:    int   default 80
 
-# 2. Interleave: first half (heavy) + reversed second half (light → heavy)
+# 1. Uses INITIAL measurement type, static_moment_gcm column
+sorted_blades = sorted(blades, key=lambda b: -sm_map.get(str(b.id), 0))
+
+# 2. Interleave: heavy first half + reversed light second half
 half = len(sorted_blades) // 2
 interleaved = sorted_blades[:half] + list(reversed(sorted_blades[half:]))
-# Net effect: alternates heavy–light–heavy–light around disc circumference
+# Result: alternates heavy–light–heavy–light around disc circumference
 
-# 3. Assign slot numbers starting from the known imbalance position
-# K = imbalance_slot (1–80, the heavy spot identified by the balancing machine)
-# N = total_slots (80 for a full-ring turbine disc)
+# 3. Place starting from the known imbalance position
+# K = imbalance_slot, N = total_slots
 for i, blade in enumerate(interleaved):
     computed_slot = str(((K - 1 + i) % N) + 1)
     create SlotAllocation(blade_id=blade.id, slot_number=computed_slot)
     transition blade → SLOT_ASSIGNED
 ```
 
-**Inputs required:**
-- `imbalance_slot` (1–80): the slot number identified as the current heavy spot by the balancing machine from the previous run
-- `total_slots` (default 80): total positions on the disc
-
-**Outcome:** Each blade gets a `SlotAllocation` with a computed `slot_number`. The operator then physically places each blade in its assigned slot and records the dynamic balancing result.
+`imbalance_slot` is the disc position the balancing machine identified as the current heavy spot in a previous run. Placing the heaviest blade there creates the opposing force on the next run.
 
 ### Assembly Endpoint Summary
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/assembly/batches/{batch_number}/receive` | Mark batch received at Assembly |
-| GET | `/assembly/batches/{batch_number}/receipt` | Get receipt details |
-| GET | `/assembly/batches/{batch_number}/progress` | Verification progress (counts) |
-| GET | `/assembly/batches/{batch_number}/blades` | List blades with verification status |
-| POST | `/assembly/blades/{blade_id}/verify` | Scan + validate vs OH records |
-| POST | `/assembly/blades/{blade_id}/accept` | Accept blade (optional field overrides) |
-| POST | `/assembly/blades/{blade_id}/reject` | Reject blade |
-| POST | `/assembly/batches/{batch_number}/start-setmaking` | Trigger HAL slot assignment |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch; transitions all blades to ASSEMBLY_RECEIVED |
+| GET | `/assembly/batches/{batch_number}/receipt` | Any | Receipt details |
+| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress counts |
+| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with AssemblyVerificationStatus |
+| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Assess (no status change) — `?batch_number=` query param |
+| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED — `?batch_number=` query param |
+| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject → REJECTED — `?batch_number=` query param |
+| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check; returns INITIATED |
 
 ---
 
@@ -710,16 +761,18 @@ GET /blades/?page=1&page_size=20
 
 See [Section 6](#6-assembly-verification--set-making) for the full assembly verification workflow.
 
+> Note: the per-blade endpoints (`verify`, `accept`, `reject`) take `batch_number` as a **query parameter**, not a path segment: `POST /assembly/blades/{blade_id}/verify?batch_number=BXXX`
+
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch |
+| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch; transitions all blades to ASSEMBLY_RECEIVED |
 | GET | `/assembly/batches/{batch_number}/receipt` | Any | Receipt details |
-| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress |
-| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with verification status |
-| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Scan + validate vs OH |
-| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept blade |
-| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject blade |
-| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Trigger HAL |
+| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress counts |
+| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with AssemblyVerificationStatus |
+| POST | `/assembly/blades/{blade_id}/verify?batch_number=` | ASSEMBLY_OPERATOR | Assess vs OH — no BladeStatus change |
+| POST | `/assembly/blades/{blade_id}/accept?batch_number=` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED |
+| POST | `/assembly/blades/{blade_id}/reject?batch_number=` | ASSEMBLY_OPERATOR | Reject → REJECTED |
+| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check; HAL runs via `/batches/.../assign-slot` |
 
 ### Reports
 
@@ -751,13 +804,15 @@ DTI endpoints support a `?station=1` or `?station=2` parameter for two-station d
 
 ### Sync (LAN Data Export)
 
-The `/sync` router exposes read-only endpoints that the Assembly PC backend calls to pull data from the OH PC when the Assembly station needs to operate with a local cache.
+The `/sync` router exposes read-only endpoints on the OH PC that the Assembly station calls to pull a snapshot of blade data over the LAN. All three endpoints require `ASSEMBLY_OPERATOR`, `OH_OPERATOR`, or `SUPER_ADMIN`.
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/sync/blades` | ASSEMBLY_OPERATOR | Export blades for sync |
-| GET | `/sync/measurements` | ASSEMBLY_OPERATOR | Export measurements for sync |
-| GET | `/sync/batches` | ASSEMBLY_OPERATOR | Export batch events for sync |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/sync/status` | Station identity: `{ station_type, station_name, api_version, synced_at, status }` |
+| GET | `/sync/blades` | Blade snapshot. Filters: `?batch_number=`, `?status=`. Response: `OHSyncResponse` with flat fields `weight`, `dti_h1`–`h4` (not `weight_grams` / `height_data`) |
+| GET | `/sync/batches/{batch_number}` | Single batch snapshot |
+
+`station_type` and `station_name` in `/sync/status` fall back to hardcoded strings if `STATION_TYPE` / `STATION_NAME` env vars are not set.
 
 ### Other Endpoints
 
@@ -865,20 +920,20 @@ Queues: `reports`, `celery`.  Worker concurrency: 2.  Max tasks per child: 50.
 
 ## 10. Hardware Integration
 
-Physical instruments connect to the Windows workstation at each hangar station via RS-232 or USB-to-serial adapter. Two bridge scripts forward readings to the backend.
-
-> **Important:** There is no `ocr_camera_bridge.py`. OCR is handled entirely within the backend via the `/ocr` endpoints. The operator uses the browser UI to upload or capture images.
+Physical instruments connect to the Windows workstation at each hangar station via RS-232, USB-to-serial adapter, or USB3.  Three bridge scripts forward data to the backend.
 
 ```
-Instrument          Model               Bridge script       Push endpoint
-──────────────────  ──────────────────  ──────────────────  ─────────────────
-Weighing Scale      iScale i-04, 0.1g   weighing_bridge.py  POST /weighing/push
-DTI Gauge           Sylvac BT, 0.001mm  dti_bridge.py       POST /dti/push
-QR Scanner          USB HID barcode gun  (keyboard emul.)   Browser reads directly
-Balancing Machine   Turbine disc        Manual entry UI     POST /batches/assign-slot
+Instrument          Model                    Bridge script            Push / stream
+──────────────────  ───────────────────────  ───────────────────────  ────────────────────────
+Weighing Scale      iScale i-04, 0.1 g       weighing_bridge.py       POST /weighing/push
+DTI Gauge           Sylvac BT, 0.001 mm      dti_bridge.py            POST /dti/push
+OAK-1 Camera        Luxonis OAK-1 (IMX378)   oak1_camera_service.py   GET /snapshot, GET /stream
+QR Scanner          USB HID barcode gun      (keyboard emulation)     Browser reads directly
+Balancing Machine   Turbine disc             Manual entry UI          POST /batches/assign-slot
 ```
 
 Bridge scripts are **not** part of the Docker Compose stack. Run each on the workstation physically connected to the instrument.
+The OAK-1 service is optional — both stations work without it; the browser webcam is the fallback capture path.
 
 ---
 
@@ -930,7 +985,17 @@ python weighing_bridge.py --port COM6 --server https://192.168.1.50
 | Stop bits | 1 |
 | Data format | ASCII, e.g. `+012.345\r\n` (signed mm, 3 d.p.) |
 
-**Position cycling:** The bridge fetches the current position count from `GET /api/v1/dti/positions` on startup and after each blade reset. The operator moves the probe to each position and presses the gauge's DATA/SEND button; the bridge assigns each incoming reading to the next position (H1 → H2 → H3 → …) then cycles back. Use `POST /dti/reset` to force reset to H1 for a new blade.
+**Position cycling:** The bridge advances positions using the `next_position` field returned in each `/dti/push` response — no manual configuration needed. The position count is set by the frontend via `POST /dti/positions` when rows are added/removed from the measurement form. The bridge does NOT call `GET /dti/positions` itself; the cycle length is maintained entirely server-side.
+
+> **Note:** The `--positions` CLI argument appears in the script's docstring but is **not implemented** in argparse. Do not rely on it.
+
+Use `POST /dti/reset?station=1` to force cycle back to H1 when starting a new blade — the frontend calls this automatically on new blade entry.
+
+**Debounce:** duplicate readings within 1.5 seconds are suppressed.
+
+**SSL:** bridge uses `session.verify = False` (self-signed cert expected on both stations).
+
+**Server check:** bridge polls `GET /health` before opening the serial port; retries every 5 s until the server responds.
 
 **Compatible gauges:**
 - Sylvac BT (this deployment)
@@ -943,24 +1008,107 @@ python weighing_bridge.py --port COM6 --server https://192.168.1.50
 ```
 DTI Gauge → RS-232 → dti_bridge.py
   → POST /api/v1/dti/push  {"station": "1", "position": "H1", "value": 12.345}
-  → response includes next_position to advance cycle
-  → backend broadcast → all WS /dti/ws?station=1 subscribers
+  → response: {"ok": true, "next_position": "H2", "position_count": 4, ...}
+  → backend broadcasts to all WS /dti/ws?station=1 subscribers
   → browser auto-fills height_data.H1 in measurement form
 ```
 
-**WebSocket message to browser:**
-```json
-{"type": "dti", "position": "H1", "value": 12.345}
-```
+**WebSocket messages sent to browser:**
+
+| Message | When |
+|---------|------|
+| `{"type": "status", "status": "connected", "station": "1"}` | On connect |
+| `{"type": "dti", "position": "H1", "value": 12.345}` | Each new reading |
+| `{"type": "ping"}` | Every 30 s (keepalive) |
+
+On reconnect, the server immediately replays all readings captured for the current blade on that station (from `_cycle_readings` in-memory buffer), so the form is not blank after a page refresh or WS disconnect.
 
 CLI usage:
 ```bash
 python dti_bridge.py                                          # COM1, station 1
 python dti_bridge.py --port COM4 --station 2                 # COM4, station 2
 python dti_bridge.py --port COM1 --server https://192.168.1.50
+python dti_bridge.py --debug                                  # verbose serial logging
 ```
 
 ---
+
+---
+
+### 10.3 OAK-1 Camera (scripts/oak1_camera_service.py)
+
+**Model: Luxonis OAK-1 (Sony IMX378, 12 MP RGB sensor)**
+
+The OAK-1 is not a UVC webcam — the browser's `getUserMedia()` cannot see it. A standalone Flask companion service keeps the DepthAI pipeline open and serves frames over plain localhost HTTP on port **8089**, which the frontend fetches directly. This service never talks to the backend; captured frames are handed to the existing OCR upload path as a JPEG blob.
+
+#### Camera pipeline
+
+The OAK-1 runs **two simultaneous outputs** so preview smoothness and still-capture quality are decoupled:
+
+| Output | Resolution | Usage |
+|--------|-----------|-------|
+| `preview` | 640 × 360 | Pre-encoded JPEG in a background thread; served zero-cost by `/stream` |
+| `video` | 1920 × 1080 | Raw frame held in memory; JPEG-encoded on demand by `/snapshot` |
+
+#### Endpoints
+
+| Endpoint | Returns | Description |
+|----------|---------|-------------|
+| `GET /health` | `{"connected": bool, "device_id": str\|null}` | Device availability check |
+| `GET /snapshot` | JPEG bytes (`image/jpeg`) | Latest full-res frame; HTTP 503 if no device |
+| `GET /stream` | `multipart/x-mixed-replace` MJPEG | Continuous live preview stream |
+
+#### Frontend integration (`frontend/src/services/oak1Camera.ts`)
+
+| Function | Description |
+|----------|-------------|
+| `checkOak1Health()` | Health probe with 1.5 s timeout; returns `false` if unavailable |
+| `captureOak1Snapshot()` | Fetches `/snapshot` as a Blob; throws on failure — callers catch and fall back to webcam |
+| `getOak1StreamUrl()` | Returns the `/stream` URL for direct use as `<img src>` |
+
+`BladeEntryPage` and `CameraScanner` call `checkOak1Health()` when the camera modal opens. If the OAK-1 is reachable a **source toggle button** appears in the modal header (Cpu icon = OAK-1 / Video icon = browser webcam). OAK-1 preview renders as an `<img>` element pointed at the MJPEG stream; the browser webcam uses a `<video>` element with `getUserMedia()`. Capture follows the selected source and produces a JPEG blob fed into the existing OCR upload path — the backend sees no difference between sources.
+
+Frontend reads the base URL from `VITE_OAK1_SERVICE_URL` env var (default `http://localhost:8089`).
+
+**Note:** Chromium treats `http://localhost` as a secure-context exception, so HTTPS-page → HTTP-companion mixed content is allowed in Chrome/Edge. This is an intentional shop-floor constraint (known browser on a fixed machine).
+
+#### Configuration
+
+| Parameter | Default | CLI flag |
+|-----------|---------|---------|
+| Port | 8089 | `--port` |
+| CORS origins | `https://localhost`, `http://localhost:3000` | `--frontend-origin` (repeatable) |
+| Camera FPS | 30 | — |
+| Preview JPEG quality | 80 | — |
+| Still JPEG quality | 92 | — |
+| Stream delivery FPS | 24 | — |
+| depthai version | 2.31.x or 2.32.x | — |
+
+`depthai` is pinned to 2.31.x/2.32.x — this specific OAK-1 unit's onboard USB bootloader firmware was validated against that build only.
+
+#### Auto-reconnect
+
+`Oak1CameraWorker` runs in a background thread with a 5 s retry loop. If the device is unplugged or causes a USB error, the pipeline closes and re-opens automatically. `/health` returns `{"connected": false}` until reconnection.
+
+#### Requirements & installation
+
+Install in a separate venv to avoid dependency conflicts with the main backend:
+
+```bash
+cd scripts
+python -m venv oak1-venv
+oak1-venv\Scriptsctivate          # Windows
+pip install -r oak1_requirements.txt  # depthai 2.31/2.32, flask, flask-cors, opencv-python, numpy
+```
+
+#### CLI usage
+
+```bash
+python oak1_camera_service.py                                      # port 8089, localhost CORS
+python oak1_camera_service.py --port 8090
+python oak1_camera_service.py --frontend-origin https://192.168.1.50
+```
+
 
 ## 11. OCR Integration
 
@@ -972,29 +1120,93 @@ Three providers available via `OCR_PROVIDER` environment variable:
 |----------|---------|-------------|
 | `mock` | No | None — stub data, for dev/test |
 | `tesseract` | No | `tesseract-ocr` system package |
-| `paddleocr` | **Yes** | `paddlepaddle`, `paddleocr` |
+| `paddleocr` | **Yes** | `paddlepaddle`, `paddleocr`, `opencv-contrib-python-headless`, `numpy`, `pyzbar` |
 
-> **Note:** Default in `config.py` is `paddleocr`. On machines without PaddleOCR dependencies, set `OCR_PROVIDER=mock` for dev or `OCR_PROVIDER=tesseract` for lightweight production use.
+> **Note:** Default in `config.py` is `paddleocr`. On machines without PaddleOCR installed, set `OCR_PROVIDER=mock` for dev or `OCR_PROVIDER=tesseract` for lightweight production use.
 
-### Flow
+---
+
+### 11.1 PaddleOCR Provider — Dual-Language Engine (`backend/app/ocr/paddle_provider.py`)
+
+The active OCR implementation is a **dual-language PP-OCRv4 fusion engine** that runs English and Cyrillic recognition in parallel and merges results at the character level. This is designed for blade markings that may contain both Latin alphanumerics (serial numbers, part numbers) and Cyrillic script (melt/heat numbers stamped in Russian manufacturing).
+
+#### Model files
+
+All model weights are **bundled locally** under `backend/app/ocr/models/ppocrv4/` (~26 MB total). No internet download is required at runtime.
+
+| Sub-model | Path | Purpose |
+|-----------|------|---------|
+| Detection | `models/ppocrv4/det/` | Locate text regions in the image |
+| Classification | `models/ppocrv4/cls/` | Correct text line orientation |
+| English recognition | `models/ppocrv4/rec_en/` | Recognise Latin + digits + symbols |
+| Cyrillic recognition | `models/ppocrv4/rec_ru/` | Recognise Cyrillic script |
+
+Models are loaded once at provider instantiation. `KMP_DUPLICATE_LIB_OK=TRUE` is set to suppress OpenMP conflict aborts on Windows.
+
+#### Image preprocessing pipeline
+
+For each OCR request the provider generates **three preprocessed variants** of the input image and selects the best one:
+
+| Variant | OpenCV transform |
+|---------|----------------|
+| Grayscale | Convert to gray → CLAHE equalisation |
+| Green channel | Extract BGR green channel → CLAHE |
+| Red channel | Extract BGR red channel → CLAHE |
+
+CLAHE (Contrast Limited Adaptive Histogram Equalisation) is applied with `clipLimit=3.0, tileGridSize=(8, 8)`. The variant with the **highest score** (detection region count × 100 + average confidence) is passed to the recognition models.
+
+The backend receives the image as raw bytes; preprocessing decodes via `cv2.imdecode(numpy.frombuffer(...), cv2.IMREAD_COLOR)`.
+
+#### Character-level fusion
+
+Both English and Cyrillic recognisers run on the selected preprocessed image. Results are fused **character by character** using deterministic rules:
 
 ```
-Operator selects blade image in browser UI
-  → POST /ocr/scan  (multipart: image file)
-  → OCRRegistry.get_provider(OCR_PROVIDER).scan(image_bytes)
-  → Returns {serial_number, melt_number, confidence}
+For each character position (aligned by region/line):
+  If character is a pure Cyrillic letter  → take Cyrillic reading
+  If character is a digit / symbol / Latin → take English reading
+  If readings disagree and no clear rule applies → take English reading
+```
+
+Character classification uses two pre-defined sets:
+- `_PURE_CYRILLIC` — Cyrillic-only Unicode codepoints (А–Я, а–я, Ё, ё, etc.)
+- `_INDUSTRIAL_SYMBOLS` — digits, Latin letters, and common stamp characters (`-`, `/`, `\`, space, etc.)
+
+This approach handles markings like `SN-М1034-Б` where the melt number contains Cyrillic suffixes mixed with alphanumeric prefixes.
+
+#### OCR flow
+
+```
+Image bytes received at POST /ocr/scan
+  → decode BGR frame with cv2
+  → generate 3 preprocessed variants
+  → score each variant (det_count × 100 + avg_conf)
+  → select best variant
+  → run English PP-OCRv4 recogniser
+  → run Cyrillic PP-OCRv4 recogniser
+  → fuse results character-by-character
+  → return {serial_number, melt_number, confidence}
 
 POST /ocr/verify-numbers  (manual_serial, manual_melt, ocr_serial, ocr_melt)
-  → Compares strings
-  → Sets blade.ocr_mismatch_flag + blade.ocr_mismatch_notes on mismatch
-  → Returns verification result
+  → compare strings
+  → set blade.ocr_mismatch_flag + blade.ocr_mismatch_notes on mismatch
+  → return verification result
 
 POST /blades/{id}/attach-ocr-scan
-  → Associates the scanned image with the blade as OCR_SCAN attachment
-  → Stores under /app/uploads/ocr_scans/
+  → associate scanned image with blade as OCR_SCAN attachment
+  → store under /app/uploads/ocr_scans/
+```
+
+#### New backend dependencies (requirements.txt)
+
+```
+opencv-contrib-python-headless==4.10.0.84   # image decode + CLAHE preprocessing
+numpy>=1.23.5,<2.0.0                         # array bridge between cv2 and PaddleOCR
+pyzbar==0.1.9                                # QR/barcode decode fallback
 ```
 
 ---
+
 
 ## 12. Report Generation
 
@@ -1272,11 +1484,14 @@ pytest app/tests/api/test_blades.py::test_send_to_assembly -v
 
 Defined in `frontend/src/routes/index.tsx`. Role-based routing enforced client-side; role mismatches redirect to the role's home page.
 
+**Landing page by role:** `SUPER_ADMIN` → `/dashboard`; `QA_VIEWER` → `/qa-dashboard`; all others → `/batch-tracking`.
+
 | Route | Page | Minimum Role |
 |-------|------|-------------|
 | `/login` | LoginPage | Public |
 | `/` | RoleHome (redirect) | Authenticated |
 | `/dashboard` | DashboardPage | SUPER_ADMIN |
+| `/qa-dashboard` | QaDashboardPage | QA_VIEWER |
 | `/blades/new` | BladeEntryPage | OH_OPERATOR |
 | `/blades/:id` | BladeDetailPage | Any |
 | `/blades/:id/timeline` | WorkflowTimelinePage | Any |
@@ -1327,10 +1542,15 @@ CORS_ORIGINS=["https://your-domain.internal"]
 ```bash
 # Two-station deployment (Assembly PC only)
 STATION_ROLE=ASSEMBLY          # "OH" or "ASSEMBLY"
+STATION_TYPE=ASSEMBLY          # Used in /sync/status response
+STATION_NAME="Assembly Station — 720 Hanger"   # Used in /sync/status response
 OH_SYNC_URL=https://192.168.1.50
 
 # OCR backend (default: paddleocr — set mock for dev without PaddleOCR installed)
 OCR_PROVIDER=mock              # mock | tesseract | paddleocr
+
+# OAK-1 camera companion service (frontend env var, not backend)
+# VITE_OAK1_SERVICE_URL=http://localhost:8089   # default; set if service runs on different host/port
 
 # File storage
 UPLOAD_DIR=/app/uploads

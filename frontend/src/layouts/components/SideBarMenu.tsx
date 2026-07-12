@@ -47,11 +47,18 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["SUPER_ADMIN"],
   },
   {
+    label: "Dashboard",
+    href: "/qa-dashboard",
+    iconName: "chart-simple",
+    icon: DashboardIcon,
+    roles: ["QA_VIEWER"],
+  },
+  {
     label: "Batch Overview",
     href: "/batch-tracking",
     iconName: "package",
     icon: BatchOverviewIcon,
-    roles: ["SUPER_ADMIN", "OH_OPERATOR", "ASSEMBLY_OPERATOR", "QA_VIEWER"],
+    roles: ["SUPER_ADMIN", "OH_OPERATOR", "ASSEMBLY_OPERATOR"],
   },
   {
     label: "Assembly Queue",
@@ -61,7 +68,7 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["SUPER_ADMIN", "ASSEMBLY_OPERATOR"],
   },
   {
-    label: "Slot Allocation",
+    label: "LPTR Slot Allocation",
     href: "/slots",
     iconName: "geolocation",
     icon: SlotAllocationIcon,
@@ -72,14 +79,21 @@ const NAV_ITEMS: NavItem[] = [
     href: "/blades/new",
     iconName: "wrench",
     icon: BladeEntryIcon,
-    roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
+    roles: ["SUPER_ADMIN", "OH_OPERATOR"],
+  },
+  {
+    label: "HPTR Slot Allocation",
+    href: "/oh/slot-allocation",
+    iconName: "geolocation",
+    icon: SlotAllocationIcon,
+    roles: ["SUPER_ADMIN", "OH_OPERATOR"],
   },
   {
     label: "OH Queue",
     href: "/oh-queue",
     iconName: "book-open",
     icon: OhQueueIcon,
-    roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
+    roles: ["SUPER_ADMIN", "OH_OPERATOR"],
   },
   {
     label: "Rocking & Creep",
@@ -93,9 +107,15 @@ const NAV_ITEMS: NavItem[] = [
     href: "/reports",
     iconName: "graph-up",
     icon: NotepadIcon,
-    roles: ["SUPER_ADMIN", "OH_OPERATOR", "QA_VIEWER"],
+    roles: ["SUPER_ADMIN", "OH_OPERATOR"],
   },
-  { label: "Notifications", href: "/notifications", iconName: "notification", icon: BellIcon },
+  {
+    label: "Notifications",
+    href: "/notifications",
+    iconName: "notification",
+    icon: BellIcon,
+    roles: ["SUPER_ADMIN", "OH_OPERATOR", "ASSEMBLY_OPERATOR"],
+  },
   {
     label: "User Management",
     href: "/users",
@@ -222,9 +242,9 @@ export default function AppLayout() {
     queryKey: ["notifications", "unread-count"],
     queryFn: async () => {
       const count = await notificationService.getUnreadCount();
-      // Also sync the full list so the store is populated
+      // Also sync the unread list so the store is populated
       if (count > 0) {
-        const items = await notificationService.list({ page_size: 50 });
+        const items = await notificationService.list({ unread_only: true, limit: 100 });
         setNotifications(items);
       }
       return count;
@@ -284,11 +304,12 @@ export default function AppLayout() {
   const location = useLocation();
   const isFullScreenPage =
     location.pathname === "/dashboard" ||
+    location.pathname === "/qa-dashboard" ||
     location.pathname === "/batch-tracking" ||
     location.pathname === "/assembly-queue" ||
     location.pathname === "/oh-queue" ||
     location.pathname === "/slots" ||
-    location.pathname === "/notifications" ||
+    location.pathname === "/oh/slot-allocation" ||
     location.pathname === "/reports" ||
     location.pathname === "/users" ||
     location.pathname === "/settings" ||
@@ -306,11 +327,11 @@ export default function AppLayout() {
   function SidebarContent({ mobile = false }: { mobile?: boolean }) {
     const collapsedView = !mobile && !showExpanded;
     return (
-      <div className="flex flex-col h-full bg-white dark:bg-black">
+      <div className="flex flex-col h-full bg-white dark:bg-background">
         {/* Logo */}
         <div
           className={cn(
-            "flex items-center gap-2.5 px-4 h-14 sm:h-16 border-b border-slate-200 dark:border-slate-700 flex-shrink-0 bg-white dark:bg-black",
+            "flex items-center gap-2.5 px-4 h-14 sm:h-16 border-b border-slate-200 dark:border-slate-700 flex-shrink-0 bg-white dark:bg-background",
             collapsedView ? "justify-center px-2" : "justify-between"
           )}
         >
@@ -333,7 +354,7 @@ export default function AppLayout() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 flex-shrink-0 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600 dark:hover:text-white"
+                className="h-8 w-8 flex-shrink-0 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-900 dark:bg-background dark:text-slate-300 dark:hover:bg-slate-600 dark:hover:text-white"
                 onClick={handleToggleSidebar}
                 aria-label="Collapse sidebar"
               >
@@ -344,7 +365,7 @@ export default function AppLayout() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-1 bg-white dark:bg-black">
+        <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-1 bg-white dark:bg-background">
           {visibleNav.map((item) => (
             <SideNavLink
               key={item.href}
@@ -360,13 +381,13 @@ export default function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-100 dark:bg-black overflow-hidden">
+    <div className="flex h-screen bg-slate-100 dark:bg-background overflow-hidden">
       {/* ── Desktop sidebar ── */}
       <aside
         onMouseEnter={() => sidebarCollapsed && setSidebarHovered(true)}
         onMouseLeave={() => setSidebarHovered(false)}
         className={cn(
-          "hidden lg:flex relative flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-black transition-all duration-200 flex-shrink-0",
+          "hidden lg:flex relative flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-background transition-all duration-200 flex-shrink-0",
           showExpanded ? "w-56" : "w-16"
         )}
       >
@@ -377,7 +398,7 @@ export default function AppLayout() {
           <Button
             variant="ghost"
             size="icon"
-            className="absolute top-6 right-0 translate-x-1/2 h-7 w-7 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 shadow-sm hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600 dark:hover:text-white z-10"
+            className="absolute top-6 right-0 translate-x-1/2 h-7 w-7 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 shadow-sm hover:bg-slate-200 hover:text-slate-900 dark:bg-background dark:text-slate-300 dark:border-slate-600 dark:hover:bg-slate-600 dark:hover:text-white z-10"
             onClick={handleToggleSidebar}
             aria-label="Expand sidebar"
           >
@@ -396,8 +417,8 @@ export default function AppLayout() {
             aria-hidden="true"
           />
           {/* Drawer */}
-          <aside className="absolute left-0 top-0 bottom-0 w-48 bg-white dark:bg-black border-r border-slate-200 dark:border-slate-700 z-50 flex flex-col">
-            <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 dark:border-slate-700 bg-white dark:bg-black">
+          <aside className="absolute left-0 top-0 bottom-0 w-48 bg-white dark:bg-background border-r border-slate-200 dark:border-slate-700 z-50 flex flex-col">
+            <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 dark:border-slate-700 bg-white dark:bg-background">
               <span className="font-bold text-sm text-slate-900 dark:text-white">Navigation</span>
               <Button
                 variant="ghost"
@@ -417,24 +438,28 @@ export default function AppLayout() {
       )}
 
       {/* ── Main area ── */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+      <div className="relative flex flex-col flex-1 min-w-0 overflow-hidden">
         <Navbar onOpenMobileMenu={() => setMobileOpen(true)} />
 
         {/* ── Page content ── */}
         {isFullScreenPage ? (
-          <main className="flex-1 min-h-0 overflow-hidden bg-slate-100 dark:bg-black">
+          <main className="flex-1 min-h-0 overflow-hidden bg-slate-100 dark:bg-background">
             <Outlet />
           </main>
         ) : (
-          <main className="flex-1 min-h-0 flex flex-col bg-slate-100 dark:bg-black">
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+          <main className="flex-1 min-h-0 overflow-y-auto bg-slate-100 dark:bg-background">
+            <div className="p-4 md:p-6 lg:p-8 pb-10">
               <Outlet />
-            </div>
-            <div className="shrink-0 p-4 pt-2 md:px-6 lg:px-8 border-t border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-black">
-              <Footer />
             </div>
           </main>
         )}
+
+        {/* ── Global footer — one copy for the whole app shell. Lives in normal
+             flex flow (not an absolute overlay) so it reserves its own space
+             instead of covering the last row of full-screen page content. ── */}
+        <div className="flex-shrink-0 py-1 px-4 md:px-6 lg:px-8 border-t border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-background">
+          <Footer />
+        </div>
       </div>
     </div>
   );

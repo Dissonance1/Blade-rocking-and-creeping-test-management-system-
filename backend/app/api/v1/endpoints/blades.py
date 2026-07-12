@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.dependencies import get_current_user, require_roles
 from app.db.session import get_db
-from app.models.enums import AttachmentType, BladeStatus
+from app.models.enums import AttachmentType, BladeStatus, BladeType
 from app.schemas.base import PaginatedResponse, StatusResponse
 from app.schemas.blade import (
     BladeCreate,
@@ -170,31 +170,40 @@ async def create_blade(
         HTTP 409 — a blade with the given serial number already exists.
     """
     from app.models.blade import Blade
-    from app.models.enums import BladeType
 
     # Each batch holds up to 90 LPTR blades + 90 HPTR blades = 180 total.
     BATCH_MAX_PER_TYPE = 90
 
-    # Uniqueness check
+    # `use_enum_values=True` on BaseSchema means body.blade_type may already be
+    # a plain str rather than a BladeType member — normalize once, up front.
+    blade_type_val = (
+        body.blade_type
+        if isinstance(body.blade_type, BladeType)
+        else BladeType(body.blade_type)
+    )
+
+    # Uniqueness check — serial numbers are scoped per (batch_number, blade_type):
+    # each batch numbers its LPTR blades 1..90 and HPTR blades 1..90 independently,
+    # so the same serial recurs by design across different batches/types.
     existing = await db.execute(
         select(Blade).where(
             Blade.serial_number == body.serial_number,
+            Blade.batch_number == body.batch_number,
+            Blade.blade_type == blade_type_val,
             Blade.deleted_at.is_(None),
         )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Blade with serial number '{body.serial_number}' already exists",
+            detail=(
+                f"A {blade_type_val.value} blade with serial number '{body.serial_number}' "
+                f"already exists in batch '{body.batch_number}'"
+            ),
         )
 
     # Batch size limit — per blade type (90 LPTR + 90 HPTR per batch)
-    if body.batch_number and body.blade_type is not None:
-        blade_type_val = (
-            body.blade_type
-            if isinstance(body.blade_type, BladeType)
-            else BladeType(body.blade_type)
-        )
+    if body.batch_number:
         type_label = blade_type_val.value.upper()
         type_count_result = await db.execute(
             select(func.count(Blade.id)).where(
@@ -269,6 +278,7 @@ async def list_blades(
     work_order_number: str | None = Query(default=None),
     part_number: str | None = Query(default=None),
     batch_number: str | None = Query(default=None),
+    blade_type: "BladeType | None" = Query(default=None),
     blade_status: BladeStatus | None = Query(default=None, alias="status"),
     blade_statuses: str | None = Query(default=None, alias="statuses"),
     station_id: uuid.UUID | None = Query(default=None),
@@ -304,6 +314,8 @@ async def list_blades(
         conditions.append(Blade.part_number.ilike(f"%{part_number}%"))
     if batch_number:
         conditions.append(Blade.batch_number == batch_number)
+    if blade_type:
+        conditions.append(Blade.blade_type == blade_type)
     if blade_status:
         conditions.append(Blade.status == blade_status)
     if blade_statuses:
@@ -406,6 +418,7 @@ async def list_blades(
             "nomenclature": b.nomenclature,
             "engine_number": b.engine_number,
             "batch_number": b.batch_number,
+            "blade_type": b.blade_type,
             "status": b.status,
             "ocr_mismatch_flag": b.ocr_mismatch_flag,
             "current_station": None,
@@ -483,6 +496,74 @@ async def batch_lookup(
         "engine_number": bg.engine_number,
         "nomenclature": bg.nomenclature,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /next-serial-number
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/next-serial-number",
+    status_code=status.HTTP_200_OK,
+    summary="Next auto-assigned serial number for a batch + blade type",
+)
+async def next_serial_number(
+    batch_number: str,
+    blade_type: BladeType,
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Serial numbers are counted per (batch_number, blade_type), starting at 1
+    (e.g. a batch's 90 LPTR blades are "1".."90" and its 90 HPTR blades are,
+    independently, also "1".."90"). Returns the next number after the highest
+    already used — including soft-deleted rows, since the DB constraint does
+    too and would otherwise reject a reused number.
+    """
+    from app.models.blade import Blade
+
+    result = await db.execute(
+        select(Blade.serial_number).where(
+            Blade.batch_number == batch_number,
+            Blade.blade_type == blade_type,
+        )
+    )
+    highest = 0
+    for (serial,) in result.all():
+        if serial.isdigit():
+            highest = max(highest, int(serial))
+    return {"next_serial_number": str(highest + 1)}
+
+
+# ---------------------------------------------------------------------------
+# GET /serial-exists
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/serial-exists",
+    status_code=status.HTTP_200_OK,
+    summary="Check whether a serial number is already used in a batch + blade type",
+)
+async def serial_exists(
+    batch_number: str,
+    blade_type: BladeType,
+    serial_number: str,
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    from app.models.blade import Blade
+
+    result = await db.execute(
+        select(Blade.id).where(
+            Blade.batch_number == batch_number,
+            Blade.blade_type == blade_type,
+            Blade.serial_number == serial_number,
+            Blade.deleted_at.is_(None),
+        )
+    )
+    return {"exists": result.scalar_one_or_none() is not None}
 
 
 @router.post(
@@ -662,6 +743,12 @@ async def send_to_assembly(
     from app.main import WorkflowTransitionError
 
     blade = await _get_blade_or_404(blade_id, db)
+
+    if blade.blade_type == BladeType.HPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="HPTR blades stay in OH and are never sent to Assembly. Use the OH Slot Allocation tools instead.",
+        )
 
     # Blades that belong to a batch must be sent as a full batch (90 blades),
     # not individually.  Use POST /batches/{batch_number}/send-to-assembly instead.
@@ -914,7 +1001,6 @@ async def complete_blade(
 async def reject_blade(
     blade_id: uuid.UUID,
     body: RejectBladeRequest,
-    background_tasks: BackgroundTasks,
     current_user: Any = Depends(
         require_roles("OH_OPERATOR", "ASSEMBLY_OPERATOR", "SUPER_ADMIN")
     ),
@@ -975,31 +1061,6 @@ async def reject_blade(
 
     await db.commit()
     await db.refresh(blade)
-
-    # Notify OH + Super Admin that a blade (and therefore its batch) is rejected.
-    async def _notify_blade_rejected() -> None:
-        from app.notifications.service import NotificationService
-        from app.models.notification import NotificationType
-        from app.db.session import AsyncSessionLocal
-        try:
-            async with AsyncSessionLocal() as _db:
-                svc = NotificationService(_db)
-                batch_ref = f" (Batch {blade.batch_number})" if blade.batch_number else ""
-                await svc.notify_roles(
-                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
-                    title=f"Blade {blade.serial_number} rejected{batch_ref}",
-                    body=(
-                        f"Blade {blade.serial_number}{batch_ref} has been rejected. "
-                        f"Reason: {body.rejection_notes or 'No notes provided'}. "
-                        f"The batch requires review."
-                    ),
-                    notification_type=NotificationType.BLADE_REJECTED,
-                    metadata={"batch_number": blade.batch_number, "blade_serial": blade.serial_number},
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("notify_blade_rejected_failed", error=str(exc))
-
-    background_tasks.add_task(_notify_blade_rejected)
 
     logger.info("blade_rejected", blade_id=str(blade_id), reason_id=str(body.rejection_reason_id))
     return blade

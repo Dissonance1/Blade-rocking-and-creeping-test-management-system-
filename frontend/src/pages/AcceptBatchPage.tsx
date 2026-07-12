@@ -18,7 +18,6 @@ import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
 import { cn } from "@/utils/cn";
 import type { BladeStatus, BladeListItem } from "@/types";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 const STATUS_CLS: Partial<Record<BladeStatus, string>> = {
   SENT_TO_ASSEMBLY: "bg-violet-500 text-white",
@@ -36,7 +35,7 @@ function SplitBladeTable({ blades }: { blades: BladeListItem[] }) {
 
   const renderHalf = (rows: BladeListItem[], offset: number) => (
     <table className="w-full text-xs whitespace-nowrap">
-      <thead className="bg-slate-800 dark:bg-slate-700">
+      <thead className="bg-slate-800 dark:bg-background">
         <tr>
           {cols.map((h) => (
             <th
@@ -54,7 +53,7 @@ function SplitBladeTable({ blades }: { blades: BladeListItem[] }) {
             key={blade.id}
             className={cn(
               "transition-colors hover:bg-blue-50 dark:hover:bg-slate-700/30",
-              idx % 2 === 0 ? "bg-white dark:bg-slate-800/40" : "bg-slate-50 dark:bg-slate-800/20"
+              idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50 dark:bg-background"
             )}
           >
             <td className="px-3 py-2 text-slate-400 tabular-nums">{offset + idx + 1}</td>
@@ -127,9 +126,9 @@ export default function AcceptBatchPage() {
   if (!batchNumber) return null;
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background py-2.5">
         <div className="max-w-screen-xl mx-auto w-full px-4 sm:px-6 relative flex flex-col sm:flex-row items-center justify-center min-h-[44px]">
           <div className="sm:absolute sm:left-6 sm:top-1/2 sm:-translate-y-1/2 self-start sm:self-auto mb-2 sm:mb-0">
             <Button
@@ -148,13 +147,13 @@ export default function AcceptBatchPage() {
               <span className="font-mono text-orange-500">{batchNumber}</span>
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-              Review all blade details, then confirm acceptance. Slot assignment is done in the Slot Allocation page.
+              Review all blade details, then confirm acceptance. Slot assignment is done in the LPTR Slot Allocation page.
             </p>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 w-full px-4 sm:px-6 py-5 flex flex-col gap-5">
+      <div className="flex-1 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
         <div className="max-w-screen-xl mx-auto w-full space-y-6">
 
           {isLoading ? (
@@ -172,7 +171,7 @@ export default function AcceptBatchPage() {
           ) : (
             <>
               {/* Split blade details table */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+              <div className="bg-white dark:bg-background rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                 <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
                   <h2 className="font-semibold text-slate-900 dark:text-white text-sm">Blade Details</h2>
                   <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
@@ -183,7 +182,7 @@ export default function AcceptBatchPage() {
               </div>
 
               {/* Confirm accept */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="bg-white dark:bg-background rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="min-w-0">
                   <p className="font-semibold text-slate-900 dark:text-white">
                     Ready to accept this batch?
@@ -192,7 +191,7 @@ export default function AcceptBatchPage() {
                     This will mark{" "}
                     <span className="font-mono text-orange-500">{batchNumber}</span>{" "}
                     as accepted and notify OH. Then go to{" "}
-                    <strong>Slot Allocation</strong> to assign disc slots.
+                    <strong>LPTR Slot Allocation</strong> to assign disc slots.
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto shrink-0">
@@ -249,9 +248,6 @@ export default function AcceptBatchPage() {
           )}
 
         </div>
-      </div>
-      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
-        <Footer />
       </div>
     </div>
   );

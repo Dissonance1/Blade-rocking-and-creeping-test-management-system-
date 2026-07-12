@@ -22,7 +22,6 @@ import { bladeService } from "@/services/bladeService";
 import { workflowService } from "@/services/workflowService";
 import type { BladeStatus, WorkflowLog } from "@/types";
 import { cn } from "@/utils/cn";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -87,15 +86,15 @@ function TimelineEvent({
           className={cn(
             "rounded-xl border p-5 transition-colors",
             isFirst
-              ? "bg-orange-50 dark:bg-slate-700/50 border-orange-200 dark:border-slate-600"
-              : "bg-white dark:bg-slate-800/40 border-slate-200 dark:border-slate-700/50"
+              ? "bg-orange-50 dark:bg-background border-orange-200 dark:border-slate-600"
+              : "bg-white dark:bg-background border-slate-200 dark:border-slate-700/50"
           )}
         >
           {/* Status transition */}
           <div className="flex items-center gap-2 flex-wrap mb-3">
             {fromCfg && (
               <>
-                <span className="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300">
+                <span className="inline-flex items-center rounded-full bg-slate-100 dark:bg-background px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300">
                   {fromCfg.label}
                 </span>
                 <ArrowRight className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
@@ -121,7 +120,7 @@ function TimelineEvent({
             {/* Actor */}
             <div className="flex items-center gap-2">
               <Avatar className="w-7 h-7">
-                <AvatarFallback className="bg-slate-700 dark:bg-slate-600 text-white text-xs font-semibold">
+                <AvatarFallback className="bg-slate-700 dark:bg-background text-white text-xs font-semibold">
                   {actorInitials}
                 </AvatarFallback>
               </Avatar>
@@ -192,9 +191,9 @@ export default function WorkflowTimelinePage() {
   const isLoading = loadingBlade || loadingHistory;
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white print:bg-white print:text-black">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white print:bg-white print:text-black">
       {/* Header — hidden in print */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-4 shadow-none border-b-0 print:hidden">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-4 shadow-none border-b-0 print:hidden">
         <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <Button
@@ -262,7 +261,7 @@ export default function WorkflowTimelinePage() {
             <>
               {/* Blade summary */}
               {blade && (
-                <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm mb-8 print:bg-white print:border-slate-200">
+                <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm mb-8 print:bg-white print:border-slate-200">
                   <CardHeader className="pb-2 border-b border-slate-100 dark:border-slate-700/50">
                     <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold print:text-black">
                       Blade Summary
@@ -316,9 +315,6 @@ export default function WorkflowTimelinePage() {
         </div>
       </div>
 
-      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
-        <Footer />
-      </div>
     </div>
   );
 }

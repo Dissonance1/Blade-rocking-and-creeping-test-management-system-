@@ -248,6 +248,31 @@ def create_application() -> FastAPI:
             },
         )
 
+    # WorkflowEngine.transition() (app.workflows.state_machine) raises its own,
+    # differently-shaped WorkflowTransitionError — without this handler it was
+    # an unhandled exception (raw 500) instead of a clean 409.
+    from app.workflows.state_machine import WorkflowTransitionError as EngineWorkflowTransitionError
+
+    @app.exception_handler(EngineWorkflowTransitionError)
+    async def engine_workflow_transition_error_handler(
+        request: Request, exc: EngineWorkflowTransitionError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "success": False,
+                "message": str(exc),
+                "errors": [
+                    {
+                        "field": "status",
+                        "message": str(exc),
+                        "code": "invalid_workflow_transition",
+                    }
+                ],
+                "current_status": exc.current.value,
+            },
+        )
+
     # --------------------------------------------------------- Utility routes
     @app.get(
         "/health",

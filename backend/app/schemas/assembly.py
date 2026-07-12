@@ -46,6 +46,13 @@ class BatchProgressResponse(BaseSchema):
     pending: int              # still ASSEMBLY_RECEIVED, not yet scanned
     set_making_ready: bool    # True when assembly_verified == total_expected
 
+    # HPTR never leaves OH, so its "set making ready" gate is independent of
+    # the Assembly-side fields above: ready once every HPTR blade in the
+    # batch has reached MEASUREMENTS_RECORDED.
+    hptr_total: int = 0
+    hptr_measurements_recorded: int = 0
+    hptr_set_making_ready: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Per-blade verification submission

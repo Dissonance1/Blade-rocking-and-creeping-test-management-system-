@@ -241,7 +241,7 @@ export function ModifyBladesPanel({
       </div>
 
       {blades.length === 0 && (
-        <div className="rounded-lg bg-slate-50 dark:bg-slate-700/30 p-6 text-center text-sm text-slate-400 dark:text-slate-500">
+        <div className="rounded-lg bg-slate-50 dark:bg-background p-6 text-center text-sm text-slate-400 dark:text-slate-500">
           No blades found for this batch.
         </div>
       )}
@@ -255,14 +255,14 @@ export function ModifyBladesPanel({
               value={modSearch}
               onChange={(e) => setModSearch(e.target.value)}
               placeholder="Search serial or melt…"
-              className="pl-8 h-8 text-xs bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+              className="pl-8 h-8 text-xs bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
             />
           </div>
 
           {/* Blade table — 6 columns only; all fields editable via inline form */}
           <div className={cn("rounded-lg border border-slate-200 dark:border-slate-700/50 overflow-x-auto", !fullPage && "max-h-72 overflow-y-auto")}>
             <table className="w-full text-xs relative">
-              <thead className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-20 shadow-sm">
+              <thead className="bg-slate-100 dark:bg-background sticky top-0 z-20 shadow-sm">
                 <tr>
                   {["Serial No.", "Melt No.", "Weight (g)", "SM (g·cm)", "Status", ""].map((h) => (
                     <th
@@ -323,7 +323,7 @@ export function ModifyBladesPanel({
                           isEditing && "bg-amber-50 dark:bg-amber-900/10",
                           isStaged && !isEditing && "bg-emerald-50/60 dark:bg-emerald-900/10",
                           !isEditing && !isStaged &&
-                            (idx % 2 === 0 ? "bg-white dark:bg-transparent" : "bg-slate-50/60 dark:bg-slate-800/20")
+                            (idx % 2 === 0 ? "bg-white dark:bg-transparent" : "bg-slate-50/60 dark:bg-background")
                         )}
                       >
                         <td className="px-3 py-2 font-mono font-medium text-orange-500 dark:text-orange-400 whitespace-nowrap">
@@ -389,7 +389,7 @@ export function ModifyBladesPanel({
                                   type="number" step="0.01"
                                   value={editFields.weight_grams}
                                   onChange={(e) => setField("weight_grams", e.target.value)}
-                                  className="h-8 text-xs bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                                  className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
                                 />
                               </div>
                               <div className="space-y-1">
@@ -398,7 +398,7 @@ export function ModifyBladesPanel({
                                   type="number" step="0.01"
                                   value={editFields.static_moment_gcm}
                                   onChange={(e) => setField("static_moment_gcm", e.target.value)}
-                                  className="h-8 text-xs bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                                  className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
                                 />
                               </div>
                               {/* Text fields */}
@@ -410,7 +410,7 @@ export function ModifyBladesPanel({
                                   <Input
                                     value={editFields[field]}
                                     onChange={(e) => setField(field, e.target.value)}
-                                    className="h-8 text-xs bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                                    className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
                                   />
                                 </div>
                               ))}
@@ -478,7 +478,7 @@ export function ModifyBladesPanel({
               value={remarks}
               onChange={(e) => setRemarks(e.target.value)}
               placeholder="e.g. Corrected weight for B1-002 after re-weighing on calibrated scale"
-              className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[70px] text-sm"
+              className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[70px] text-sm"
             />
           </div>
 

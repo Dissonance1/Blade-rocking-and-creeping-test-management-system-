@@ -18,10 +18,15 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
+  Cpu,
+  Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import api from "@/services/api";
+import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
+
+type CameraSource = "browser" | "oak1";
 
 export type ScanMode = "qr" | "serial" | "melt";
 
@@ -113,7 +118,29 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [autoScanActive, setAutoScanActive] = useState(mode === "qr");
 
-  // ── Start camera ────────────────────────────────────────────────────────────
+  // ── OAK-1 companion-service source (optional — falls back to browser webcam) ─
+  // `source` starts `null` (undecided) so the browser camera isn't opened —
+  // triggering a permission prompt — before we know whether OAK-1 should be
+  // preferred instead; the health-check effect below resolves it once.
+  const [oak1Available, setOak1Available] = useState(false);
+  const [source, setSource] = useState<CameraSource | null>(null);
+  const [oak1StreamReady, setOak1StreamReady] = useState(false);
+
+  // Detect the OAK-1 companion service once on mount; never throws, so a
+  // missing/unreachable service just leaves the browser webcam as-is.
+  useEffect(() => {
+    let cancelled = false;
+    checkOak1Health().then((available) => {
+      if (cancelled) return;
+      setOak1Available(available);
+      setSource(available ? "oak1" : "browser");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ── Start browser camera (getUserMedia) ─────────────────────────────────────
   const startCamera = useCallback(async () => {
     setPhase("starting");
     setErrorMsg("");
@@ -146,17 +173,41 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
     }
   }, [mode]);
 
+  // ── Source lifecycle: (re)start whichever feed is active, tear down the other ─
   useEffect(() => {
-    startCamera();
-    return () => {
-      cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, [startCamera]);
+    if (source === null) return undefined; // still waiting on the OAK-1 health check
 
-  // ── Auto QR scan loop (BarcodeDetector) ────────────────────────────────────
+    if (source === "browser") {
+      startCamera();
+      return () => {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      };
+    }
+
+    // source === "oak1": no getUserMedia stream to open — the companion
+    // service already keeps the OAK-1 pipeline open; the live preview below
+    // just points an <img> at its MJPEG stream, no polling loop needed.
+    setErrorMsg("");
+    setScanResult(null);
+    setCapturedSrc(null);
+    setOak1StreamReady(false);
+    setPhase("live");
+    if (mode === "qr" && hasBarcodeDetector() && window.BarcodeDetector) {
+      detectorRef.current = new window.BarcodeDetector({ formats: ["qr_code", "code_128", "ean_13", "data_matrix"] });
+    }
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
+
   useEffect(() => {
-    if (phase !== "live" || mode !== "qr" || !autoScanActive || !detectorRef.current) return;
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  // ── Auto QR scan loop (BarcodeDetector) — browser <video> source only; OAK-1
+  //    frames are scanned on manual capture via captureFrame's canvas path ──
+  useEffect(() => {
+    if (source !== "browser" || phase !== "live" || mode !== "qr" || !autoScanActive || !detectorRef.current) return;
 
     let stopped = false;
 
@@ -181,26 +232,39 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
       stopped = true;
       cancelAnimationFrame(rafRef.current);
     };
-  }, [phase, mode, autoScanActive, onResult, onClose]);
+  }, [source, phase, mode, autoScanActive, onResult, onClose]);
 
   // ── Capture frame ───────────────────────────────────────────────────────────
+  // Both sources converge on the same canvas: browser mode draws the live
+  // <video> element, OAK-1 mode fetches one fresh (non-preview) snapshot from
+  // the companion service and draws that — everything downstream (preview,
+  // BarcodeDetector, upload blob) is source-agnostic from here on.
   const captureFrame = useCallback(async () => {
-    const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas) return;
+    if (!canvas) return;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
-
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-    setCapturedSrc(dataUrl);
     setPhase("processing");
-
-    // Stop live video while processing
     cancelAnimationFrame(rafRef.current);
 
     try {
+      if (source === "oak1") {
+        const blob = await captureOak1Snapshot();
+        const bitmap = await createImageBitmap(blob);
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+        bitmap.close();
+      } else {
+        const video = videoRef.current;
+        if (!video) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d")?.drawImage(video, 0, 0);
+      }
+
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+      setCapturedSrc(dataUrl);
+
       let result: ScanResult;
 
       // Try BarcodeDetector first for QR mode
@@ -224,7 +288,7 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
       setErrorMsg("Scan failed. Try again with better lighting or a clearer image.");
       setPhase("error");
     }
-  }, [mode]);
+  }, [mode, source]);
 
   // ── Accept result ───────────────────────────────────────────────────────────
   const acceptResult = () => {
@@ -238,11 +302,18 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
   const retry = () => {
     setCapturedSrc(null);
     setScanResult(null);
-    if (videoRef.current && streamRef.current) {
+    if (source === "browser" && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
       videoRef.current.play().catch(() => {});
     }
     setPhase("live");
+  };
+
+  // Recover from an error overlay — browser mode needs a fresh getUserMedia
+  // call, OAK-1 mode just resumes polling (the service stays connected).
+  const retryFromError = () => {
+    if (source === "browser") startCamera();
+    else setPhase("live");
   };
 
   return (
@@ -255,7 +326,22 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
             <span className="text-sm font-semibold text-white">Scan {MODE_LABELS[mode]}</span>
           </div>
           <div className="flex items-center gap-2">
-            {mode === "qr" && hasBarcodeDetector() && (
+            {oak1Available && (
+              <button
+                onClick={() => setSource((p) => (p === "oak1" ? "browser" : "oak1"))}
+                title={source === "oak1" ? "Switch to browser camera" : "Switch to OAK-1 industrial camera"}
+                className={cn(
+                  "flex items-center gap-1 text-xs rounded-full px-2 py-0.5 transition-colors",
+                  source === "oak1"
+                    ? "bg-orange-500/20 text-orange-400"
+                    : "bg-slate-700 text-slate-400"
+                )}
+              >
+                {source === "oak1" ? <Cpu className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+                {source === "oak1" ? "OAK-1" : "Browser"}
+              </button>
+            )}
+            {mode === "qr" && source === "browser" && hasBarcodeDetector() && (
               <button
                 onClick={() => setAutoScanActive((p) => !p)}
                 className={cn(
@@ -281,24 +367,53 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
 
         {/* Camera / preview area */}
         <div className="relative bg-black aspect-video flex items-center justify-center overflow-hidden">
-          {/* Live video */}
-          <video
-            ref={videoRef}
-            className={cn("w-full h-full object-cover", (phase === "captured" || phase === "processing") && "hidden")}
-            playsInline
-            muted
-          />
+          {/* Live video (browser source) */}
+          {source === "browser" && (
+            <video
+              ref={videoRef}
+              className={cn("w-full h-full object-cover", (phase === "captured" || phase === "processing") && "hidden")}
+              playsInline
+              muted
+            />
+          )}
+
+          {/* Live preview (OAK-1 source — native MJPEG stream, not polling) */}
+          {source === "oak1" && phase === "live" && (
+            <img
+              src={getOak1StreamUrl()}
+              onLoad={() => setOak1StreamReady(true)}
+              onError={() => setOak1StreamReady(false)}
+              className="w-full h-full object-cover"
+              alt="OAK-1 live preview"
+            />
+          )}
 
           {/* Captured frame preview */}
           {capturedSrc && (phase === "captured" || phase === "processing") && (
             <img src={capturedSrc} className="w-full h-full object-cover" alt="Captured frame" />
           )}
 
-          {/* Starting overlay */}
-          {phase === "starting" && (
+          {/* Resolving camera source (checking for the OAK-1 companion service) */}
+          {source === null && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">
               <Loader2 className="w-8 h-8 animate-spin" />
               <span className="text-sm">Starting camera…</span>
+            </div>
+          )}
+
+          {/* Starting overlay (browser source) */}
+          {source === "browser" && phase === "starting" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">
+              <Loader2 className="w-8 h-8 animate-spin" />
+              <span className="text-sm">Starting camera…</span>
+            </div>
+          )}
+
+          {/* Waiting for the MJPEG stream to start rendering its first frame */}
+          {source === "oak1" && phase === "live" && !oak1StreamReady && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">
+              <Loader2 className="w-8 h-8 animate-spin" />
+              <span className="text-sm">Connecting to OAK-1…</span>
             </div>
           )}
 
@@ -308,7 +423,7 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
               <AlertCircle className="w-10 h-10" />
               <p className="text-sm">{errorMsg}</p>
               <button
-                onClick={startCamera}
+                onClick={retryFromError}
                 className="flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg transition-colors"
               >
                 <RefreshCw className="w-3 h-3" /> Retry
@@ -324,8 +439,8 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
             </div>
           )}
 
-          {/* Auto-scan viewfinder (QR mode) */}
-          {phase === "live" && mode === "qr" && autoScanActive && (
+          {/* Auto-scan viewfinder (QR mode, browser source) */}
+          {source === "browser" && phase === "live" && mode === "qr" && autoScanActive && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="w-[45%] aspect-square relative">
                 {/* Corner marks */}

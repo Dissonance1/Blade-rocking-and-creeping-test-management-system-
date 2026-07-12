@@ -71,17 +71,31 @@ export const bladeService = {
     return data;
   },
 
-  saveBatchGroup: async (payload: { batch_number: string; work_order_number: string; part_number: string; engine_number?: string; nomenclature: string }): Promise<void> => {
+  nextSerialNumber: async (batchNumber: string, bladeType: "LPTR" | "HPTR"): Promise<string> => {
+    const { data } = await api.get<{ next_serial_number: string }>("/blades/next-serial-number", {
+      params: { batch_number: batchNumber, blade_type: bladeType },
+    });
+    return data.next_serial_number;
+  },
+
+  saveBatchGroup: async (payload: { batch_number: string; work_order_number: string; part_number: string; engine_number?: string; nomenclature?: string }): Promise<void> => {
     await api.post("/blades/batch-groups", payload);
   },
 
-  checkSerialUnique: async (serial: string): Promise<boolean> => {
+  /**
+   * Serial numbers are unique per (batch_number, blade_type) — not globally —
+   * since each batch numbers its LPTR and HPTR blades 1..90 independently.
+   */
+  checkSerialUnique: async (
+    serial: string,
+    batchNumber: string,
+    bladeType: "LPTR" | "HPTR"
+  ): Promise<boolean> => {
     try {
-      // Try to find a blade with this serial; if found, not unique
-      const { data } = await api.get<PaginatedResponse<BladeListItem>>("/blades/", {
-        params: { q: serial, limit: 1 },
+      const { data } = await api.get<{ exists: boolean }>("/blades/serial-exists", {
+        params: { batch_number: batchNumber, blade_type: bladeType, serial_number: serial },
       });
-      return !data.items.some((b) => b.serial_number === serial);
+      return !data.exists;
     } catch {
       return true;
     }

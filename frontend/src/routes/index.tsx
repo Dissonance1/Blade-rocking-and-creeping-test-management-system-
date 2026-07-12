@@ -2,12 +2,14 @@ import { RouterProvider, createBrowserRouter, Navigate, useNavigate } from "reac
 import AppLayout from "@/layouts/components/SideBarMenu";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
+import QaDashboardPage from "@/pages/QaDashboardPage";
 import BladeEntryPage from "@/pages/BladeEntryPage";
 import BladeDetailPage from "@/pages/BladeDetailPage";
 import WorkflowTimelinePage from "@/pages/WorkflowTimelinePage";
 import OHQueuePage from "@/pages/OHQueuePage";
 import AssemblyQueuePage from "@/pages/AssemblyQueuePage";
 import SlotAllocationPage from "@/pages/SlotAllocationPage";
+import OHSlotAllocationPage from "@/pages/OHSlotAllocationPage";
 import ReportsPage from "@/pages/ReportsPage";
 import UserManagementPage from "@/pages/UserManagementPage";
 
@@ -40,8 +42,8 @@ function AccessDenied({ requiredRoles }: { requiredRoles: UserRole[] }) {
   const currentRole = user?.roles?.[0] ?? "Unknown";
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-6">
-      <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-8 text-center">
+    <div className="min-h-screen bg-slate-100 dark:bg-background flex items-center justify-center p-6">
+      <div className="max-w-md w-full bg-white dark:bg-background rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-8 text-center">
         <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mx-auto mb-4">
           <ShieldOff className="w-8 h-8 text-red-500" />
         </div>
@@ -95,6 +97,7 @@ function RequireRole({
 /** Maps a role to its landing path. Export so LoginPage can use it too. */
 export function getRoleHomePath(roles: UserRole[]): string {
   if (roles.includes("SUPER_ADMIN")) return "/dashboard";
+  if (roles.includes("QA_VIEWER")) return "/qa-dashboard";
   return "/batch-tracking";
 }
 
@@ -125,6 +128,14 @@ const router = createBrowserRouter([
         element: (
           <RequireRole roles={["SUPER_ADMIN"]}>
             <DashboardPage />
+          </RequireRole>
+        ),
+      },
+      {
+        path: "/qa-dashboard",
+        element: (
+          <RequireRole roles={["QA_VIEWER", "SUPER_ADMIN"]}>
+            <QaDashboardPage />
           </RequireRole>
         ),
       },
@@ -165,6 +176,14 @@ const router = createBrowserRouter([
         ),
       },
       { path: "/assembly/slots", element: <Navigate to="/slots" replace /> },
+      {
+        path: "/oh/slot-allocation",
+        element: (
+          <RequireRole roles={["OH_OPERATOR", "SUPER_ADMIN"]}>
+            <OHSlotAllocationPage />
+          </RequireRole>
+        ),
+      },
       { path: "/reports", element: <ReportsPage /> },
       {
         path: "/users",

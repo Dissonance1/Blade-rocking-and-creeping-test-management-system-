@@ -28,6 +28,18 @@ export const slotService = {
     return data;
   },
 
+  /** Swap the blades occupying two already-saved slots (both full rotors — no empty slot to reassign into). */
+  swap: async (payload: {
+    slot_number_a: string;
+    slot_number_b: string;
+    blade_type: "LPTR" | "HPTR";
+    batch_number: string;
+    reason: string;
+  }): Promise<SlotAllocation[]> => {
+    const { data } = await api.post<SlotAllocation[]>("/slots/swap", payload);
+    return data;
+  },
+
   update: async (id: string, payload: BalancingUpdate): Promise<SlotAllocation> => {
     const { data } = await api.put<SlotAllocation>(`/slots/${id}/balancing`, payload);
     return data;

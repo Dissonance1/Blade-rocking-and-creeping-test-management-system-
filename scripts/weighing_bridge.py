@@ -8,7 +8,7 @@ Primary scale (this deployment):
     Adam Equipment iScale i-04, 0.1 g resolution, RS-232 output — default COM6
 
 Usage:
-    python weighing_bridge.py                          # COM6, server = https://localhost
+    python weighing_bridge.py                          # COM6, server = http://localhost
     python weighing_bridge.py --port COM3              # different port
     python weighing_bridge.py --server https://192.168.1.50  # remote server
 
@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 import time
+from pathlib import Path
 
 import requests
 import serial
@@ -29,16 +31,23 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+_LOG_DIR = Path(__file__).resolve().parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_handlers = [logging.FileHandler(_LOG_DIR / "weighing_bridge.log", encoding="utf-8")]
+if sys.stderr is not None:
+    _handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(message)s",
     datefmt="%H:%M:%S",
+    handlers=_handlers,
 )
 log = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_PORT   = "COM6"
-DEFAULT_SERVER = "https://localhost"
+DEFAULT_SERVER = "http://localhost"
 PUSH_PATH      = "/api/v1/weighing/push"
 BAUD_RATES     = [9600, 4800, 2400, 19200, 38400]
 _WEIGHT_RE     = re.compile(r"\d+\.?\d*")

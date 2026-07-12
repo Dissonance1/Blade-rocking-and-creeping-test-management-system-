@@ -33,7 +33,6 @@ import { workflowService } from "@/services/workflowService";
 import { useAuthStore } from "@/store/authStore";
 import type { BladeStatus, WorkflowLog } from "@/types";
 import { cn } from "@/utils/cn";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -97,11 +96,11 @@ function WorkflowTimeline({ logs }: { logs: WorkflowLog[] }) {
               <div
                 className={cn(
                   "w-4 h-4 rounded-full border-2 border-white dark:border-slate-900 shadow shrink-0 z-10",
-                  isLatest ? cfg.dot : "bg-slate-400 dark:bg-slate-600"
+                  isLatest ? cfg.dot : "bg-slate-400 dark:bg-background"
                 )}
               />
               {!isLast && (
-                <div className="w-0.5 flex-1 bg-slate-300 dark:bg-slate-600 mt-1" />
+                <div className="w-0.5 flex-1 bg-slate-300 dark:bg-background mt-1" />
               )}
             </div>
 
@@ -109,8 +108,8 @@ function WorkflowTimeline({ logs }: { logs: WorkflowLog[] }) {
               className={cn(
                 "flex-1 rounded-xl border p-3 mb-1",
                 isLatest
-                  ? "border-orange-200 dark:border-slate-600 bg-orange-50 dark:bg-slate-700/40"
-                  : "border-slate-200 dark:border-slate-700/40 bg-white dark:bg-slate-800/20"
+                  ? "border-orange-200 dark:border-slate-600 bg-orange-50 dark:bg-background"
+                  : "border-slate-200 dark:border-slate-700/40 bg-white dark:bg-background"
               )}
             >
               <div className="flex items-start justify-between gap-2">
@@ -205,7 +204,7 @@ export default function BladeDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="h-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
+      <div className="h-full bg-slate-100 dark:bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
       </div>
     );
@@ -213,7 +212,7 @@ export default function BladeDetailPage() {
 
   if (!blade) {
     return (
-      <div className="h-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center text-slate-500 dark:text-slate-400 text-center px-4">
+      <div className="h-full bg-slate-100 dark:bg-background flex items-center justify-center text-slate-500 dark:text-slate-400 text-center px-4">
         Blade not found.
       </div>
     );
@@ -227,9 +226,9 @@ export default function BladeDetailPage() {
   ];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-4 shadow-none border-b-0">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-4 shadow-none border-b-0">
         <div className="w-full flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <Button
@@ -335,7 +334,7 @@ export default function BladeDetailPage() {
           {/* Left: detail cards */}
           <div className="xl:col-span-2 space-y-6">
             {/* Blade identity */}
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
               <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
                 <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
                   <div className="w-7 h-7 rounded-lg bg-orange-500 flex items-center justify-center">
@@ -388,7 +387,7 @@ export default function BladeDetailPage() {
 
             {/* Measurements */}
             {blade.measurements && blade.measurements.length > 0 && (
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+              <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                 <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
                   <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-blue-500 flex items-center justify-center">
@@ -469,7 +468,7 @@ export default function BladeDetailPage() {
 
             {/* OCR Data */}
             {blade.ocr_serial_number && (
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+              <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                 <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
                   <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-violet-500 flex items-center justify-center">
@@ -503,7 +502,7 @@ export default function BladeDetailPage() {
 
             {/* Slot allocation */}
             {blade.slot_allocation && (
-              <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+              <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
                 <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
                   <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-cyan-500 flex items-center justify-center">
@@ -550,7 +549,7 @@ export default function BladeDetailPage() {
 
           {/* Right: workflow timeline */}
           <div className="xl:col-span-1">
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm sticky top-6">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm sticky top-6">
               <CardHeader className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
                 <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-2">
                   <div className="w-7 h-7 rounded-lg bg-orange-500 flex items-center justify-center">
@@ -573,9 +572,6 @@ export default function BladeDetailPage() {
             </Card>
           </div>
         </div>
-      </div>
-      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-6 pb-4">
-        <Footer />
       </div>
     </div>
   );

@@ -7,17 +7,28 @@ WS   /weighing/ws   — stream live weight readings to connected browser clients
 Architecture:
   weighing_machine.py (Windows, reads COM6)
     → POST /api/v1/weighing/push  {"value": 123.45}
-    → backend broadcasts to all open WebSocket connections
+    → backend publishes to a Redis channel
+    → every uvicorn worker's open WebSocket connections receive it
     → browser auto-fills weight field
+
+Broadcast goes through Redis pub/sub rather than an in-memory set: the
+backend runs multiple uvicorn worker processes (see backend/Dockerfile,
+--workers 4), each with its own separate Python memory space. A WebSocket
+connection is pinned to whichever worker accepted it, but POST /push can
+land on any worker — an in-memory set only reaches subscribers in that same
+worker, so most pushes would silently reach zero clients. Redis pub/sub
+fans out to every worker's listeners regardless of which one received the
+push.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from app.core.security import decode_token
@@ -25,21 +36,7 @@ from app.core.security import decode_token
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
-# ─── In-memory broadcaster ────────────────────────────────────────────────────
-# Each open WebSocket connection registers a queue here.
-# POST /push puts a value into every queue → all clients get the reading instantly.
-
-_subscribers: set[asyncio.Queue[float]] = set()
-
-
-def _broadcast(value: float) -> None:
-    dead: set[asyncio.Queue[float]] = set()
-    for q in _subscribers:
-        try:
-            q.put_nowait(value)
-        except asyncio.QueueFull:
-            dead.add(q)
-    _subscribers.difference_update(dead)
+_CHANNEL = "weighing:broadcast"
 
 
 # ─── POST /push ───────────────────────────────────────────────────────────────
@@ -49,16 +46,22 @@ class WeightReading(BaseModel):
 
 
 @router.post("/push", status_code=200)
-async def push_weight(body: WeightReading) -> dict[str, Any]:
+async def push_weight(body: WeightReading, request: Request) -> dict[str, Any]:
     """
     Receive a weight reading from the local Windows bridge script and
-    broadcast it to all connected WebSocket clients immediately.
+    publish it for every connected WebSocket client (across all workers)
+    to pick up immediately.
 
     No auth required — this endpoint only accepts connections from localhost
     (enforced at the nginx layer; /api/v1/weighing/push is not exposed to LAN).
     """
-    _broadcast(body.value)
-    logger.debug("weight_pushed", value=body.value, subscribers=len(_subscribers))
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is None:
+        logger.warning("weight_push_dropped", reason="redis_unavailable", value=body.value)
+        return {"ok": False, "value": body.value}
+
+    await redis_client.publish(_CHANNEL, json.dumps({"value": body.value}))
+    logger.debug("weight_pushed", value=body.value)
     return {"ok": True, "value": body.value}
 
 
@@ -85,16 +88,23 @@ async def weighing_ws(websocket: WebSocket) -> None:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 
+    redis_client = getattr(websocket.app.state, "redis", None)
+    if redis_client is None:
+        await websocket.close(code=1011, reason="Broadcast backend unavailable")
+        return
+
     await websocket.accept()
     await websocket.send_json({"type": "status", "status": "connected"})
 
-    q: asyncio.Queue[float] = asyncio.Queue(maxsize=20)
-    _subscribers.add(q)
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe(_CHANNEL)
 
     async def _send_weights() -> None:
-        while True:
-            value = await q.get()
-            await websocket.send_json({"type": "weight", "value": value})
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            data = json.loads(message["data"])
+            await websocket.send_json({"type": "weight", "value": data["value"]})
 
     async def _ping() -> None:
         while True:
@@ -118,5 +128,6 @@ async def weighing_ws(websocket: WebSocket) -> None:
     except Exception as exc:
         logger.warning("weighing_ws_error", error=str(exc))
     finally:
-        _subscribers.discard(q)
+        await pubsub.unsubscribe(_CHANNEL)
+        await pubsub.aclose()
         logger.debug("weighing_ws_closed")

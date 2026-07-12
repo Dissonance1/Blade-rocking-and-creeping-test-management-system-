@@ -84,3 +84,13 @@ ssl/
 # ─── Windows alternate data streams ─────────────────────────────────────────
 *:Zone.Identifier
 *Zone.Identifier
+
+# ─── Ad-hoc virtualenvs & deployment artifacts ──────────────────────────────
+oak1-venv/
+scripts/oak1-venv/
+*.tar
+*.tar.gz
+Blade_validation_PPv4OCR/
+
+# ─── Downloaded OCR model weights (fetched at runtime, not source) ──────────
+backend/app/ocr/models/

@@ -10,7 +10,7 @@ const APP_VERSION =
 
 export default function AuthLayout() {
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-orange-950 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-orange-950 dark:from-background dark:via-background dark:to-background">
       {/* Subtle grid overlay */}
       <div
         className="absolute inset-0 opacity-[0.04]"
@@ -41,7 +41,7 @@ export default function AuthLayout() {
           </div>
 
           {/* Auth card */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-white/10 dark:border-slate-700/60 overflow-hidden">
+          <div className="bg-white dark:bg-background rounded-2xl shadow-2xl border border-white/10 dark:border-slate-700/60 overflow-hidden">
             <Outlet />
           </div>
         </div>

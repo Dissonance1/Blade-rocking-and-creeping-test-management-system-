@@ -61,6 +61,19 @@ def event_loop_policy():
     return asyncio.DefaultEventLoopPolicy()
 
 
+@pytest.fixture(scope="session")
+def event_loop(event_loop_policy):
+    """
+    Session-scoped event loop so the session-scoped ``async_engine`` fixture
+    (and everything built on it — ``db_session``, ``client``, etc.) runs on a
+    single loop for the whole test session, matching this pytest-asyncio
+    version's scoping model (it has no ``loop_scope`` fixture kwarg).
+    """
+    loop = event_loop_policy.new_event_loop()
+    yield loop
+    loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Database engine — one engine per test session for performance
 # ---------------------------------------------------------------------------

@@ -17,16 +17,27 @@ Architecture (two-station deployment):
     → only receives readings from the gauge on station 1
 
   Omitting station defaults to "1" for backwards compatibility with single-gauge setups.
+
+All shared state (position count, pending resets, in-progress cycle readings,
+and the broadcast itself) lives in Redis, not process memory: the backend
+runs multiple uvicorn worker processes (see backend/Dockerfile, --workers 4),
+each with its own separate memory space. A WebSocket connection is pinned to
+whichever worker accepted it, but POST /push, /positions, and /reset can each
+land on any worker — in-memory state only reaches the worker that handled a
+given request, so cross-worker state (like "did the frontend just reset this
+station") and cross-worker broadcast (delivering a reading to whichever
+worker holds the browser's WS) would otherwise be lost most of the time.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import decode_token
@@ -34,26 +45,13 @@ from app.core.security import decode_token
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
-# ─── In-memory state ─────────────────────────────────────────────────────────
-# Subscribers keyed by station; position_count is how many rows the active form has.
-
-_subscribers: dict[str, set[asyncio.Queue[dict]]] = {}
-_position_count: int = 4  # updated by frontend when rows are added/removed
-_reset_pending: dict[str, bool] = {}  # set by frontend on new blade entry
-_cycle_readings: dict[str, dict[str, float]] = {}  # station -> {position: value} captured so far this blade
+_DEFAULT_POSITION_COUNT = 4
+_POSITION_COUNT_KEY = "dti:position_count"
+_RESET_KEY_FMT = "dti:reset_pending:{station}"
+_CYCLE_KEY_FMT = "dti:cycle:{station}"
+_CHANNEL_FMT = "dti:broadcast:{station}"
 
 _POSITION_RE = re.compile(r"^H\d+$")
-
-
-def _broadcast(station: str, reading: dict) -> None:
-    queues = _subscribers.get(station, set())
-    dead: set[asyncio.Queue[dict]] = set()
-    for q in queues:
-        try:
-            q.put_nowait(reading)
-        except asyncio.QueueFull:
-            dead.add(q)
-    queues.difference_update(dead)
 
 
 # ─── POST /push ───────────────────────────────────────────────────────────────
@@ -90,31 +88,40 @@ class DtiPositionConfig(BaseModel):
 
 
 @router.get("/positions")
-async def get_position_count() -> dict[str, Any]:
+async def get_position_count(request: Request) -> dict[str, Any]:
     """Return how many height positions the bridge should cycle through."""
-    return {"count": _position_count}
+    redis_client = getattr(request.app.state, "redis", None)
+    count = _DEFAULT_POSITION_COUNT
+    if redis_client is not None:
+        raw = await redis_client.get(_POSITION_COUNT_KEY)
+        if raw is not None:
+            count = int(raw)
+    return {"count": count}
 
 
 @router.post("/positions", status_code=200)
-async def set_position_count(body: DtiPositionConfig) -> dict[str, Any]:
+async def set_position_count(body: DtiPositionConfig, request: Request) -> dict[str, Any]:
     """Frontend calls this whenever rows are added or removed from the measurement form."""
-    global _position_count
-    _position_count = body.count
-    logger.debug("dti_position_count_updated", count=_position_count)
-    return {"count": _position_count}
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is not None:
+        await redis_client.set(_POSITION_COUNT_KEY, body.count)
+    logger.debug("dti_position_count_updated", count=body.count)
+    return {"count": body.count}
 
 
 @router.post("/reset", status_code=200)
-async def reset_dti_cycle(station: str = Query(default="1")) -> dict[str, Any]:
+async def reset_dti_cycle(request: Request, station: str = Query(default="1")) -> dict[str, Any]:
     """Frontend calls this when a new blade entry starts — forces bridge back to H1."""
-    _reset_pending[station] = True
-    _cycle_readings[station] = {}
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is not None:
+        await redis_client.set(_RESET_KEY_FMT.format(station=station), "1")
+        await redis_client.delete(_CYCLE_KEY_FMT.format(station=station))
     logger.debug("dti_reset_requested", station=station)
     return {"ok": True, "station": station}
 
 
 @router.post("/push", status_code=200)
-async def push_dti(body: DtiReading) -> dict[str, Any]:
+async def push_dti(body: DtiReading, request: Request) -> dict[str, Any]:
     """
     Receive a single DTI height-position reading from the local Windows bridge
     script and broadcast it to WebSocket clients subscribed to the same station.
@@ -124,31 +131,42 @@ async def push_dti(body: DtiReading) -> dict[str, Any]:
     No auth required — this endpoint only accepts connections from localhost
     (enforced at the nginx layer; /api/v1/dti/push is not exposed to LAN).
     """
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is None:
+        logger.warning("dti_push_dropped", reason="redis_unavailable", station=body.station)
+        return {"ok": False, "station": body.station}
+
+    position_count = _DEFAULT_POSITION_COUNT
+    raw_count = await redis_client.get(_POSITION_COUNT_KEY)
+    if raw_count is not None:
+        position_count = int(raw_count)
+
+    cycle_key = _CYCLE_KEY_FMT.format(station=body.station)
+
     # If a reset was requested (new blade started), override position to H1
     # regardless of what the bridge sent (bridge may be mid-cycle from last blade)
-    if _reset_pending.pop(body.station, False):
+    reset_flag = await redis_client.getdel(_RESET_KEY_FMT.format(station=body.station))
+    if reset_flag:
         broadcast_pos = "H1"
-        next_num = 2 if _position_count > 1 else 1
-        _cycle_readings[body.station] = {}
+        next_num = 2 if position_count > 1 else 1
+        await redis_client.delete(cycle_key)
     else:
         broadcast_pos = body.position
         current_num = int(body.position[1:])
-        next_num = (current_num % _position_count) + 1
+        next_num = (current_num % position_count) + 1
 
     reading = {"position": broadcast_pos, "value": body.value}
-    _cycle_readings.setdefault(body.station, {})[broadcast_pos] = body.value
-    _broadcast(body.station, reading)
+    await redis_client.hset(cycle_key, broadcast_pos, body.value)
+    await redis_client.publish(_CHANNEL_FMT.format(station=body.station), json.dumps(reading))
     next_position = f"H{next_num}"
 
-    subscriber_count = len(_subscribers.get(body.station, set()))
     logger.debug(
         "dti_pushed",
         station=body.station,
         position=body.position,
         value=body.value,
         next_position=next_position,
-        position_count=_position_count,
-        subscribers=subscriber_count,
+        position_count=position_count,
     )
     return {
         "ok": True,
@@ -156,7 +174,7 @@ async def push_dti(body: DtiReading) -> dict[str, Any]:
         "position": body.position,
         "value": body.value,
         "next_position": next_position,
-        "position_count": _position_count,
+        "position_count": position_count,
     }
 
 
@@ -187,24 +205,31 @@ async def dti_ws(websocket: WebSocket) -> None:
 
     station: str = websocket.query_params.get("station", "1")
 
+    redis_client = getattr(websocket.app.state, "redis", None)
+    if redis_client is None:
+        await websocket.close(code=1011, reason="Broadcast backend unavailable")
+        return
+
     await websocket.accept()
     await websocket.send_json({"type": "status", "status": "connected", "station": station})
 
     # Catch the client up on readings captured for this blade before it connected
     # (server restart, WS reconnect gap, page navigation) — otherwise those readings
-    # are lost forever since _broadcast only reaches queues that exist at push time.
-    buffered = _cycle_readings.get(station, {})
+    # would be lost since the pub/sub channel only reaches subscribers listening
+    # at publish time.
+    buffered = await redis_client.hgetall(_CYCLE_KEY_FMT.format(station=station))
     for position in sorted(buffered, key=lambda p: int(p[1:])):
-        await websocket.send_json({"type": "dti", "position": position, "value": buffered[position]})
+        await websocket.send_json({"type": "dti", "position": position, "value": float(buffered[position])})
 
-    q: asyncio.Queue[dict] = asyncio.Queue(maxsize=20)
-    _subscribers.setdefault(station, set()).add(q)
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe(_CHANNEL_FMT.format(station=station))
 
     async def _send_readings() -> None:
-        while True:
-            reading = await q.get()
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            reading = json.loads(message["data"])
             await websocket.send_json({"type": "dti", **reading})
-            # Any exception here propagates — gather cancels the other tasks cleanly
 
     async def _ping() -> None:
         while True:
@@ -220,10 +245,11 @@ async def dti_ws(websocket: WebSocket) -> None:
         await asyncio.gather(
             _send_readings(), _ping(), _receive(),
         )
-    except (WebSocketDisconnect, Exception):
+    except WebSocketDisconnect:
         pass
     except Exception as exc:
         logger.warning("dti_ws_error", error=str(exc))
     finally:
-        _subscribers.get(station, set()).discard(q)
+        await pubsub.unsubscribe(_CHANNEL_FMT.format(station=station))
+        await pubsub.aclose()
         logger.debug("dti_ws_closed", station=station)

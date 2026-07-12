@@ -16,13 +16,13 @@ import {
   ArrowRight,
   Send,
   Wrench,
+  MapPin,
 } from "lucide-react";
 import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import KTIcon from "@/components/common/KTIcon";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 import { batchService, type BatchSummary, type BatchStatus, type BatchEvent } from "@/services/batchService";
 import { cn } from "@/utils/cn";
@@ -76,7 +76,7 @@ function KpiCard({ title, value, icon, accent }: {
 }) {
   const a = KPI_ACCENT[accent];
   return (
-    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
       <div className="flex items-center gap-2.5 min-w-0">
         <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br shadow-lg text-white shrink-0", a.gradient, a.glow)}>
           {icon}
@@ -118,6 +118,11 @@ const STATUS_CONFIG: Record<
     label: "Rejected",
     cls: "bg-red-500 text-white",
     icon: <XCircle className="w-3 h-3" />,
+  },
+  SLOTS_ALLOCATED: {
+    label: "Slots Allocated",
+    cls: "bg-cyan-500 text-white",
+    icon: <MapPin className="w-3 h-3" />,
   },
   MODIFIED: {
     label: "Modified",
@@ -286,7 +291,7 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
   const sentPct = Math.round((batch.blades_sent / 90) * 100);
 
   return (
-    <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20">
+    <Card className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20">
       <CardHeader className="pb-1 pt-3 px-3.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -418,7 +423,8 @@ export default function BatchTrackingPage() {
     RECEIVED_BY_ASSEMBLY: 2,
     MODIFIED: 3,
     ACCEPTED: 4,
-    REJECTED: 5,
+    SLOTS_ALLOCATED: 5,
+    REJECTED: 6,
   };
 
   const ASSEMBLY_STATUSES: BatchStatus[] = [
@@ -426,6 +432,7 @@ export default function BatchTrackingPage() {
     "RECEIVED_BY_ASSEMBLY",
     "MODIFIED",
     "ACCEPTED",
+    "SLOTS_ALLOCATED",
     "REJECTED",
   ];
 
@@ -446,10 +453,10 @@ export default function BatchTrackingPage() {
     : "Batches created and managed at 701 Hanger (OH)";
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
 
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -504,7 +511,7 @@ export default function BatchTrackingPage() {
         </div>
 
         {/* Batch grid */}
-        <Card className="shrink-0 bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+        <Card className="shrink-0 bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
           <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
             <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
               <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
@@ -536,7 +543,7 @@ export default function BatchTrackingPage() {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-1">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-1 items-start">
                 {sorted.map((batch) => (
                   <BatchCard key={batch.batch_number} batch={batch} />
                 ))}
@@ -546,9 +553,6 @@ export default function BatchTrackingPage() {
         </Card>
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
     </div>
   );
 }

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
 import { ModifyBladesPanel, type ModifySubmitData } from "@/components/ModifyBladesPanel";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 export default function ModifyBatchPage() {
   const { batchNumber } = useParams<{ batchNumber: string }>();
@@ -43,9 +42,9 @@ export default function ModifyBatchPage() {
   if (!batchNumber) return null;
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background py-2.5">
         <div className="max-w-screen-xl mx-auto w-full px-4 sm:px-6 relative flex flex-col sm:flex-row items-center justify-center min-h-[44px]">
           <div className="sm:absolute sm:left-6 sm:top-1/2 sm:-translate-y-1/2 self-start sm:self-auto mb-2 sm:mb-0">
             <Button
@@ -71,7 +70,7 @@ export default function ModifyBatchPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 w-full px-4 sm:px-6 py-5 flex flex-col gap-5">
+      <div className="flex-1 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
         <div className="max-w-4xl mx-auto w-full">
           {isLoading ? (
             <div className="flex items-center justify-center py-32">
@@ -86,7 +85,7 @@ export default function ModifyBatchPage() {
               </Button>
             </div>
           ) : (
-            <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 sm:p-6 shadow-sm">
+            <div className="bg-white dark:bg-background rounded-xl border border-slate-200 dark:border-slate-700 p-4 sm:p-6 shadow-sm">
               <ModifyBladesPanel
                 fullPage
                 batchNumber={batchNumber}
@@ -100,9 +99,6 @@ export default function ModifyBatchPage() {
         </div>
       </div>
 
-      <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
-        <Footer />
-      </div>
     </div>
   );
 }

@@ -50,7 +50,10 @@ export type NotificationType =
   | "SLOT_ASSIGNED"
   | "BALANCING_COMPLETE"
   | "REJECTION"
-  | "HOLD";
+  | "HOLD"
+  | "SYSTEM_ALERT"
+  | "BLADE_READY_FOR_ASSEMBLY"
+  | "ASSEMBLY_RECEIVED";
 
 export type ReportType = "PDF" | "EXCEL";
 // "READY" is what the backend sends; "COMPLETED" kept as alias for page compatibility
@@ -87,6 +90,8 @@ export interface LoginCredentials {
 
 // ─── Blade ────────────────────────────────────────────────────────────────────
 
+export type BladeType = "LPTR" | "HPTR";
+
 export interface Blade {
   id: string;
   serial_number: string;
@@ -99,7 +104,7 @@ export interface Blade {
   batch_number?: string | null;
   engine_hours?: string | null;
   component_hours?: string | null;
-  blade_type?: "LPTR" | "HPTR" | null;
+  blade_type?: BladeType | null;
   status: BladeStatus;
   current_station_id?: string | null;
   created_by_id: string;
@@ -123,6 +128,7 @@ export interface BladeListItem {
   melt_number: string;
   part_number: string;
   nomenclature: string;
+  blade_type: BladeType;
   status: BladeStatus;
   work_order_number?: string | null;
   shop_order_number?: string | null;
@@ -144,12 +150,12 @@ export interface BladeCreateRequest {
   work_order_number: string;
   shop_order_number: string;
   part_number: string;
-  nomenclature: string;
+  nomenclature?: string;
   engine_number?: string;
   batch_number?: string;
   engine_hours?: string;
   component_hours?: string;
-  blade_type?: "LPTR" | "HPTR";
+  blade_type?: BladeType;
 }
 
 export interface BladeUpdateRequest {
@@ -319,8 +325,8 @@ export interface Notification {
 }
 
 export interface NotificationQueryParams {
-  page?: number;
-  page_size?: number;
+  skip?: number;
+  limit?: number;
   unread_only?: boolean;
 }
 
@@ -392,6 +398,7 @@ export interface BladeSearchParams {
   status?: BladeStatus;
   statuses?: BladeStatus[];
   batch_number?: string;
+  blade_type?: BladeType;
   station_id?: string;
   q?: string;
   date_from?: string;

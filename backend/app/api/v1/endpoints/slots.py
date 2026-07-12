@@ -18,15 +18,16 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_roles
+from app.core.dependencies import _user_role_names, get_current_user
 from app.db.session import get_db
-from app.models.enums import BladeStatus
+from app.models.enums import BladeStatus, BladeType
 from app.schemas.base import PaginatedResponse
 from app.schemas.slot_allocation import (
     BalancingUpdateRequest,
     SlotAllocationResponse,
     SlotAssignRequest,
     SlotReassignRequest,
+    SlotSwapRequest,
 )
 
 logger = structlog.get_logger(__name__)
@@ -68,6 +69,21 @@ async def _get_blade_or_404(blade_id: uuid.UUID, db: AsyncSession) -> Any:
     return blade
 
 
+def _require_role_for_blade_type(current_user: Any, blade_type: BladeType) -> None:
+    """Slot allocation/balancing is ASSEMBLY_OPERATOR's job for LPTR blades
+    (sent to Assembly) and OH_OPERATOR's job for HPTR blades (never leave OH).
+    SUPER_ADMIN may act on either."""
+    user_roles = _user_role_names(current_user)
+    if "SUPER_ADMIN" in user_roles:
+        return
+    required = "ASSEMBLY_OPERATOR" if blade_type == BladeType.LPTR else "OH_OPERATOR"
+    if required not in user_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{required} or SUPER_ADMIN role required for {blade_type.value} blades",
+        )
+
+
 # ---------------------------------------------------------------------------
 # POST /assign
 # ---------------------------------------------------------------------------
@@ -81,34 +97,45 @@ async def _get_blade_or_404(blade_id: uuid.UUID, db: AsyncSession) -> Any:
 )
 async def assign_slot(
     body: SlotAssignRequest,
-    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Any:
     """
     Assign a blade to a numbered assembly slot on the rotor jig.
 
     Prerequisites:
-    - The blade must be in ``SENT_TO_ASSEMBLY`` or ``RETURNED_TO_OH`` status.
+    - LPTR blades must be in ``SENT_TO_ASSEMBLY`` or ``RETURNED_TO_OH`` status
+      (assigned by ASSEMBLY_OPERATOR/SUPER_ADMIN).
+    - HPTR blades must be in ``MEASUREMENTS_RECORDED`` status — they never
+      leave OH, so slot assignment happens directly from there (assigned by
+      OH_OPERATOR/SUPER_ADMIN).
     - The target slot number must not already be occupied by an active allocation.
 
     Side effect: blade status transitions to ``SLOT_ASSIGNED``.
 
     Raises:
+        HTTP 403 — caller's role doesn't match the blade's type.
         HTTP 404 — blade not found.
         HTTP 409 — blade has an existing active slot / slot already occupied /
                    blade not in a valid status for slot assignment.
     """
     from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
-    from app.models.workflow import WorkflowLog
+    from app.workflows.state_machine import WorkflowEngine
 
     blade = await _get_blade_or_404(body.blade_id, db)
+    _require_role_for_blade_type(current_user, blade.blade_type)
 
-    valid_from = {BladeStatus.SENT_TO_ASSEMBLY, BladeStatus.RETURNED_TO_OH}
+    valid_from = (
+        {BladeStatus.MEASUREMENTS_RECORDED}
+        if blade.blade_type == BladeType.HPTR
+        else {BladeStatus.SENT_TO_ASSEMBLY, BladeStatus.RETURNED_TO_OH}
+    )
     if blade.status not in valid_from:
+        valid_labels = ", ".join(sorted(s.value for s in valid_from))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Blade must be in SENT_TO_ASSEMBLY or RETURNED_TO_OH status. Current: '{blade.status}'",
+            detail=f"Blade must be in one of [{valid_labels}] status. Current: '{blade.status}'",
         )
 
     # Check blade doesn't already have an active slot
@@ -126,19 +153,24 @@ async def assign_slot(
             detail=f"Blade already has active slot assignment '{existing.slot_number}'",
         )
 
-    # Check target slot is free
+    # Check target slot is free — scoped to blade_type, since LPTR and HPTR
+    # are physically different rotors (different slot counts) with
+    # independent slot numbering, not a shared numbering space.
     slot_occupied = (
         await db.execute(
-            select(SlotAllocation).where(
+            select(SlotAllocation)
+            .join(Blade, Blade.id == SlotAllocation.blade_id)
+            .where(
                 SlotAllocation.slot_number == body.slot_number,
                 SlotAllocation.is_active.is_(True),
+                Blade.blade_type == blade.blade_type,
             )
         )
     ).scalar_one_or_none()
     if slot_occupied:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Slot '{body.slot_number}' is already occupied",
+            detail=f"Slot '{body.slot_number}' is already occupied on the {blade.blade_type.value} rotor",
         )
 
     from datetime import datetime, timezone
@@ -157,16 +189,13 @@ async def assign_slot(
     db.add(allocation)
 
     # Advance blade status
-    prev_status = blade.status
-    blade.status = BladeStatus.SLOT_ASSIGNED
-    log = WorkflowLog(
-        blade_id=blade.id,
-        from_status=prev_status,
+    await WorkflowEngine(db).transition(
+        blade=blade,
         to_status=BladeStatus.SLOT_ASSIGNED,
-        action_by_id=current_user.id,
+        user=current_user,
+        station_id=None,
         remarks=f"Assigned to slot {body.slot_number}",
     )
-    db.add(log)
 
     await db.commit()
     await db.refresh(allocation)
@@ -193,7 +222,7 @@ async def assign_slot(
 )
 async def reassign_slot(
     body: SlotReassignRequest,
-    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Any:
     """
@@ -205,12 +234,15 @@ async def reassign_slot(
     A mandatory ``reason`` is required for all reassignments.
 
     Raises:
+        HTTP 403 — caller's role doesn't match the blade's type.
         HTTP 404 — blade not found, or blade has no active slot.
         HTTP 409 — new slot is already occupied.
     """
+    from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
 
-    await _get_blade_or_404(body.blade_id, db)
+    blade = await _get_blade_or_404(body.blade_id, db)
+    _require_role_for_blade_type(current_user, blade.blade_type)
 
     # Find current active allocation
     current_alloc = (
@@ -227,19 +259,22 @@ async def reassign_slot(
             detail="Blade has no active slot allocation to reassign",
         )
 
-    # Check new slot is free
+    # Check new slot is free — scoped to blade_type (see assign_slot for why).
     target_occupied = (
         await db.execute(
-            select(SlotAllocation).where(
+            select(SlotAllocation)
+            .join(Blade, Blade.id == SlotAllocation.blade_id)
+            .where(
                 SlotAllocation.slot_number == body.new_slot_number,
                 SlotAllocation.is_active.is_(True),
+                Blade.blade_type == blade.blade_type,
             )
         )
     ).scalar_one_or_none()
     if target_occupied:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Target slot '{body.new_slot_number}' is already occupied",
+            detail=f"Target slot '{body.new_slot_number}' is already occupied on the {blade.blade_type.value} rotor",
         )
 
     from datetime import datetime, timezone
@@ -277,6 +312,126 @@ async def reassign_slot(
 
 
 # ---------------------------------------------------------------------------
+# POST /swap
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/swap",
+    response_model=list[SlotAllocationResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Swap the blades occupying two already-saved slots",
+)
+async def swap_slots(
+    body: SlotSwapRequest,
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Any:
+    """
+    Exchange which blade occupies each of two slots.
+
+    Unlike ``/reassign`` (which moves one blade into an empty slot), a full
+    rotor has no empty slots — correcting a blade that fails physical
+    balancing testing means swapping it with another slot's blade. Both
+    allocations are reset to unbalanced since they're now in new positions.
+
+    Raises:
+        HTTP 403 — caller's role doesn't match the blade type.
+        HTTP 404 — either slot has no active allocation.
+        HTTP 422 — the two slot numbers are identical.
+    """
+    from datetime import datetime, timezone
+
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+
+    # `use_enum_values=True` on BaseSchema means body.blade_type may already
+    # be a plain str rather than a BladeType member — normalize once, up front.
+    blade_type_val = (
+        body.blade_type if isinstance(body.blade_type, BladeType) else BladeType(body.blade_type)
+    )
+
+    _require_role_for_blade_type(current_user, blade_type_val)
+
+    if body.slot_number_a == body.slot_number_b:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Slot A and Slot B must be different",
+        )
+
+    async def _active_allocation(slot_number: str) -> Any:
+        return (
+            await db.execute(
+                select(SlotAllocation)
+                .join(Blade, Blade.id == SlotAllocation.blade_id)
+                .where(
+                    SlotAllocation.slot_number == slot_number,
+                    SlotAllocation.is_active.is_(True),
+                    Blade.blade_type == blade_type_val,
+                    Blade.batch_number == body.batch_number,
+                )
+            )
+        ).scalar_one_or_none()
+
+    alloc_a = await _active_allocation(body.slot_number_a)
+    alloc_b = await _active_allocation(body.slot_number_b)
+    if alloc_a is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_a}' in batch '{body.batch_number}'",
+        )
+    if alloc_b is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_b}' in batch '{body.batch_number}'",
+        )
+
+    now = datetime.now(timezone.utc)
+    alloc_a.is_active = False
+    alloc_b.is_active = False
+
+    new_a = SlotAllocation(
+        blade_id=alloc_a.blade_id,
+        slot_number=body.slot_number_b,
+        position=alloc_a.position,
+        group_id=alloc_a.group_id,
+        allocated_by_id=current_user.id,
+        allocated_at=now,
+        is_active=True,
+        is_balanced=False,
+        previous_slot_number=body.slot_number_a,
+        balancing_remarks=body.reason,
+    )
+    new_b = SlotAllocation(
+        blade_id=alloc_b.blade_id,
+        slot_number=body.slot_number_a,
+        position=alloc_b.position,
+        group_id=alloc_b.group_id,
+        allocated_by_id=current_user.id,
+        allocated_at=now,
+        is_active=True,
+        is_balanced=False,
+        previous_slot_number=body.slot_number_b,
+        balancing_remarks=body.reason,
+    )
+    db.add(new_a)
+    db.add(new_b)
+
+    await db.commit()
+    await db.refresh(new_a)
+    await db.refresh(new_b)
+
+    logger.info(
+        "slots_swapped",
+        blade_type=blade_type_val.value,
+        batch=body.batch_number,
+        slot_a=body.slot_number_a,
+        slot_b=body.slot_number_b,
+    )
+    return [new_a, new_b]
+
+
+# ---------------------------------------------------------------------------
 # PUT /{slot_id}/balancing
 # ---------------------------------------------------------------------------
 
@@ -291,7 +446,7 @@ async def update_balancing(
     slot_id: uuid.UUID,
     body: BalancingUpdateRequest,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Any:
     """
@@ -302,37 +457,40 @@ async def update_balancing(
     ``BALANCING_IN_PROGRESS``.
 
     Raises:
+        HTTP 403 — caller's role doesn't match the blade's type.
         HTTP 404 — slot allocation not found.
     """
-    from app.models.workflow import WorkflowLog
+    from app.workflows.state_machine import WorkflowEngine
 
     allocation = await _get_slot_or_404(slot_id, db)
+    blade = await _get_blade_or_404(allocation.blade_id, db)
+    _require_role_for_blade_type(current_user, blade.blade_type)
 
     allocation.is_balanced = body.is_balanced
     allocation.unbalance_value = body.unbalance_value
     allocation.balancing_remarks = body.balancing_remarks
 
     # Advance blade status
-    blade = await _get_blade_or_404(allocation.blade_id, db)
-    prev_status = blade.status
     new_status = (
         BladeStatus.BALANCING_COMPLETED if body.is_balanced else BladeStatus.BALANCING_IN_PROGRESS
     )
 
-    if blade.status in {
-        BladeStatus.SLOT_ASSIGNED,
-        BladeStatus.BALANCING_IN_PROGRESS,
-        BladeStatus.BALANCING_COMPLETED,
-    }:
-        blade.status = new_status
-        log = WorkflowLog(
-            blade_id=blade.id,
-            from_status=prev_status,
+    if (
+        blade.status
+        in {
+            BladeStatus.SLOT_ASSIGNED,
+            BladeStatus.BALANCING_IN_PROGRESS,
+            BladeStatus.BALANCING_COMPLETED,
+        }
+        and blade.status != new_status
+    ):
+        await WorkflowEngine(db).transition(
+            blade=blade,
             to_status=new_status,
-            action_by_id=current_user.id,
+            user=current_user,
+            station_id=None,
             remarks=body.balancing_remarks,
         )
-        db.add(log)
 
     await db.commit()
     await db.refresh(allocation)

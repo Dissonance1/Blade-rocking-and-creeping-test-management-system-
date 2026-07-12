@@ -32,7 +32,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 import { bladeService } from "@/services/bladeService";
 import { assemblyService } from "@/services/assemblyService";
@@ -125,7 +124,7 @@ function InfoPill({ label, value, mono }: { label: string; value?: string | null
 
 function OhValueCell({ label, value, unit }: { label: string; value: number | null; unit: string }) {
   return (
-    <div className="flex flex-col items-center gap-0.5 bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-2 min-w-[70px]">
+    <div className="flex flex-col items-center gap-0.5 bg-slate-50 dark:bg-background rounded-lg px-3 py-2 min-w-[70px]">
       <span className="text-[10px] uppercase tracking-widest font-bold text-slate-400 dark:text-slate-500">{label}</span>
       <span className="text-sm font-mono font-bold text-slate-700 dark:text-slate-200">
         {value != null ? value.toFixed(unit === "g" ? 2 : 3) : "—"}
@@ -238,6 +237,7 @@ export default function AssemblyVerificationPage() {
 
   // ── Measurement fields ──────────────────────────────────────────────────
   const [weight, setWeight] = useState<string>("");
+  const [weightLocked, setWeightLocked] = useState(false);
   const [dtiValues, setDtiValues] = useState<string[]>(["", "", "", ""]);
   const [activeDtiIdx, setActiveDtiIdx] = useState<number | null>(0);
   const [lockedDti, setLockedDti] = useState<boolean[]>([false, false, false, false]);
@@ -268,12 +268,12 @@ export default function AssemblyVerificationPage() {
   const { currentReading: weightReading, connected: weightConn } = useWeighingSocket();
   const { lastReading: dtiReading, connected: dtiConn } = useDTISocket(dtiStation);
 
-  // Auto-fill weight when scale sends a reading and field is empty
+  // Continuously track the live scale reading, mirroring the LiveValue badge above
   useEffect(() => {
-    if (weightReading && weight === "") {
+    if (weightReading && !weightLocked) {
       setWeight(weightReading.value.toFixed(2));
     }
-  }, [weightReading]);
+  }, [weightReading, weightLocked]);
 
   // Stream live DTI value into active (unlocked) row
   useEffect(() => {
@@ -294,6 +294,7 @@ export default function AssemblyVerificationPage() {
     setOcrNumber("");
     setMeltScan("");
     setWeight("");
+    setWeightLocked(false);
     setDtiValues(["", "", "", ""]);
     setActiveDtiIdx(0);
     setLockedDti([false, false, false, false]);
@@ -510,9 +511,9 @@ export default function AssemblyVerificationPage() {
 
   return (
     <>
-      <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+      <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
         {/* Header */}
-        <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 border-b border-white/60 dark:border-white/10 shadow-sm px-4 sm:px-6 py-4">
+        <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background border-b border-white/60 dark:border-white/10 shadow-sm px-4 sm:px-6 py-4">
           <div className="max-w-screen-xl mx-auto w-full flex flex-col sm:flex-row sm:items-start gap-3">
             <Button
               variant="ghost"
@@ -534,7 +535,7 @@ export default function AssemblyVerificationPage() {
                   <span className="text-xs text-slate-500 dark:text-slate-400">
                     {verifiedCount}/{totalExpected} verified · {rejectedCount} rejected · {pendingCount} pending
                   </span>
-                  <div className="flex-1 min-w-[100px] max-w-[200px] bg-slate-200 dark:bg-slate-700 rounded-full h-1.5">
+                  <div className="flex-1 min-w-[100px] max-w-[200px] bg-slate-200 dark:bg-background rounded-full h-1.5">
                     <div
                       className="bg-orange-500 h-1.5 rounded-full transition-all"
                       style={{ width: `${progressPct}%` }}
@@ -567,13 +568,13 @@ export default function AssemblyVerificationPage() {
         </div>
 
         {/* Body */}
-        <div className="flex-1 min-h-0 max-w-screen-xl mx-auto w-full px-4 sm:px-6 py-4 sm:py-6 flex flex-col lg:flex-row gap-4 sm:gap-6 overflow-y-auto">
+        <div className="flex-1 min-h-0 max-w-screen-xl mx-auto w-full px-4 sm:px-6 pt-4 sm:pt-6 pb-32 flex flex-col lg:flex-row gap-4 sm:gap-6 overflow-y-auto">
           {/* ── Left: blade list ── */}
           <div className="w-full lg:w-72 shrink-0 flex flex-col gap-3">
             <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 pl-1">
               Blades ({blades.length})
             </p>
-            <div className="flex flex-col bg-white dark:bg-slate-800/40 p-2 rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-sm lg:flex-1 lg:min-h-0">
+            <div className="flex flex-col bg-white dark:bg-background p-2 rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-sm lg:flex-1 lg:min-h-0">
               <div className="max-h-72 lg:max-h-none lg:flex-1 overflow-y-auto space-y-1">
                 {bladesLoading && (
                   <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
@@ -610,10 +611,10 @@ export default function AssemblyVerificationPage() {
           </div>
 
           {/* ── Right: verification panel ── */}
-          <div className="flex-1 min-w-0 flex flex-col lg:pt-7">
+          <div className="flex-1 min-w-0 lg:self-start flex flex-col gap-4 lg:pt-7 pb-16">
             {!selectedBlade ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-sm">
-                <div className="w-16 h-16 sm:w-24 sm:h-24 mb-6 rounded-full bg-slate-50 dark:bg-slate-800 flex items-center justify-center shadow-inner border border-slate-100 dark:border-slate-700">
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 text-slate-400 dark:text-slate-500 bg-white dark:bg-background rounded-2xl border border-slate-200 dark:border-slate-700/60 shadow-sm">
+                <div className="w-16 h-16 sm:w-24 sm:h-24 mb-6 rounded-full bg-slate-50 dark:bg-background flex items-center justify-center shadow-inner border border-slate-100 dark:border-slate-700">
                   <ScanLine className="w-8 h-8 sm:w-10 sm:h-10 text-slate-300 dark:text-slate-600" />
                 </div>
                 <p className="font-semibold text-lg sm:text-xl text-slate-700 dark:text-slate-300">Select a blade to verify</p>
@@ -625,7 +626,7 @@ export default function AssemblyVerificationPage() {
               <div className="space-y-4">
 
                 {/* ── Blade identity card ── */}
-                <Card className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
+                <Card className="bg-white/80 dark:bg-background backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       {/* Left: serial + melt + type badge */}
@@ -707,7 +708,7 @@ export default function AssemblyVerificationPage() {
                 {selectedBlade.status === "ASSEMBLY_RECEIVED" && decision !== "result" && (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {/* ── Identity scan ── */}
-                    <Card className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
+                    <Card className="bg-white/80 dark:bg-background backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
                       <CardContent className="p-4 space-y-4">
                         <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
                           <QrCode className="w-3 h-3" /> Identity Scan
@@ -727,7 +728,7 @@ export default function AssemblyVerificationPage() {
                               onChange={(e) => setQrScan(e.target.value)}
                               placeholder="Scan QR or type serial number…"
                               className={cn(
-                                "font-mono text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600",
+                                "font-mono text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600",
                                 qrMatchStatus === "match" && "border-emerald-400 dark:border-emerald-500",
                                 qrMatchStatus === "mismatch" && "border-red-400 dark:border-red-500"
                               )}
@@ -759,7 +760,7 @@ export default function AssemblyVerificationPage() {
                               onChange={(e) => setOcrNumber(e.target.value)}
                               placeholder="OCR-captured or manually entered…"
                               className={cn(
-                                "font-mono text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600",
+                                "font-mono text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600",
                                 ocrMatchStatus === "match" && "border-emerald-400 dark:border-emerald-500",
                                 ocrMatchStatus === "mismatch" && "border-red-400 dark:border-red-500"
                               )}
@@ -791,7 +792,7 @@ export default function AssemblyVerificationPage() {
                               onChange={(e) => setMeltScan(e.target.value)}
                               placeholder="Scan or enter melt number…"
                               className={cn(
-                                "font-mono text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600",
+                                "font-mono text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600",
                                 meltMatchStatus === "match" && "border-emerald-400 dark:border-emerald-500",
                                 meltMatchStatus === "mismatch" && "border-red-400 dark:border-red-500"
                               )}
@@ -810,7 +811,7 @@ export default function AssemblyVerificationPage() {
                         </div>
 
                         {/* Expected values hint */}
-                        <div className="rounded-lg bg-slate-50 dark:bg-slate-700/40 border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
+                        <div className="rounded-lg bg-slate-50 dark:bg-background border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
                           <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400 dark:text-slate-500">Expected on Blade Tag</p>
                           <div className="flex items-center gap-2">
                             <Tag className="w-3 h-3 text-slate-400 shrink-0" />
@@ -831,7 +832,7 @@ export default function AssemblyVerificationPage() {
                     </Card>
 
                     {/* ── Weight ── */}
-                    <Card className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
+                    <Card className="bg-white/80 dark:bg-background backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
                       <CardContent className="p-4 space-y-4">
                         <div className="flex items-center justify-between">
                           <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
@@ -855,21 +856,29 @@ export default function AssemblyVerificationPage() {
                             type="number"
                             step="0.01"
                             value={weight}
-                            onChange={(e) => setWeight(e.target.value)}
+                            readOnly={weightLocked}
+                            onChange={(e) => {
+                              if (weightLocked) return;
+                              setWeight(e.target.value);
+                            }}
                             placeholder="0.00"
-                            className="font-mono text-sm bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600"
+                            className="font-mono text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
                           />
                           <span className="self-center text-xs text-slate-500 font-mono">g</span>
-                          {weightReading && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="shrink-0 border-amber-400 text-amber-600 dark:text-amber-400 hover:bg-amber-50 text-xs"
-                              onClick={() => setWeight(weightReading.value.toFixed(2))}
-                            >
-                              Capture
-                            </Button>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title={weightLocked ? "Unlock" : "Lock"}
+                            className={cn(
+                              "shrink-0 h-9 px-2",
+                              weightLocked
+                                ? "border-amber-400 text-amber-600 dark:text-amber-400"
+                                : "border-emerald-400 text-emerald-600 dark:text-emerald-400"
+                            )}
+                            onClick={() => setWeightLocked((prev) => !prev)}
+                          >
+                            {weightLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                          </Button>
                         </div>
 
                         {weight !== "" && ohWeight != null && (
@@ -888,7 +897,7 @@ export default function AssemblyVerificationPage() {
                     </Card>
 
                     {/* ── DTI readings ── */}
-                    <Card className="lg:col-span-2 bg-white/80 dark:bg-slate-900/60 backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
+                    <Card className="lg:col-span-2 bg-white/80 dark:bg-background backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between mb-4">
                           <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
@@ -961,7 +970,7 @@ export default function AssemblyVerificationPage() {
                                     }}
                                     placeholder="0.000"
                                     className={cn(
-                                      "font-mono text-sm bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 h-8",
+                                      "font-mono text-sm bg-white dark:bg-background border-slate-300 dark:border-slate-600 h-8",
                                       withinTol === true && "border-emerald-400 dark:border-emerald-500",
                                       withinTol === false && "border-red-400 dark:border-red-500"
                                     )}
@@ -1054,10 +1063,10 @@ export default function AssemblyVerificationPage() {
                     </div>}
 
                     {decision !== "modifying" && (
-                      <Card className="bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60">
+                      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
                         <CardContent className="p-0 overflow-x-auto">
                           <table className="w-full text-sm whitespace-nowrap">
-                            <thead className="bg-slate-100 dark:bg-slate-700/60">
+                            <thead className="bg-slate-100 dark:bg-background">
                               <tr>
                                 {["Field", "OH Value", "Assembly Value", "Delta", "Status"].map((h) => (
                                   <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
@@ -1139,14 +1148,14 @@ export default function AssemblyVerificationPage() {
                           value={rejectReason}
                           onChange={(e) => setRejectReason(e.target.value)}
                           placeholder="Describe why this blade is being rejected…"
-                          className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 min-h-[80px]"
+                          className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 min-h-[80px]"
                         />
                         <div className="flex gap-3">
                           <Button
                             className={cn(
                               "text-white",
                               (!rejectReason.trim() || rejectMutation.isPending)
-                                ? "bg-slate-400 dark:bg-slate-600 cursor-not-allowed opacity-100"
+                                ? "bg-slate-400 dark:bg-background cursor-not-allowed opacity-100"
                                 : "bg-red-600 hover:bg-red-500"
                             )}
                             disabled={!rejectReason.trim() || rejectMutation.isPending}
@@ -1184,7 +1193,7 @@ export default function AssemblyVerificationPage() {
                               <Input
                                 value={modFields[field]}
                                 onChange={(e) => setModFields((prev) => ({ ...prev, [field]: e.target.value }))}
-                                className="h-8 text-xs bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600"
+                                className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600"
                               />
                             </div>
                           ))}
@@ -1194,7 +1203,7 @@ export default function AssemblyVerificationPage() {
                               type="number" step="0.01"
                               value={modFields.weight_grams}
                               onChange={(e) => setModFields((prev) => ({ ...prev, weight_grams: e.target.value }))}
-                              className="h-8 text-xs bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600"
+                              className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600"
                             />
                           </div>
                           <div className="space-y-1">
@@ -1203,7 +1212,7 @@ export default function AssemblyVerificationPage() {
                               type="number" step="0.01"
                               value={modFields.static_moment_gcm}
                               onChange={(e) => setModFields((prev) => ({ ...prev, static_moment_gcm: e.target.value }))}
-                              className="h-8 text-xs bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600"
+                              className="h-8 text-xs bg-white dark:bg-background border-slate-300 dark:border-slate-600"
                             />
                           </div>
                         </div>
@@ -1215,7 +1224,7 @@ export default function AssemblyVerificationPage() {
                             value={modRemarks}
                             onChange={(e) => setModRemarks(e.target.value)}
                             placeholder="e.g. Corrected melt number after physical tag re-scan…"
-                            className="bg-slate-50 dark:bg-slate-700/50 border-amber-300 dark:border-amber-700/50 min-h-[70px] text-sm"
+                            className="bg-slate-50 dark:bg-background border-amber-300 dark:border-amber-700/50 min-h-[70px] text-sm"
                           />
                         </div>
                         <div className="flex gap-3">
@@ -1256,9 +1265,6 @@ export default function AssemblyVerificationPage() {
               </div>
             )}
           </div>
-        </div>
-        <div className="shrink-0 w-full bg-white dark:bg-black border-t border-slate-200 dark:border-slate-800 px-4 sm:px-6 pb-4">
-          <Footer />
         </div>
       </div>
 

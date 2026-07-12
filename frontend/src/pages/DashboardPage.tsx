@@ -19,7 +19,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import KTIcon from "@/components/common/KTIcon";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 import { workflowService } from "@/services/workflowService";
 import { batchService, type BatchSummary } from "@/services/batchService";
@@ -62,7 +61,7 @@ function RefreshToast() {
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
-const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> = {
+export const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> = {
   CREATED:               { label: "Created",               color: "bg-indigo-500 text-white" },
   OH_INSPECTION:         { label: "OH Inspection",         color: "bg-amber-500 text-white" },
   MEASUREMENTS_RECORDED: { label: "Measurements",          color: "bg-blue-500 text-white" },
@@ -82,7 +81,7 @@ const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> = {
 
 // ─── KPI card (operations-dashboard style) ─────────────────────────────────────
 
-type KpiAccent = "blue" | "amber" | "emerald" | "rose";
+export type KpiAccent = "blue" | "amber" | "emerald" | "rose";
 
 const KPI_ACCENT: Record<KpiAccent, { gradient: string; glow: string }> = {
   blue:    { gradient: "from-blue-400 to-blue-600",       glow: "shadow-blue-500/30" },
@@ -91,13 +90,13 @@ const KPI_ACCENT: Record<KpiAccent, { gradient: string; glow: string }> = {
   rose:    { gradient: "from-rose-400 to-rose-600",       glow: "shadow-rose-500/30" },
 };
 
-function KpiCard({ title, value, caption, icon, delta, accent }: {
+export function KpiCard({ title, value, caption, icon, delta, accent }: {
   title: string; value: number | string; caption?: string;
   icon: React.ReactNode; delta?: number; accent: KpiAccent;
 }) {
   const a = KPI_ACCENT[accent];
   return (
-    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-3 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col justify-between">
+    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl p-3 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col justify-between">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br shadow-lg text-white shrink-0", a.gradient, a.glow)}>
@@ -121,13 +120,13 @@ function KpiCard({ title, value, caption, icon, delta, accent }: {
 
 // ─── Station card ───────────────────────────────────────────────────────────────
 
-function StationCard({ icon, iconBg, title, total, items, barColor, barPct }: {
+export function StationCard({ icon, iconBg, title, total, items, barColor, barPct }: {
   icon: React.ReactNode; iconBg: string; title: string; total: number;
   items: { label: string; value: number; dotColor: string }[];
   barColor: string; barPct: number;
 }) {
   return (
-    <div className="h-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl p-4 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
+    <div className="h-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl p-4 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
       <div className="flex items-center gap-3 mb-3">
         <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-gradient-to-br shadow-lg text-white", iconBg)}>
           {icon}
@@ -249,10 +248,10 @@ export default function DashboardPage() {
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -274,7 +273,7 @@ export default function DashboardPage() {
               <Plus className="w-3 h-3" /> New Blade Entry
             </Button>
             <Button variant="outline" onClick={() => navigate("/assembly-queue")}
-              className="h-8 px-3 text-xs flex-1 sm:flex-none justify-center bg-white hover:bg-slate-50 border-2 border-slate-300 dark:bg-black dark:hover:bg-slate-900 dark:border-slate-700 text-slate-900 dark:text-white gap-1.5 w-full sm:w-36">
+              className="h-8 px-3 text-xs flex-1 sm:flex-none justify-center bg-white hover:bg-slate-50 border-2 border-slate-300 dark:bg-background dark:hover:bg-slate-900 dark:border-slate-700 text-slate-900 dark:text-white gap-1.5 w-full sm:w-36">
               Assembly Queue <ArrowRight className="w-3 h-3" />
             </Button>
           </div>
@@ -342,8 +341,8 @@ export default function DashboardPage() {
 
         {/* ── Work Order / Engine Summary ─────────────────────────────────── */}
         {workOrders.length > 0 && (
-          <div className="shrink-0 bg-white/70 dark:bg-black/40 backdrop-blur-xl rounded-2xl border border-white/60 dark:border-white/10 shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2 bg-slate-800 dark:bg-black">
+          <div className="shrink-0 bg-white/70 dark:bg-background backdrop-blur-xl rounded-2xl border border-white/60 dark:border-white/10 shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 bg-slate-800 dark:bg-background">
               <div className="flex items-center gap-2">
                 <Wrench className="w-4 h-4 text-orange-400" />
                 <span className="text-white text-sm font-semibold tracking-wide uppercase">Active Work Order</span>
@@ -355,7 +354,7 @@ export default function DashboardPage() {
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showWODropdown && (
-                  <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-neutral-900 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl min-w-[220px] max-h-60 overflow-y-auto">
+                  <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-background rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl min-w-[220px] max-h-60 overflow-y-auto">
                     {workOrders.map((wo) => (
                       <button key={wo.work_order_number + wo.engine_number}
                         onClick={() => { setSelectedWO(wo.work_order_number); setShowWODropdown(false); }}
@@ -418,7 +417,7 @@ export default function DashboardPage() {
 
         {/* ── Active Batches + Status Distribution ────────────────────────── */}
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
+          <Card className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
             <CardHeader className="shrink-0 pb-3 border-b border-slate-100 dark:border-slate-700/50 pt-4">
               <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-3">
                 <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-md shadow-cyan-500/30 text-white shrink-0">
@@ -466,7 +465,7 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="bg-white/70 dark:bg-black/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
+          <Card className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col min-h-0">
             <CardHeader className="shrink-0 pb-3 border-b border-slate-100 dark:border-slate-700/50 pt-4">
               <CardTitle className="text-slate-900 dark:text-white text-base flex items-center gap-3">
                 <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br from-violet-400 to-violet-600 shadow-md shadow-violet-500/30 text-white shrink-0">
@@ -502,11 +501,6 @@ export default function DashboardPage() {
 
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <div className="w-full">
-          <Footer />
-        </div>
-      </div>
     </div>
   );
 }

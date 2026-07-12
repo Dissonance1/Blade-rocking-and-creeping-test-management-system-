@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,8 +34,11 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     # -----------------------------------------------------------------------
     # Identity / traceability fields
     # -----------------------------------------------------------------------
+    # Unique per (batch_number, blade_type) rather than globally — each batch
+    # numbers its LPTR blades 1..90 and its HPTR blades 1..90 independently,
+    # so the same serial recurs across batches/types by design.
     serial_number: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False, index=True
+        String(64), nullable=False, index=True
     )
     melt_number: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
@@ -165,6 +169,10 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_blades_status_station", "status", "current_station_id"),
         Index("ix_blades_deleted_at", "deleted_at"),
         Index("ix_blades_created_by", "created_by_id"),
+        UniqueConstraint(
+            "batch_number", "blade_type", "serial_number",
+            name="uq_blade_batch_type_serial",
+        ),
     )
 
     @property

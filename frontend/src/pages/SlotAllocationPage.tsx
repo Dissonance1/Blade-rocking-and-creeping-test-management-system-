@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,31 +21,7 @@ import { batchService } from "@/services/batchService";
 import { slotService } from "@/services/slotService";
 import type { SlotAllocation, BladeListItem } from "@/types";
 import { cn } from "@/utils/cn";
-
-// ─── Balancing algorithm (mirrors the backend logic) ──────────────────────────
-
-interface PreviewRow {
-  blade: BladeListItem;
-  slot: number;
-}
-
-function computeBalancedSlots(
-  blades: BladeListItem[],
-  imbalanceSlot: number,
-  totalSlots: number
-): PreviewRow[] {
-  const sorted = [...blades].sort(
-    (a, b) => (b.static_moment_gcm ?? 0) - (a.static_moment_gcm ?? 0)
-  );
-  const half = Math.floor(sorted.length / 2);
-  const interleaved = [...sorted.slice(0, half), ...sorted.slice(half).reverse()];
-  const K = imbalanceSlot;
-  const N = totalSlots;
-  return interleaved.map((blade, i) => ({
-    blade,
-    slot: ((K - 1 + i) % N) + 1,
-  }));
-}
+import { computeBalancedSlots, type PreviewRow } from "@/utils/balancing";
 
 // ─── Update balancing dialog ──────────────────────────────────────────────────
 
@@ -76,7 +51,7 @@ function UpdateBalancingDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
+      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
         <DialogHeader>
           <DialogTitle>Update Balancing — Slot {slot?.slot_number}</DialogTitle>
         </DialogHeader>
@@ -95,7 +70,7 @@ function UpdateBalancingDialog({
               value={remarks}
               onChange={(e) => setRemarks(e.target.value)}
               placeholder="Enter balancing notes…"
-              className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600"
+              className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
             />
           </div>
         </div>
@@ -139,7 +114,7 @@ function RejectBatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
+      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-red-500">
             <XOctagon className="w-5 h-5" />
@@ -190,7 +165,7 @@ function PreviewTable({
   saving: boolean;
 }) {
   return (
-    <Card className="bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60 shadow-sm">
+    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
       <CardHeader className="pb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <CardTitle className="text-base flex items-center gap-2 flex-wrap">
           <SlotAllocationIcon className="w-4 h-4 text-orange-500 shrink-0" />
@@ -228,7 +203,7 @@ function PreviewTable({
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead>
-              <tr className="bg-slate-800 dark:bg-slate-700">
+              <tr className="bg-slate-800 dark:bg-background">
                 {["Slot", "Blade Serial", "Melt No.", "Static Moment (g·cm)", "Weight (g)", "H1 (mm)", "H2 (mm)", "H3 (mm)", "H4 (mm)"].map((h) => (
                   <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
                     {h}
@@ -244,7 +219,7 @@ function PreviewTable({
                     key={blade.id}
                     className={cn(
                       "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                      idx % 2 === 0 ? "bg-white dark:bg-slate-800/40" : "bg-slate-50/60 dark:bg-slate-800/20"
+                      idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
                     )}
                   >
                     <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">
@@ -322,7 +297,7 @@ function SavedSlotsTable({
           </div>
         </div>
         <div className="w-full sm:w-48">
-          <div className="h-2.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+          <div className="h-2.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden">
             <div
               className={cn("h-full rounded-full transition-all", allBalanced ? "bg-emerald-500" : "bg-amber-400")}
               style={{ width: `${Math.round((balancedCount / rows.length) * 100)}%` }}
@@ -341,7 +316,7 @@ function SavedSlotsTable({
       </div>
 
       {/* Slots table */}
-      <Card className="bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60 shadow-sm">
+      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center justify-between">
             <span>Saved Slot Assignments</span>
@@ -352,7 +327,7 @@ function SavedSlotsTable({
           <div className="overflow-x-auto">
             <table className="w-full text-sm whitespace-nowrap">
               <thead>
-                <tr className="bg-slate-800 dark:bg-slate-700">
+                <tr className="bg-slate-800 dark:bg-background">
                   {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "H1 (mm)", "H2 (mm)", "H3 (mm)", "H4 (mm)", "Balance", "Remarks", "Action"].map((h) => (
                     <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
                       {h}
@@ -369,8 +344,8 @@ function SavedSlotsTable({
                       className={cn(
                         "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
                         !slot.is_balanced ? "bg-red-50/40 dark:bg-red-900/10"
-                          : idx % 2 === 0 ? "bg-white dark:bg-slate-800/40"
-                            : "bg-slate-50/60 dark:bg-slate-800/20"
+                          : idx % 2 === 0 ? "bg-white dark:bg-background"
+                            : "bg-slate-50/60 dark:bg-background"
                       )}
                     >
                       <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">
@@ -512,14 +487,14 @@ export default function SlotAllocationPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
               <SlotAllocationIcon className="w-5 h-5 text-orange-500 shrink-0" />
-              Slot Allocation
+              LPTR Slot Allocation
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">
               Run the balancing algorithm, review computed slots, then save or reject
@@ -535,10 +510,10 @@ export default function SlotAllocationPage() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-5 flex flex-col gap-5">
+      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
 
         {/* Batch selector */}
-        <Card className="bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60">
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
           <CardContent className="pt-5 pb-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4">
               <div className="flex-1 min-w-0">
@@ -548,7 +523,7 @@ export default function SlotAllocationPage() {
                 <select
                   value={selectedBatch}
                   onChange={(e) => handleBatchChange(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                 >
                   <option value="">— Select an accepted batch —</option>
                   {eligibleBatches.map((b) => (
@@ -567,7 +542,7 @@ export default function SlotAllocationPage() {
               </div>
               {batchInfo && (
                 <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-medium">
+                  <span className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-background text-slate-600 dark:text-slate-300 font-medium">
                     {batchInfo.blade_count} blades
                   </span>
                   {batchInfo.work_order_number && (
@@ -612,7 +587,7 @@ export default function SlotAllocationPage() {
 
         {/* === NO SLOTS YET — RUN BALANCING === */}
         {selectedBatch && !isLoading && !hasSavedSlots && !preview && (
-          <Card className="bg-white dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60">
+          <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
             <CardContent className="py-14 flex flex-col items-center gap-5">
               <SlotAllocationIcon className="w-12 h-12 text-orange-300 dark:text-orange-700" />
               <div className="text-center">
@@ -655,10 +630,6 @@ export default function SlotAllocationPage() {
             />
           </>
         )}
-      </div>
-
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
       </div>
 
       {/* Dialogs */}

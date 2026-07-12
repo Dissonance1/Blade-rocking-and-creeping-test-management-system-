@@ -83,7 +83,7 @@ interface StatusBadgeProps {
 export default function StatusBadge({ status, size = "md" }: StatusBadgeProps) {
   const config = STATUS_MAP[status] ?? {
     label: status,
-    classes: "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700",
+    classes: "bg-gray-100 text-gray-800 border-gray-200 dark:bg-background dark:text-gray-300 dark:border-gray-700",
   };
 
   return (

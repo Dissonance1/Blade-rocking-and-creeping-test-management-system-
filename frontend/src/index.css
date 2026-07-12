@@ -37,32 +37,39 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    /* ─── Unified dark-theme surface — #0e1530 ───────────────────────────
+       Every container (page, sidebar, navbar, card, panel, dialog, modal,
+       popover, dropdown, table, form, tab) resolves to this single color
+       via --background/--card/--popover so there is one source of truth.
+       --secondary/--muted/--accent/--border are lighter tints of the same
+       hue, kept distinct only so hover/active/focus/disabled states remain
+       visually legible against the flat base. */
+    --background: 228 55% 12%;
     --foreground: 210 40% 98%;
 
-    --card: 222.2 84% 4.9%;
+    --card: 228 55% 12%;
     --card-foreground: 210 40% 98%;
 
-    --popover: 222.2 84% 4.9%;
+    --popover: 228 55% 12%;
     --popover-foreground: 210 40% 98%;
 
     --primary: 213 72% 55%;
     --primary-foreground: 222.2 47.4% 11.2%;
 
-    --secondary: 217.2 32.6% 17.5%;
+    --secondary: 228 32% 20%;
     --secondary-foreground: 210 40% 98%;
 
-    --muted: 217.2 32.6% 17.5%;
+    --muted: 228 32% 20%;
     --muted-foreground: 215 20.2% 65.1%;
 
-    --accent: 217.2 32.6% 17.5%;
+    --accent: 228 32% 20%;
     --accent-foreground: 210 40% 98%;
 
     --destructive: 0 62.8% 50.6%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
+    --border: 228 28% 24%;
+    --input: 228 28% 24%;
     --ring: 213 72% 55%;
   }
 }

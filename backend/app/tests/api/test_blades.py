@@ -297,6 +297,29 @@ async def test_send_to_assembly_as_assembly_operator_forbidden(
     assert resp.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_send_to_assembly_rejects_hptr_blade(
+    client: AsyncClient,
+    auth_headers: dict,
+    sample_blade_with_measurements: Blade,
+    db_session,
+) -> None:
+    """HPTR blades stay in OH — send-to-assembly returns 422 regardless of status."""
+    from app.models.enums import BladeType
+
+    sample_blade_with_measurements.blade_type = BladeType.HPTR
+    db_session.add(sample_blade_with_measurements)
+    await db_session.flush()
+
+    resp = await client.post(
+        f"{BASE}/{sample_blade_with_measurements.id}/send-to-assembly",
+        json={"remarks": "Should be rejected"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "HPTR" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # POST /{blade_id}/reject
 # ---------------------------------------------------------------------------

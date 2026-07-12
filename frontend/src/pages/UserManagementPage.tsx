@@ -12,12 +12,10 @@ import {
   Loader2,
   AlertCircle,
   Users,
-  ShieldAlert,
   Search,
 } from "lucide-react";
 import { UserManagementIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import Footer from "@/layouts/components/Navbar/Footer";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,7 +141,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-lg">
+      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-slate-900 dark:text-white">Create New User</DialogTitle>
         </DialogHeader>
@@ -156,7 +154,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">Full Name</Label>
               <Input
                 placeholder="John Smith"
-                className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                 {...register("full_name")}
               />
               {errors.full_name && (
@@ -168,7 +166,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Input
                 type="email"
                 placeholder="john@company.com"
-                className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                 {...register("email")}
               />
               {errors.email && (
@@ -179,7 +177,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">Username</Label>
               <Input
                 placeholder="jsmith"
-                className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                 {...register("username")}
               />
               {errors.username && (
@@ -191,7 +189,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
               <Input
                 type="password"
                 placeholder="••••••••"
-                className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+                className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                 {...register("password")}
               />
               {errors.password && (
@@ -204,10 +202,10 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 value={roleVal}
                 onValueChange={(v: UserRole) => setValue("role", v)}
               >
-                <SelectTrigger className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
+                <SelectTrigger className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <SelectContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700">
                   {(Object.keys(ROLE_CFG) as UserRole[]).map((r) => (
                     <SelectItem key={r} value={r} className="text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700">
                       {ROLE_CFG[r].label}
@@ -222,10 +220,10 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
                 value={stationVal || "__none__"}
                 onValueChange={(v) => setValue("station_id", v === "__none__" ? "" : v)}
               >
-                <SelectTrigger className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
+                <SelectTrigger className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
                   <SelectValue placeholder="None" />
                 </SelectTrigger>
-                <SelectContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+                <SelectContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700">
                   <SelectItem value="__none__" className="text-slate-500 dark:text-slate-400">None</SelectItem>
                   {stations.map((s) => (
                     <SelectItem key={s.id} value={s.id} className="text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700">
@@ -340,7 +338,7 @@ function EditUserDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
+      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
         <DialogHeader>
           <DialogTitle className="text-slate-900 dark:text-white">Edit User — {user.full_name}</DialogTitle>
         </DialogHeader>
@@ -351,7 +349,7 @@ function EditUserDialog({
           <div className="space-y-1.5">
             <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">Full Name</Label>
             <Input
-              className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
+              className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
               {...register("full_name")}
             />
             {errors.full_name && (
@@ -364,10 +362,10 @@ function EditUserDialog({
               value={roleVal}
               onValueChange={(v: UserRole) => setValue("role", v)}
             >
-              <SelectTrigger className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
+              <SelectTrigger className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <SelectContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700">
                 {(Object.keys(ROLE_CFG) as UserRole[]).map((r) => (
                   <SelectItem key={r} value={r} className="text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700">
                     {ROLE_CFG[r].label}
@@ -382,10 +380,10 @@ function EditUserDialog({
               value={stationVal || "__none__"}
               onValueChange={(v) => setValue("station_id", v === "__none__" ? "" : v)}
             >
-              <SelectTrigger className="bg-slate-50 dark:bg-slate-700/50 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
+              <SelectTrigger className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white">
                 <SelectValue placeholder="None" />
               </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700">
+              <SelectContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700">
                 <SelectItem value="__none__" className="text-slate-500 dark:text-slate-400">None</SelectItem>
                 {stations.map((s) => (
                   <SelectItem key={s.id} value={s.id} className="text-slate-900 dark:text-white hover:bg-slate-100 dark:hover:bg-slate-700">
@@ -481,9 +479,9 @@ export default function UserManagementPage() {
     );
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-black dark:from-black dark:via-black dark:to-black text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-black/40 px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -511,7 +509,7 @@ export default function UserManagementPage() {
               placeholder="Search by name or email…"
               value={search}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-              className="pl-9 bg-slate-50 dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
+              className="pl-9 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
             />
           </div>
         </div>
@@ -522,7 +520,7 @@ export default function UserManagementPage() {
           onValueChange={(v: string) => setRoleFilter(v as UserRole | "ALL")}
         >
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
+            <TabsList className="w-max min-w-full sm:w-auto flex-nowrap bg-white dark:bg-background border border-slate-200 dark:border-slate-700 h-auto p-1 rounded-xl shadow-sm">
               {ROLE_TABS.map((t) => (
                 <TabsTrigger
                   key={t.value}
@@ -536,7 +534,7 @@ export default function UserManagementPage() {
           </div>
 
           <TabsContent value={roleFilter} className="mt-5">
-            <Card className="bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+            <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
               <CardContent className="p-0">
                 {isLoading ? (
                   <div className="flex items-center justify-center py-16 text-slate-400 dark:text-slate-500">
@@ -551,7 +549,7 @@ export default function UserManagementPage() {
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm whitespace-nowrap">
-                      <thead className="bg-slate-800 dark:bg-slate-700">
+                      <thead className="bg-slate-800 dark:bg-background">
                         <tr>
                           {["User", "Role(s)", "Status", "Station", "Last Login", "Actions"].map(
                             (h) => (
@@ -574,7 +572,7 @@ export default function UserManagementPage() {
                             key={user.id}
                             className={cn(
                               "transition-colors hover:bg-blue-50 dark:hover:bg-slate-700/30",
-                              rowIdx % 2 === 0 ? "bg-white dark:bg-slate-800/40" : "bg-slate-50 dark:bg-slate-800/20"
+                              rowIdx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50 dark:bg-background"
                             )}
                           >
                             <td className="px-4 py-3">
@@ -673,16 +671,12 @@ export default function UserManagementPage() {
         </Tabs>
       </div>
 
-      <div className="shrink-0 px-4 sm:px-6 pb-3 pt-4">
-        <Footer />
-      </div>
-
       <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
       <EditUserDialog user={editUser} open={!!editUser} onClose={() => setEditUser(null)} />
 
       {/* Delete confirmation */}
       <Dialog open={!!confirmDelete} onOpenChange={(v) => !v && setConfirmDelete(null)}>
-        <DialogContent className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-sm">
+        <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-slate-900 dark:text-white">Delete User</DialogTitle>
           </DialogHeader>

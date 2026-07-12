@@ -70,7 +70,7 @@ log = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_PORT     = "COM1"
-DEFAULT_SERVER   = "https://localhost"
+DEFAULT_SERVER   = "http://localhost"
 DEFAULT_STATION  = "1"
 PUSH_PATH        = "/api/v1/dti/push"
 POSITIONS_PATH   = "/api/v1/dti/positions"
