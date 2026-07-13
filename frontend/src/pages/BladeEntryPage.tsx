@@ -25,8 +25,10 @@ import {
   RefreshCw,
   Cpu,
   Video,
+  Keyboard,
 } from "lucide-react";
 import { BladeEntryIcon } from "@/components/common/CustomIcons";
+import RussianKeyboard from "@/components/common/RussianKeyboard";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -744,6 +746,7 @@ export default function BladeEntryPage() {
 
   const [meltScan, setMeltScan] = useState<ScanState>(EMPTY_SCAN);
   const [meltCameraOpen, setMeltCameraOpen] = useState(false);
+  const [meltKeyboardOpen, setMeltKeyboardOpen] = useState(false);
 
   const handleMeltCapture = async (file: File, blob: Blob) => {
     const preview = URL.createObjectURL(blob);
@@ -935,6 +938,13 @@ export default function BladeEntryPage() {
         onCapture={handleMeltCapture}
         onClose={() => setMeltCameraOpen(false)}
       />
+      {meltKeyboardOpen && (
+        <RussianKeyboard
+          initialValue={getValues("melt_number") ?? ""}
+          onConfirm={(v) => setValue("melt_number", v, { shouldValidate: true })}
+          onClose={() => setMeltKeyboardOpen(false)}
+        />
+      )}
 
       {/* Header */}
       <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5 shadow-sm">
@@ -1040,6 +1050,17 @@ export default function BladeEntryPage() {
                       scanning={meltScan.scanning}
                       onClick={() => setMeltCameraOpen(true)}
                     />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMeltKeyboardOpen(true)}
+                      title="Open Russian keyboard"
+                      className="shrink-0 border-2 border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    >
+                      <Keyboard className="w-4 h-4" />
+                      RU
+                    </Button>
                   </div>
                   <ScanResult
                     scan={meltScan}
