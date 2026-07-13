@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2, CheckCircle2, AlertTriangle, RefreshCw,
-  PackageSearch, Play, Save, ArrowLeftRight, Scale, Lightbulb, Printer,
+  PackageSearch, Play, Save, ArrowLeftRight, Scale, Lightbulb, FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
@@ -16,6 +16,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
 import { slotService } from "@/services/slotService";
+import { reportService } from "@/services/reportService";
 import type { BladeListItem, SlotAllocation } from "@/types";
 import { cn } from "@/utils/cn";
 import {
@@ -83,14 +84,28 @@ function SavedHalfTable({ title, rows }: { title: string; rows: SavedRow[] }) {
 function SavedHptrSlotsTable({
   rows,
   totalSlots,
+  batchNumber,
 }: {
   rows: SavedRow[];
   totalSlots: number;
+  batchNumber: string;
 }) {
   const half = totalSlots / 2;
   const bySlot = (r: SavedRow) => parseInt(r.slot.slot_number, 10);
   const w1Rows = rows.filter((r) => { const n = bySlot(r); return !isNaN(n) && n <= half; }).sort((a, b) => bySlot(a) - bySlot(b));
   const w2Rows = rows.filter((r) => { const n = bySlot(r); return isNaN(n) || n > half; }).sort((a, b) => bySlot(a) - bySlot(b));
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await reportService.exportHptrSlots(batchNumber);
+    } catch {
+      toast.error("Failed to export Excel file");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -103,11 +118,12 @@ function SavedHptrSlotsTable({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => window.print()}
-                className="print:hidden border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300"
+                onClick={handleExport}
+                disabled={exporting}
+                className="border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300"
               >
-                <Printer className="w-4 h-4 mr-1.5" />
-                Print
+                {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
+                Export Excel
               </Button>
             </div>
           </CardTitle>
@@ -418,10 +434,12 @@ function SetMakingTab({
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
-                <Button variant="outline" size="sm" onClick={onSuggest}>
-                  <Lightbulb className="w-4 h-4 mr-1.5" />
-                  {suggestion ? "Re-suggest" : "Suggest Swap"}
-                </Button>
+                {!suggestion && (
+                  <Button variant="outline" size="sm" onClick={onSuggest}>
+                    <Lightbulb className="w-4 h-4 mr-1.5" />
+                    Suggest Swap
+                  </Button>
+                )}
                 {suggestion && (
                   <Button size="sm" onClick={onApplySuggestion}
                     className="bg-cyan-500 hover:bg-cyan-600 text-white">
@@ -502,11 +520,13 @@ function AlreadySavedNotice({ onGoToBalancing }: { onGoToBalancing: () => void }
 function BalancingTab({
   rows,
   totalSlots,
+  batchNumber,
   onComplete,
   completing,
 }: {
   rows: SavedRow[];
   totalSlots: number;
+  batchNumber: string;
   onComplete: () => void;
   completing: boolean;
 }) {
@@ -521,9 +541,9 @@ function BalancingTab({
 
   return (
     <div className="space-y-5">
-      <SavedHptrSlotsTable rows={rows} totalSlots={totalSlots} />
+      <SavedHptrSlotsTable rows={rows} totalSlots={totalSlots} batchNumber={batchNumber} />
 
-      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 print:hidden">
+      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
         <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
@@ -744,7 +764,7 @@ export default function OHSlotAllocationPage() {
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
       {/* Header */}
-      <div className="print:hidden shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
+      <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-slate-900 dark:text-white truncate flex items-center gap-2">
@@ -766,7 +786,7 @@ export default function OHSlotAllocationPage() {
 
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
         {/* Batch selector */}
-        <Card className="print:hidden bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
           <CardContent className="pt-5 pb-4">
             <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
               Select Batch
@@ -808,7 +828,7 @@ export default function OHSlotAllocationPage() {
 
         {selectedBatch && !isLoading && hptrBlades.length > 0 && (
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="print:hidden">
+            <TabsList>
               <TabsTrigger value="slot-allocation">Slot Allocation</TabsTrigger>
               <TabsTrigger value="set-making">Set Making</TabsTrigger>
               <TabsTrigger value="balancing">Balancing</TabsTrigger>
@@ -860,6 +880,7 @@ export default function OHSlotAllocationPage() {
               <BalancingTab
                 rows={savedRows}
                 totalSlots={N}
+                batchNumber={selectedBatch}
                 onComplete={() => completeMutation.mutate()}
                 completing={completeMutation.isPending}
               />

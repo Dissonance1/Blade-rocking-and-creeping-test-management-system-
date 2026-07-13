@@ -60,4 +60,24 @@ export const reportService = {
     });
     return data as Blob;
   },
+
+  /** Excel export of a batch's saved HPTR slot assignments (W1/W2 sheets) — triggers the browser download directly. */
+  exportHptrSlots: async (batchNumber: string): Promise<void> => {
+    const { data } = await api.post(
+      "/reports/export/hptr-slots",
+      {},
+      { params: { batch_number: batchNumber }, responseType: "blob" }
+    );
+    const blob = new Blob([data as BlobPart], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `hptr_slots_${batchNumber}.xlsx`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(url);
+  },
 };

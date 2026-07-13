@@ -162,26 +162,17 @@ export function groupByHalf(
  */
 const NEAR_PAIR_COUNT = 6;
 
-/**
- * Largest flip-combination size the suggestion search will try. Scattered
- * (non-adjacent) picks are allowed, but an operator won't want to hand-apply
- * more than a handful of flips anyway, and combination counts explode
- * combinatorially past this — the search already stops at the smallest size
- * that works, so this cap only matters when no small solution exists.
- */
-const MAX_COMBO_SIZE = 8;
+/** 0.01 g buckets — matches the display precision (toFixed(2)) and keeps the DP's sum-dedup stable against float drift. */
+const DP_SCALE = 100;
 
-/** All k-sized subsets of `arr` (order preserved, no repeats), ascending by first-picked index. */
-function* combinations(arr: number[], k: number): Generator<number[]> {
-  if (k === 0) {
-    yield [];
-    return;
-  }
-  for (let i = 0; i <= arr.length - k; i++) {
-    for (const rest of combinations(arr.slice(i + 1), k - 1)) {
-      yield [arr[i]!, ...rest];
-    }
-  }
+/** One achievable (flip-count, cumulative delta) state in the subset-sum DP below. */
+interface DPNode {
+  /** Cumulative signed delta (grams) from this many flips. */
+  sum: number;
+  /** The pair-index whose flip reached this node (reconstructs the combination by walking `prevKey` back to the k=0 root). */
+  pairIndex: number;
+  /** Rounded-sum key of the parent node one flip-count layer down, or null at the k=0 root. */
+  prevKey: number | null;
 }
 
 /** One heavy/light pair "flipped" — the two blades exchange which of the pair's two (already-opposite) slots they occupy. */
@@ -221,11 +212,10 @@ export interface SwapSuggestion {
  *   - pairs 1..NEAR_PAIR_COUNT (the next-most-extreme pairs) — only used as
  *     a fallback if no combination of the remaining pairs reaches the target.
  *
- * Search order: try every single eligible pair first (fewest changes wins);
- * if no single flip reaches the target, try every 2-pair combination, then
- * 3, and so on — the pairs in a combination don't need to be adjacent
- * (scattered picks are fine) as long as the flip count stays minimal and
- * pairs 0..NEAR_PAIR_COUNT stay untouched (until the fallback tier).
+ * Finds the true minimum number of flips needed (scattered/non-adjacent
+ * pairs are fine — a subset-sum DP considers every combination without
+ * enumerating them one by one) and, among combinations of that minimum
+ * size, prefers the one landing closest to the middle of the target band.
  *
  * `unbalanceValue` (`y`) is the rotor's own pre-existing unbalance — the
  * target band applies to `|x - y|` (`x` = |W1 - W2|), not `x` alone.
@@ -267,12 +257,17 @@ export function suggestBalancingSwap(
     return after - before;
   }
 
-  function evaluate(flipIndices: number[]) {
-    const signedDiff = flipIndices.reduce((d, i) => d + flipDelta(i), currentSignedDiff);
+  /** Same "does this land in the target band" check the brute-force version used — now fed a precomputed sum instead of re-deriving it. */
+  function evaluateSum(deltaSum: number) {
+    const signedDiff = currentSignedDiff + deltaSum;
     const startHalfIsHeavier = sign === 1 ? signedDiff > 0 : signedDiff < 0;
     const adjustedDiff = Math.abs(Math.abs(signedDiff) - unbalanceValue);
     const meets = startHalfIsHeavier && adjustedDiff >= HPTR_TARGET_DIFF_MIN && adjustedDiff <= HPTR_TARGET_DIFF_MAX;
     return { adjustedDiff, meets };
+  }
+
+  function evaluate(flipIndices: number[]) {
+    return evaluateSum(flipIndices.reduce((d, i) => d + flipDelta(i), 0));
   }
 
   function buildSuggestion(flipIndices: number[], usedNearPairs: boolean): SwapSuggestion {
@@ -290,23 +285,71 @@ export function suggestBalancingSwap(
     return { flips, resultingDiff: adjustedDiff, meetsTarget: meets, usedNearPairs };
   }
 
-  /** Smallest combination size that reaches the target; closest-to-mid wins ties within that size. */
+  /**
+   * Subset-sum DP: `layers[k]` holds every distinct achievable cumulative
+   * delta reachable with exactly `k` flips from `eligible` (deduped to
+   * 0.01 g buckets), each with enough back-reference to reconstruct which
+   * pairs produced it. Standard 0/1-knapsack shape (each item folded into
+   * the layers in descending `k` order so it's never used twice) — this
+   * finds the true minimum flip count in time proportional to the number
+   * of distinct achievable sums, not the combinatorial C(n, k) the
+   * brute-force version had to enumerate.
+   */
+  function buildLayers(eligible: number[]): Map<number, DPNode>[] {
+    const layers: Map<number, DPNode>[] = [new Map([[0, { sum: 0, pairIndex: -1, prevKey: null }]])];
+    for (const pairIndex of eligible) {
+      const delta = flipDelta(pairIndex);
+      for (let k = layers.length - 1; k >= 0; k--) {
+        const layer = layers[k];
+        if (!layer) continue;
+        const nextLayer = layers[k + 1] ?? new Map<number, DPNode>();
+        layers[k + 1] = nextLayer;
+        for (const [key, node] of layer) {
+          const newSum = node.sum + delta;
+          const newKey = Math.round(newSum * DP_SCALE);
+          if (!nextLayer.has(newKey)) {
+            nextLayer.set(newKey, { sum: newSum, pairIndex, prevKey: key });
+          }
+        }
+      }
+    }
+    return layers;
+  }
+
+  function reconstruct(layers: Map<number, DPNode>[], k: number, key: number): number[] {
+    const flipIndices: number[] = [];
+    let curLayer = k;
+    let curKey: number | null = key;
+    while (curKey !== null) {
+      const node: DPNode | undefined = layers[curLayer]?.get(curKey);
+      if (!node || node.pairIndex < 0) break;
+      flipIndices.push(node.pairIndex);
+      curKey = node.prevKey;
+      curLayer -= 1;
+    }
+    return flipIndices;
+  }
+
+  /** Smallest flip count that reaches the target; closest-to-mid wins ties within that count. */
   function search(eligible: number[], usedNearPairs: boolean): SwapSuggestion | null {
-    const sorted = [...eligible].sort((a, b) => a - b);
-    const maxSize = Math.min(sorted.length, MAX_COMBO_SIZE);
-    for (let size = 1; size <= maxSize; size++) {
-      let best: SwapSuggestion | null = null;
+    const layers = buildLayers(eligible);
+    for (let k = 1; k < layers.length; k++) {
+      const layer = layers[k];
+      if (!layer) continue;
+      let bestKey: number | null = null;
       let bestScore = Infinity;
-      for (const combo of combinations(sorted, size)) {
-        const { adjustedDiff, meets } = evaluate(combo);
+      for (const [key, node] of layer) {
+        const { adjustedDiff, meets } = evaluateSum(node.sum);
         if (!meets) continue;
         const score = Math.abs(adjustedDiff - targetMid);
         if (score < bestScore) {
           bestScore = score;
-          best = buildSuggestion(combo, usedNearPairs);
+          bestKey = key;
         }
       }
-      if (best) return best;
+      if (bestKey !== null) {
+        return buildSuggestion(reconstruct(layers, k, bestKey), usedNearPairs);
+      }
     }
     return null;
   }

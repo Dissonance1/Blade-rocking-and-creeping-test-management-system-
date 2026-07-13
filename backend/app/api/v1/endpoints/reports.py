@@ -522,3 +522,226 @@ async def export_blades_excel(
             "Content-Disposition": 'attachment; filename="blade_export.xlsx"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /export/hptr-slots
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/export/hptr-slots",
+    status_code=status.HTTP_200_OK,
+    summary="Synchronous Excel export of a batch's saved HPTR slot assignments",
+    responses={
+        200: {
+            "content": {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+            },
+            "description": "Excel workbook with all 90 of the batch's saved HPTR slot assignments in one sheet",
+        }
+    },
+)
+async def export_hptr_slots_excel(
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    batch_number: str = Query(..., description="Batch number whose saved HPTR slots to export"),
+) -> StreamingResponse:
+    """
+    Generate and immediately return an Excel workbook containing the given
+    batch's saved (active) HPTR slot assignments — all rows in one sheet,
+    sorted by slot number, with a "Half" column marking W1 vs W2.
+
+    Raises:
+        HTTP 400 — openpyxl not available.
+        HTTP 404 — no active HPTR slot allocation found for this batch.
+    """
+    try:
+        import openpyxl  # type: ignore[import]
+        from openpyxl.styles import Font, PatternFill  # type: ignore[import]
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="openpyxl is not installed. Install it to use Excel export.",
+        )
+
+    from app.models.blade import Blade
+    from app.models.enums import BladeType
+    from app.models.measurement import Measurement
+    from app.models.slot_allocation import SlotAllocation
+
+    rows = (
+        await db.execute(
+            select(Blade, SlotAllocation)
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.HPTR,
+                Blade.deleted_at.is_(None),
+                SlotAllocation.is_active.is_(True),
+            )
+        )
+    ).all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active HPTR slot allocation found for batch '{batch_number}'",
+        )
+
+    blade_ids = [blade.id for blade, _ in rows]
+    subq = (
+        select(
+            Measurement.blade_id,
+            func.max(Measurement.measured_at).label("latest_at"),
+        )
+        .where(Measurement.blade_id.in_(blade_ids), Measurement.measurement_type == "INITIAL")
+        .group_by(Measurement.blade_id)
+        .subquery()
+    )
+    meas_rows = (
+        await db.execute(
+            select(Measurement.blade_id, Measurement.weight_grams, Measurement.static_moment_gcm)
+            .join(
+                subq,
+                (Measurement.blade_id == subq.c.blade_id)
+                & (Measurement.measured_at == subq.c.latest_at),
+            )
+        )
+    ).all()
+    meas_map = {r.blade_id: r for r in meas_rows}
+
+    # Matches the OH Slot Allocation page's default 90-slot rotor split
+    # (45/45) — the operator-entered "Total Slots on Rotor" value isn't
+    # persisted per-batch, so this mirrors what the UI itself falls back to
+    # once a saved batch is reopened in a fresh session.
+    half = 45
+
+    def _slot_num(pair: tuple) -> int:
+        s = pair[1].slot_number
+        return int(s) if s.isdigit() else 0
+
+    def _weight(pair: tuple) -> float:
+        meas = meas_map.get(pair[0].id)
+        return float(meas.weight_grams) if meas and meas.weight_grams is not None else 0.0
+
+    w1_rows = sorted((r for r in rows if _slot_num(r) <= half), key=_slot_num)
+    w2_rows = sorted((r for r in rows if _slot_num(r) > half), key=_slot_num)
+
+    w1_total = sum(_weight(r) for r in w1_rows)
+    w2_total = sum(_weight(r) for r in w2_rows)
+    x_diff = abs(w1_total - w2_total)
+
+    # y (the rotor's own pre-existing unbalance, entered as "Rotor Unbalance
+    # (g)" when slots were saved) isn't persisted on SlotAllocation/BatchGroup
+    # — recover it from the WorkflowLog remark written at save time.
+    import re
+
+    from app.models.enums import BladeStatus as BS
+    from app.models.workflow import WorkflowLog
+
+    log_remarks = (
+        await db.execute(
+            select(WorkflowLog.remarks)
+            .join(Blade, Blade.id == WorkflowLog.blade_id)
+            .where(
+                Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.HPTR,
+                WorkflowLog.to_status == BS.SLOT_ASSIGNED,
+            )
+            .order_by(WorkflowLog.timestamp.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    start_slot_val: int | None = None
+    y_unbalance: float | None = None
+    if log_remarks:
+        m_start = re.search(r"start slot (\d+)", log_remarks)
+        if m_start:
+            start_slot_val = int(m_start.group(1))
+        m_unbal = re.search(r"unbalance ([\d.]+) g", log_remarks)
+        if m_unbal:
+            y_unbalance = float(m_unbal.group(1))
+
+    y_for_calc = y_unbalance if y_unbalance is not None else 0.0
+    adjusted_diff = abs(x_diff - y_for_calc)
+    target_min, target_max = 1.5, 2.0
+    is_balanced = target_min <= adjusted_diff <= target_max
+
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    label_font = Font(bold=True)
+    ok_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    warn_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "HPTR Slot Assignments"
+
+    ws.cell(row=1, column=1, value=f"Batch {batch_number} — HPTR Set Making Summary").font = Font(bold=True, size=13)
+
+    summary = [
+        ("Start Slot", start_slot_val if start_slot_val is not None else "Not recorded"),
+        ("W1 Total (g)", round(w1_total, 2)),
+        ("W2 Total (g)", round(w2_total, 2)),
+        ("x = |W1 - W2| (g)", round(x_diff, 2)),
+        ("y = Rotor Unbalance (g)", round(y_unbalance, 2) if y_unbalance is not None else "Not recorded"),
+        ("|x - y| (g)", round(adjusted_diff, 2)),
+        ("Target band (g)", f"{target_min}-{target_max}"),
+        ("Status", "Balanced" if is_balanced else "Not balanced"),
+    ]
+    for i, (label, value) in enumerate(summary):
+        r = 3 + i
+        ws.cell(row=r, column=1, value=label).font = label_font
+        cell = ws.cell(row=r, column=2, value=value)
+        if label == "Status":
+            cell.fill = ok_fill if is_balanced else warn_fill
+            cell.font = Font(bold=True)
+
+    table_headers = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g-cm)"]
+    table_start_row = 3 + len(summary) + 2
+    w1_col_start, w2_col_start = 1, len(table_headers) + 2  # one blank column between the two blocks
+
+    def _write_table(col_start: int, title: str, table_rows: list) -> None:
+        ws.cell(row=table_start_row, column=col_start, value=title).font = Font(bold=True, size=12)
+        header_row = table_start_row + 1
+        for i, header in enumerate(table_headers):
+            cell = ws.cell(row=header_row, column=col_start + i, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+        for row_offset, (blade, alloc) in enumerate(table_rows, start=1):
+            meas = meas_map.get(blade.id)
+            r = header_row + row_offset
+            ws.cell(row=r, column=col_start, value=int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number)
+            ws.cell(row=r, column=col_start + 1, value=blade.serial_number)
+            ws.cell(row=r, column=col_start + 2, value=blade.melt_number)
+            ws.cell(row=r, column=col_start + 3, value=float(meas.weight_grams) if meas and meas.weight_grams is not None else None)
+            ws.cell(row=r, column=col_start + 4, value=float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None)
+
+    _write_table(w1_col_start, f"W1 (Slots 1-{half})", w1_rows)
+    _write_table(w2_col_start, f"W2 (Slots {half + 1}-90)", w2_rows)
+
+    for col in ws.columns:
+        max_length = max((len(str(cell.value or "")) for cell in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 50)
+    ws.freeze_panes = "A2"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    logger.info(
+        "hptr_slots_exported_excel",
+        user_id=str(current_user.id),
+        batch_number=batch_number,
+        row_count=len(rows),
+    )
+
+    return StreamingResponse(
+        content=iter([buffer.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="hptr_slots_{batch_number}.xlsx"',
+        },
+    )
