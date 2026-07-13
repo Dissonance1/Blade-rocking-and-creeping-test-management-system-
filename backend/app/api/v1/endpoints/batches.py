@@ -311,6 +311,30 @@ async def list_batches(
     ).all()
     hptr_slotted_map = {r.batch_number: r.hptr_slotted_count for r in hptr_slotted_rows}
 
+    # ── HPTR blades that have finished balancing (or moved beyond it) ──────
+    _HPTR_BALANCED_STATUSES = [
+        BladeStatus.BALANCING_COMPLETED,
+        BladeStatus.RETURNED_TO_OH,
+        BladeStatus.FINAL_VERIFICATION,
+        BladeStatus.COMPLETED,
+    ]
+    hptr_balanced_rows = (
+        await db.execute(
+            select(
+                Blade.batch_number,
+                func.count(Blade.id).label("hptr_balanced_count"),
+            )
+            .where(
+                Blade.batch_number.in_(batch_numbers),
+                Blade.blade_type == BladeType.HPTR,
+                Blade.deleted_at.is_(None),
+                Blade.status.in_(_HPTR_BALANCED_STATUSES),
+            )
+            .group_by(Blade.batch_number)
+        )
+    ).all()
+    hptr_balanced_map = {r.batch_number: r.hptr_balanced_count for r in hptr_balanced_rows}
+
     # ── Assemble response ──────────────────────────────────────────────────
     result = []
     for row in blade_rows:
@@ -328,6 +352,7 @@ async def list_batches(
             "blades_completed": row.blades_completed or 0,
             "hptr_count": row.hptr_count or 0,
             "hptr_slotted_count": hptr_slotted_map.get(bn, 0),
+            "hptr_balanced_count": hptr_balanced_map.get(bn, 0),
             "current_status": cur_status,
             "current_status_label": _status_label(cur_status),
             "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
@@ -1265,6 +1290,123 @@ async def reject_hptr_slots(
         "batch_number": batch_number,
         "blades_reset": len(blades),
         "message": f"{len(blades)} HPTR blade(s) reset to Measurements Recorded — redo slot allocation.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{batch_number}/complete-hptr-balancing
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{batch_number}/complete-hptr-balancing",
+    status_code=status.HTTP_200_OK,
+    summary="Mark a batch's saved HPTR slot allocation as balanced/complete",
+)
+async def complete_hptr_balancing(
+    batch_number: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Physical balancing testing confirmed the set is balanced — transition
+    every HPTR blade in the batch's active slot allocation from
+    ``SLOT_ASSIGNED``/``BALANCING_IN_PROGRESS`` to ``BALANCING_COMPLETED``
+    and mark each slot allocation as balanced.
+
+    Once every HPTR blade in the batch reaches ``BALANCING_COMPLETED`` the
+    batch stops showing up as selectable in the OH Slot Allocation page —
+    there is nothing left to do here.
+    """
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+    from app.workflows.state_machine import WorkflowEngine
+
+    remarks = (body or {}).get("remarks") or "Physical balancing testing confirmed — set balanced"
+
+    blades = (
+        await db.execute(
+            select(Blade)
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.batch_number == batch_number,
+                Blade.blade_type == BladeType.HPTR,
+                Blade.deleted_at.is_(None),
+                SlotAllocation.is_active.is_(True),
+                Blade.status.in_([
+                    BladeStatus.SLOT_ASSIGNED,
+                    BladeStatus.BALANCING_IN_PROGRESS,
+                ]),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No HPTR blades pending balancing found for batch '{batch_number}'",
+        )
+
+    alloc_by_blade_id: dict[uuid.UUID, Any] = {}
+    for blade in blades:
+        alloc = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if alloc:
+            alloc_by_blade_id[blade.id] = alloc
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        alloc = alloc_by_blade_id.get(blade.id)
+        if alloc:
+            alloc.is_balanced = True
+            alloc.balancing_remarks = remarks
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.BALANCING_COMPLETED,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+
+    async def _notify_hptr_balancing_complete(_batch: str, _count: int, _actor: str) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Batch {_batch} — HPTR balancing complete",
+                    body=(
+                        f"{_actor} confirmed HPTR balancing complete for batch {_batch} "
+                        f"({_count} blade(s))."
+                    ),
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                    metadata={"batch_number": _batch},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_hptr_balancing_complete_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_hptr_balancing_complete, batch_number, len(blades), actor_name)
+
+    logger.info("batch_hptr_balancing_completed", batch=batch_number, blades=len(blades))
+    return {
+        "batch_number": batch_number,
+        "blades_completed": len(blades),
+        "message": f"{len(blades)} HPTR blade(s) marked balanced — batch complete.",
     }
 
 

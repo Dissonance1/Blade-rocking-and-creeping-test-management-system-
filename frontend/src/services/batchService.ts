@@ -32,6 +32,7 @@ export interface BatchSummary {
   blades_completed: number;
   hptr_count: number;
   hptr_slotted_count: number;
+  hptr_balanced_count: number;
   current_status: BatchStatus;
   current_status_label: string;
   first_blade_at: string | null;
@@ -203,6 +204,19 @@ export const batchService = {
     reason?: string
   ): Promise<{ batch_number: string; blades_reset: number; message: string }> => {
     const { data } = await api.post(`/batches/${batchNumber}/reject-hptr-slots`, { reason });
+    return data;
+  },
+
+  /**
+   * Physical balancing testing confirmed the set is balanced — transitions
+   * every HPTR blade in the batch to BALANCING_COMPLETED. Once complete,
+   * the batch stops showing up as selectable in the OH Slot Allocation page.
+   */
+  completeHptrBalancing: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ batch_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/batches/${batchNumber}/complete-hptr-balancing`, { remarks });
     return data;
   },
 };
