@@ -20,7 +20,7 @@ export interface BatchReceiveRequest {
 
 export interface BatchReceiptResponse {
   id: string;
-  batch_number: string;
+  work_order_number: string;
   received_at: string;
   received_by_id: string;
   station_id: string | null;
@@ -30,7 +30,7 @@ export interface BatchReceiptResponse {
 }
 
 export interface BatchProgressResponse {
-  batch_number: string;
+  work_order_number: string;
   total_expected: number;
   assembly_received: number;
   assembly_verified: number;
@@ -117,7 +117,7 @@ export interface BladeVerifyResponse {
 // ---------------------------------------------------------------------------
 
 export interface SetMakingResponse {
-  batch_number: string;
+  work_order_number: string;
   status: string;
   total_blades: number;
   message: string;

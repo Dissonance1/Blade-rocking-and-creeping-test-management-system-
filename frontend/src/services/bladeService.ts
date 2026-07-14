@@ -2,7 +2,6 @@ import api from "./api";
 import type {
   Blade,
   BladeListItem,
-  BladeCreateRequest,
   BladeUpdateRequest,
   BladeActionRequest,
   BladeRejectRequest,
@@ -43,11 +42,6 @@ export const bladeService = {
     return data;
   },
 
-  create: async (payload: BladeCreateRequest): Promise<Blade> => {
-    const { data } = await api.post<Blade>("/blades/", payload);
-    return data;
-  },
-
   update: async (id: string, payload: BladeUpdateRequest): Promise<Blade> => {
     const { data } = await api.put<Blade>(`/blades/${id}`, payload);
     return data;
@@ -64,41 +58,6 @@ export const bladeService = {
   ): Promise<Measurement> => {
     const { data } = await api.patch<Measurement>(`/blades/${bladeId}/rocking-creep`, payload);
     return data;
-  },
-
-  batchLookup: async (batchNumber: string): Promise<{ found: boolean; work_order_number: string | null; part_number: string | null; engine_number: string | null; nomenclature: string | null }> => {
-    const { data } = await api.get("/blades/batch-lookup", { params: { batch_number: batchNumber } });
-    return data;
-  },
-
-  nextSerialNumber: async (batchNumber: string, bladeType: "LPTR" | "HPTR"): Promise<string> => {
-    const { data } = await api.get<{ next_serial_number: string }>("/blades/next-serial-number", {
-      params: { batch_number: batchNumber, blade_type: bladeType },
-    });
-    return data.next_serial_number;
-  },
-
-  saveBatchGroup: async (payload: { batch_number: string; work_order_number: string; part_number: string; engine_number?: string; nomenclature?: string }): Promise<void> => {
-    await api.post("/blades/batch-groups", payload);
-  },
-
-  /**
-   * Serial numbers are unique per (batch_number, blade_type) — not globally —
-   * since each batch numbers its LPTR and HPTR blades 1..90 independently.
-   */
-  checkSerialUnique: async (
-    serial: string,
-    batchNumber: string,
-    bladeType: "LPTR" | "HPTR"
-  ): Promise<boolean> => {
-    try {
-      const { data } = await api.get<{ exists: boolean }>("/blades/serial-exists", {
-        params: { batch_number: batchNumber, blade_type: bladeType, serial_number: serial },
-      });
-      return !data.exists;
-    } catch {
-      return true;
-    }
   },
 
   // ── Aliases for backward compatibility with existing page code ───────────────

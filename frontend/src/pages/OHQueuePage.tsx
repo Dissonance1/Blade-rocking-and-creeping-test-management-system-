@@ -15,6 +15,7 @@ import {
   Send,
   AlertTriangle,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import { OhQueueIcon } from "@/components/common/CustomIcons";
 import { formatDistanceToNow, differenceInDays, parseISO } from "date-fns";
@@ -98,7 +99,7 @@ const BATCH_MAX = 90;
 // ─── Send Batch Confirmation Dialog ──────────────────────────────────────────
 
 interface SendBatchDialogProps {
-  batchNumber: string | null;
+  workOrderNumber: string | null;
   /** OH-eligible blades (these will actually be sent) */
   bladeCount: number;
   /** Total blades in batch (for display) */
@@ -109,7 +110,7 @@ interface SendBatchDialogProps {
 }
 
 function SendBatchDialog({
-  batchNumber,
+  workOrderNumber,
   bladeCount,
   totalBladeCount,
   onConfirm,
@@ -121,7 +122,7 @@ function SendBatchDialog({
   const alreadySent = bladeCount === 0 && totalBladeCount > 0;
 
   return (
-    <Dialog open={!!batchNumber} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={!!workOrderNumber} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 max-w-md">
         <DialogHeader>
           <DialogTitle className="text-slate-900 dark:text-white flex items-center gap-2">
@@ -134,9 +135,9 @@ function SendBatchDialog({
           {/* Batch info */}
           <div className="rounded-lg bg-slate-100 dark:bg-background p-3 text-sm space-y-1">
             <div className="flex justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Batch</span>
+              <span className="text-slate-500 dark:text-slate-400">Work Order</span>
               <span className="font-semibold font-mono text-orange-500 dark:text-orange-300">
-                {batchNumber}
+                {workOrderNumber}
               </span>
             </div>
             <div className="flex justify-between">
@@ -252,7 +253,7 @@ export default function OHQueuePage() {
   // Per-batch blade fetch — only runs when a batch is selected
   const { data, isLoading } = useQuery({
     queryKey: ["blades", "oh-queue-batch", batchFilter],
-    queryFn: () => bladeService.list({ batch_number: batchFilter!, limit: 200 }),
+    queryFn: () => bladeService.list({ work_order_number: batchFilter!, limit: 200 }),
     enabled: !!batchFilter,
     staleTime: 0,
   });
@@ -290,8 +291,8 @@ export default function OHQueuePage() {
   });
 
   const sendBatchMutation = useMutation({
-    mutationFn: (batchNumber: string) =>
-      batchService.sendToAssembly(batchNumber, `Batch ${batchNumber} sent to Assembly from OH`),
+    mutationFn: (workOrderNumber: string) =>
+      batchService.sendToAssembly(workOrderNumber, `Work Order ${workOrderNumber} sent to Assembly from OH`),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["blades"] });
       queryClient.invalidateQueries({ queryKey: ["batches"] });
@@ -312,9 +313,9 @@ export default function OHQueuePage() {
   // Only populated when a batch is selected — no pagination issues
   const allBlades = data?.items ?? [];
 
-  // All batch numbers from the batch list — not limited by blade pagination
-  const batchNumbers = useMemo(
-    () => [...new Set(batches.map((b) => b.batch_number))].sort(),
+  // All work order numbers from the batch list — not limited by blade pagination
+  const workOrderNumbers = useMemo(
+    () => [...new Set(batches.map((b) => b.work_order_number))].sort(),
     [batches]
   );
 
@@ -331,19 +332,28 @@ export default function OHQueuePage() {
       );
   }, [allBlades, activeTab, search, currentTab]);
 
-  // Total blades in selected batch — from batch summary (always accurate)
-  const batchBladeCount = useMemo(
-    () => batches.find((b) => b.batch_number === batchFilter)?.blade_count ?? 0,
+  // Rows actually entered (Melt Number + Weight stored) in the selected batch —
+  // NOT blade_count, which is the fixed 90-row scaffold present from the start.
+  const batchRowsCompleteCount = useMemo(
+    () => batches.find((b) => b.work_order_number === batchFilter)?.rows_complete_count ?? 0,
+    [batches, batchFilter]
+  );
+  const batchEntryComplete = useMemo(
+    () => batches.find((b) => b.work_order_number === batchFilter)?.is_entry_complete ?? false,
     [batches, batchFilter]
   );
 
   // Fetch the target batch's blades directly when the dialog opens.
   // Using allBlades (limit 500) would miss batches beyond the first page when
   // total blade count exceeds 500. A targeted query is always accurate.
-  const OH_ELIGIBLE: BladeStatus[] = ["CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "REOPENED"];
+  // CREATED means the row is still a blank grid-entry scaffold (no melt
+  // number / weight yet) — it must not count as "ready to send". Only rows
+  // that have passed Blade Entry's Complete validation (which bulk-transitions
+  // all 90 blades together) reach MEASUREMENTS_RECORDED.
+  const OH_ELIGIBLE: BladeStatus[] = ["OH_INSPECTION", "MEASUREMENTS_RECORDED", "REOPENED"];
   const { data: batchBladesData } = useQuery({
     queryKey: ["blades", "batch-dialog", sendBatchTarget],
-    queryFn: () => bladeService.list({ batch_number: sendBatchTarget!, limit: 500 }),
+    queryFn: () => bladeService.list({ work_order_number: sendBatchTarget!, limit: 500 }),
     enabled: !!sendBatchTarget,
     staleTime: 0,
   });
@@ -355,7 +365,7 @@ export default function OHQueuePage() {
 
   const sendBatchTotalCount = useMemo(() => {
     if (!sendBatchTarget) return 0;
-    return batches.find((b) => b.batch_number === sendBatchTarget)?.blade_count ?? 0;
+    return batches.find((b) => b.work_order_number === sendBatchTarget)?.blade_count ?? 0;
   }, [batches, sendBatchTarget]);
 
   const toggleSelect = (id: string) => {
@@ -370,7 +380,7 @@ export default function OHQueuePage() {
   const tabCount = (statuses: BladeStatus[]) =>
     allBlades
       .filter((b) => statuses.includes(b.status))
-      .filter((b) => !batchFilter || b.batch_number === batchFilter).length;
+      .filter((b) => !batchFilter || b.work_order_number === batchFilter).length;
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -433,7 +443,7 @@ export default function OHQueuePage() {
               className="rounded-md border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px]"
             >
               <option value="">All Batches</option>
-              {batchNumbers.map((bn) => (
+              {workOrderNumbers.map((bn) => (
                 <option key={bn} value={bn}>
                   {bn}
                 </option>
@@ -445,10 +455,10 @@ export default function OHQueuePage() {
           {batchFilter && (
             <div className="flex items-center gap-2 rounded-full bg-violet-100 dark:bg-violet-500/20 border border-violet-300 dark:border-violet-500/40 px-3 py-1 text-sm">
               <span className="text-violet-700 dark:text-violet-300 font-medium">
-                {batchBladeCount}/{BATCH_MAX} blades
+                {batchRowsCompleteCount}/{BATCH_MAX} blades
               </span>
-              {batchBladeCount >= BATCH_MAX && (
-                <span className="text-emerald-500 text-xs font-semibold">Full</span>
+              {batchEntryComplete && (
+                <span className="text-emerald-500 text-xs font-semibold">Entry complete</span>
               )}
               <button
                 onClick={() => setBatchFilter("")}
@@ -461,7 +471,9 @@ export default function OHQueuePage() {
         </div>
 
         {/* ── Batch Overview ──────────────────────────────────────────────── */}
-        {batches.filter((b) => b.current_status === "CREATED" || b.current_status === "REJECTED").length > 0 && (
+        {/* LPTR only — HPTR blades never leave OH, so "Send to Assembly" never
+            applies to them; they're handled entirely on the HPTR Slot Allocation page. */}
+        {batches.filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "REJECTED")).length > 0 && (
           <div className="mb-5">
             <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
               <Package className="w-3.5 h-3.5" />
@@ -469,18 +481,17 @@ export default function OHQueuePage() {
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {batches
-                .filter((b) => b.current_status === "CREATED" || b.current_status === "REJECTED")
+                .filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "REJECTED"))
                 .map((batch) => {
                   const isRejected = batch.current_status === "REJECTED";
-                  const pct = Math.min((batch.blade_count / BATCH_MAX) * 100, 100);
-                  const isFull = batch.blade_count >= BATCH_MAX;
-                  const remaining = BATCH_MAX - batch.blade_count;
-                  // HPTR blades never leave OH — a batch made up entirely of
-                  // HPTR blades has nothing to send to Assembly.
-                  const isPureHptr = batch.blade_count > 0 && batch.hptr_count === batch.blade_count;
+                  const pct = Math.min((batch.rows_complete_count / BATCH_MAX) * 100, 100);
+                  // "Ready" means all 90 rows have Melt Number + Weight and
+                  // passed Blade Entry's Complete validation — NOT just that
+                  // 90 blank rows exist (which is true immediately on scaffold).
+                  const isFull = batch.is_entry_complete;
                   return (
                     <div
-                      key={batch.batch_number}
+                      key={batch.work_order_number}
                       className={cn(
                         "rounded-xl border shadow-sm p-4",
                         isRejected
@@ -491,10 +502,10 @@ export default function OHQueuePage() {
                       <div className="flex items-start justify-between mb-1.5">
                         <div>
                           <button
-                            onClick={() => setBatchFilter(batch.batch_number)}
+                            onClick={() => setBatchFilter(batch.work_order_number)}
                             className="font-mono font-semibold text-orange-500 dark:text-orange-400 hover:underline text-sm"
                           >
-                            {batch.batch_number}
+                            {batch.work_order_number}
                           </button>
                           {isRejected && (
                             <p className="text-xs text-red-600 dark:text-red-400 font-semibold mt-0.5 flex items-center gap-1">
@@ -514,7 +525,7 @@ export default function OHQueuePage() {
                               : "bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300"
                           )}
                         >
-                          {batch.blade_count}/{BATCH_MAX}
+                          {batch.rows_complete_count}/{BATCH_MAX}
                         </span>
                       </div>
 
@@ -533,32 +544,24 @@ export default function OHQueuePage() {
                         </p>
                       )}
 
-                      {!isRejected && isPureHptr && (
+                      {!isRejected && isFull && (
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="w-full text-xs h-8 border-2 border-orange-400 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-500/10"
-                          onClick={() => navigate("/oh/slot-allocation")}
-                        >
-                          <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
-                          HPTR stays in OH — go to Slot Allocation
-                        </Button>
-                      )}
-                      {!isRejected && !isPureHptr && (
-                        <Button
-                          size="sm"
-                          className={cn(
-                            "w-full text-xs h-8",
-                            isFull
-                              ? "bg-violet-600 hover:bg-violet-500 text-white"
-                              : "bg-slate-600 hover:bg-slate-500 text-white"
-                          )}
-                          onClick={() => setSendBatchTarget(batch.batch_number)}
+                          className="w-full text-xs h-8 bg-violet-600 hover:bg-violet-500 text-white"
+                          onClick={() => setSendBatchTarget(batch.work_order_number)}
                         >
                           <Send className="w-3.5 h-3.5 mr-1.5" />
-                          {isFull
-                            ? "Send to Assembly"
-                            : `Send (${remaining} blade${remaining !== 1 ? "s" : ""} remaining)`}
+                          Send to Assembly
+                        </Button>
+                      )}
+                      {!isRejected && !isFull && (
+                        <Button
+                          size="sm"
+                          className="w-full text-xs h-8 bg-orange-500 hover:bg-orange-400 text-white"
+                          onClick={() => navigate(`/blades/${batch.work_order_number}/entry`)}
+                        >
+                          <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                          Continue Blade Entry
                         </Button>
                       )}
                     </div>
@@ -641,7 +644,7 @@ export default function OHQueuePage() {
                               Type
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
-                              Batch
+                              Work Order
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
                               Part Number
@@ -699,10 +702,10 @@ export default function OHQueuePage() {
                                     {(blade.status === "CREATED" || blade.status === "OH_INSPECTION") && (
                                       <span className="text-[10px] text-amber-500 font-medium">Needs measurements</span>
                                     )}
-                                    {blade.status === "MEASUREMENTS_RECORDED" && blade.batch_number && (
+                                    {blade.status === "MEASUREMENTS_RECORDED" && blade.work_order_number && (
                                       <span className="text-[10px] text-blue-500 font-medium">Awaiting batch completion</span>
                                     )}
-                                    {blade.status === "MEASUREMENTS_RECORDED" && !blade.batch_number && (
+                                    {blade.status === "MEASUREMENTS_RECORDED" && !blade.work_order_number && (
                                       <span className="text-[10px] text-violet-500 font-medium">Ready to send</span>
                                     )}
                                   </div>
@@ -718,12 +721,12 @@ export default function OHQueuePage() {
                                   </span>
                                 </td>
                                 <td className="px-4 py-3">
-                                  {blade.batch_number ? (
+                                  {blade.work_order_number ? (
                                     <button
-                                      onClick={() => setBatchFilter(blade.batch_number!)}
+                                      onClick={() => setBatchFilter(blade.work_order_number!)}
                                       className="text-xs font-mono text-violet-600 dark:text-violet-400 hover:underline"
                                     >
-                                      {blade.batch_number}
+                                      {blade.work_order_number}
                                     </button>
                                   ) : (
                                     <span className="text-slate-400 dark:text-slate-600 text-xs">—</span>
@@ -761,7 +764,7 @@ export default function OHQueuePage() {
                                     >
                                       View
                                     </Button>
-                                    {blade.status === "MEASUREMENTS_RECORDED" && !blade.batch_number && (
+                                    {blade.status === "MEASUREMENTS_RECORDED" && !blade.work_order_number && (
                                       <Button
                                         size="sm"
                                         onClick={() => sendToAssemblyMutation.mutate(blade.id)}
@@ -776,7 +779,7 @@ export default function OHQueuePage() {
                                         Send
                                       </Button>
                                     )}
-                                    {blade.status === "MEASUREMENTS_RECORDED" && blade.batch_number && (
+                                    {blade.status === "MEASUREMENTS_RECORDED" && blade.work_order_number && (
                                       <span className="text-xs text-slate-400 dark:text-slate-500 italic">
                                         Use batch send ↑
                                       </span>
@@ -855,7 +858,7 @@ export default function OHQueuePage() {
 
       {/* Send Batch confirmation dialog */}
       <SendBatchDialog
-        batchNumber={sendBatchTarget}
+        workOrderNumber={sendBatchTarget}
         bladeCount={sendBatchBladeCount}
         totalBladeCount={sendBatchTotalCount}
         onConfirm={() => sendBatchTarget && sendBatchMutation.mutate(sendBatchTarget)}

@@ -16,12 +16,12 @@ from sqlalchemy.orm import selectinload
 from app.models.blade import Blade
 from app.models.enums import BladeStatus
 from app.repositories.base import BaseRepository
-from app.schemas.blade import BladeCreate, BladeSearchParams, BladeUpdate
+from app.schemas.blade import BladeSearchParams, BladeUpdate
 
 log = structlog.get_logger(__name__)
 
 
-class BladeRepository(BaseRepository[Blade, BladeCreate, BladeUpdate]):
+class BladeRepository(BaseRepository[Blade, Any, BladeUpdate]):
     """Async repository for the ``blades`` table."""
 
     model = Blade
@@ -30,17 +30,62 @@ class BladeRepository(BaseRepository[Blade, BladeCreate, BladeUpdate]):
         super().__init__(db)
 
     # ------------------------------------------------------------------
-    # Lookup helpers
+    # Work-order-scoped queries
     # ------------------------------------------------------------------
 
-    async def get_by_serial(self, serial_number: str) -> Blade | None:
-        """Return the active blade matching *serial_number* (case-sensitive)."""
+    async def get_by_work_order(self, work_order_id: uuid.UUID) -> list[Blade]:
+        """Return all 90 blades for *work_order_id*, ordered by S.No."""
+        stmt = (
+            select(Blade)
+            .where(Blade.work_order_id == work_order_id, Blade.deleted_at.is_(None))
+            .order_by(Blade.serial_number)
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return list(rows)
+
+    async def get_row(self, work_order_id: uuid.UUID, s_no: int) -> Blade | None:
+        """Return the single blade at position *s_no* (1-90) within a work order."""
         stmt = select(Blade).where(
-            Blade.serial_number == serial_number.upper(),
+            Blade.work_order_id == work_order_id,
+            Blade.serial_number == f"{s_no:02d}",
             Blade.deleted_at.is_(None),
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def bulk_create_scaffold_rows(
+        self,
+        work_order: Any,
+        created_by_id: uuid.UUID,
+        station_id: uuid.UUID | None,
+        count: int,
+    ) -> list[Blade]:
+        """
+        Create *count* blank ``CREATED`` blade rows (S.No ``"01"``..``f"{count:02d}"``)
+        for a freshly-created work order, copying its common-info fields.
+        """
+        blades = [
+            Blade(
+                serial_number=f"{i:02d}",
+                work_order_id=work_order.id,
+                work_order_number=work_order.work_order_number,
+                shop_order_number=work_order.shop_order_number,
+                part_number=work_order.part_number,
+                engine_number=work_order.engine_number,
+                engine_hours=work_order.engine_hours,
+                component_hours=work_order.component_hours,
+                blade_type=work_order.blade_type,
+                status=BladeStatus.CREATED,
+                created_by_id=created_by_id,
+                current_station_id=station_id,
+            )
+            for i in range(1, count + 1)
+        ]
+        self.db.add_all(blades)
+        await self.db.flush()
+        for blade in blades:
+            await self.db.refresh(blade)
+        return blades
 
     async def get_by_status(
         self,

@@ -532,29 +532,29 @@ async def export_blades_excel(
 @router.post(
     "/export/hptr-slots",
     status_code=status.HTTP_200_OK,
-    summary="Synchronous Excel export of a batch's saved HPTR slot assignments",
+    summary="Synchronous Excel export of a work order's saved HPTR slot assignments",
     responses={
         200: {
             "content": {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
             },
-            "description": "Excel workbook with all 90 of the batch's saved HPTR slot assignments in one sheet",
+            "description": "Excel workbook with all 90 of the work order's saved HPTR slot assignments in one sheet",
         }
     },
 )
 async def export_hptr_slots_excel(
     current_user: Annotated[Any, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    batch_number: str = Query(..., description="Batch number whose saved HPTR slots to export"),
+    work_order_number: str = Query(..., description="Work order number whose saved HPTR slots to export"),
 ) -> StreamingResponse:
     """
     Generate and immediately return an Excel workbook containing the given
-    batch's saved (active) HPTR slot assignments — all rows in one sheet,
+    work order's saved (active) HPTR slot assignments — all rows in one sheet,
     sorted by slot number, with a "Half" column marking W1 vs W2.
 
     Raises:
         HTTP 400 — openpyxl not available.
-        HTTP 404 — no active HPTR slot allocation found for this batch.
+        HTTP 404 — no active HPTR slot allocation found for this work order.
     """
     try:
         import openpyxl  # type: ignore[import]
@@ -575,7 +575,7 @@ async def export_hptr_slots_excel(
             select(Blade, SlotAllocation)
             .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
             .where(
-                Blade.batch_number == batch_number,
+                Blade.work_order_number == work_order_number,
                 Blade.blade_type == BladeType.HPTR,
                 Blade.deleted_at.is_(None),
                 SlotAllocation.is_active.is_(True),
@@ -586,7 +586,7 @@ async def export_hptr_slots_excel(
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active HPTR slot allocation found for batch '{batch_number}'",
+            detail=f"No active HPTR slot allocation found for work order '{work_order_number}'",
         )
 
     blade_ids = [blade.id for blade, _ in rows]
@@ -633,7 +633,7 @@ async def export_hptr_slots_excel(
     x_diff = abs(w1_total - w2_total)
 
     # y (the rotor's own pre-existing unbalance, entered as "Rotor Unbalance
-    # (g)" when slots were saved) isn't persisted on SlotAllocation/BatchGroup
+    # (g)" when slots were saved) isn't persisted on SlotAllocation/WorkOrder
     # — recover it from the WorkflowLog remark written at save time.
     import re
 
@@ -645,7 +645,7 @@ async def export_hptr_slots_excel(
             select(WorkflowLog.remarks)
             .join(Blade, Blade.id == WorkflowLog.blade_id)
             .where(
-                Blade.batch_number == batch_number,
+                Blade.work_order_number == work_order_number,
                 Blade.blade_type == BladeType.HPTR,
                 WorkflowLog.to_status == BS.SLOT_ASSIGNED,
             )
@@ -679,7 +679,7 @@ async def export_hptr_slots_excel(
     ws = wb.active
     ws.title = "HPTR Slot Assignments"
 
-    ws.cell(row=1, column=1, value=f"Batch {batch_number} — HPTR Set Making Summary").font = Font(bold=True, size=13)
+    ws.cell(row=1, column=1, value=f"Work Order {work_order_number} — HPTR Set Making Summary").font = Font(bold=True, size=13)
 
     summary = [
         ("Start Slot", start_slot_val if start_slot_val is not None else "Not recorded"),
@@ -734,7 +734,7 @@ async def export_hptr_slots_excel(
     logger.info(
         "hptr_slots_exported_excel",
         user_id=str(current_user.id),
-        batch_number=batch_number,
+        work_order_number=work_order_number,
         row_count=len(rows),
     )
 
@@ -742,6 +742,6 @@ async def export_hptr_slots_excel(
         content=iter([buffer.getvalue()]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="hptr_slots_{batch_number}.xlsx"',
+            "Content-Disposition": f'attachment; filename="hptr_slots_{work_order_number}.xlsx"',
         },
     )

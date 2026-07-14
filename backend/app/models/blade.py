@@ -34,21 +34,28 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     # -----------------------------------------------------------------------
     # Identity / traceability fields
     # -----------------------------------------------------------------------
-    # Unique per (batch_number, blade_type) rather than globally — each batch
-    # numbers its LPTR blades 1..90 and its HPTR blades 1..90 independently,
-    # so the same serial recurs across batches/types by design.
+    # Positional S.No within its Work Order — server-assigned "01".."90"
+    # (zero-padded so text sort order matches numeric order), never manually
+    # entered or OCR'd. Unique per work_order_id, not globally.
     serial_number: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True
     )
     melt_number: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )
-    work_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_orders.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    work_order_number: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     shop_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     part_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     nomenclature: Mapped[str | None] = mapped_column(String(128), nullable=True)
     engine_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    batch_number: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     engine_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
     component_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -91,7 +98,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     # -----------------------------------------------------------------------
     # OCR verification fields
     # -----------------------------------------------------------------------
-    ocr_serial_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ocr_melt_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ocr_mismatch_flag: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -111,6 +117,12 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     # -----------------------------------------------------------------------
     # Relationships
     # -----------------------------------------------------------------------
+    work_order: Mapped["WorkOrder"] = relationship(  # type: ignore[name-defined]
+        "WorkOrder",
+        foreign_keys=[work_order_id],
+        back_populates="blades",
+        lazy="selectin",
+    )
     current_station: Mapped["Station | None"] = relationship(  # type: ignore[name-defined]
         "Station",
         foreign_keys=[current_station_id],
@@ -170,8 +182,8 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_blades_deleted_at", "deleted_at"),
         Index("ix_blades_created_by", "created_by_id"),
         UniqueConstraint(
-            "batch_number", "blade_type", "serial_number",
-            name="uq_blade_batch_type_serial",
+            "work_order_id", "serial_number",
+            name="uq_blade_workorder_serial",
         ),
     )
 
@@ -188,6 +200,7 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 
 # Deferred imports
+from app.models.work_order import WorkOrder  # noqa: E402, F401
 from app.models.workflow import Station, RejectionReason, WorkflowLog  # noqa: E402, F401
 from app.models.user import User  # noqa: E402, F401
 from app.models.measurement import Measurement  # noqa: E402, F401

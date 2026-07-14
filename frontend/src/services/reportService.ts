@@ -66,7 +66,7 @@ export const reportService = {
     const { data } = await api.post(
       "/reports/export/hptr-slots",
       {},
-      { params: { batch_number: batchNumber }, responseType: "blob" }
+      { params: { work_order_number: batchNumber }, responseType: "blob" }
     );
     const blob = new Blob([data as BlobPart], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

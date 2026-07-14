@@ -346,18 +346,18 @@ class NotificationService:
 
     async def notify_batch_received(
         self,
-        batch_number: str,
+        work_order_number: str,
         blade_count: int,
         operator_display: str,
     ) -> None:
-        """ONE notification to OH + Super Admin when Assembly marks a batch received."""
+        """ONE notification to OH + Super Admin when Assembly marks a work order received."""
         await self.notify_roles(
             roles=[ROLE_OH_OPERATOR, ROLE_SUPER_ADMIN],
-            title=f"Batch {batch_number} received at Assembly",
+            title=f"Work Order {work_order_number} received at Assembly",
             body=(
-                f"Batch {batch_number} ({blade_count} blade{'s' if blade_count != 1 else ''}) "
+                f"Work Order {work_order_number} ({blade_count} blade{'s' if blade_count != 1 else ''}) "
                 f"has been received at Assembly by {operator_display}."
             ),
             notification_type=NotificationType.BLADE_RECEIVED,
-            metadata={"batch_number": batch_number, "blade_count": blade_count},
+            metadata={"work_order_number": work_order_number, "blade_count": blade_count},
         )

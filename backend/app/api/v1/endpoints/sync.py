@@ -3,8 +3,8 @@ LAN sync endpoints — exposed by the OH PC (701 Hanger) so the Assembly PC
 (720 Hanger) can pull blade data before verifying blades.
 
 GET   /sync/status               — health + station identity check
-GET   /sync/blades               — all blades (optionally filtered by batch)
-GET   /sync/batches/{batch_no}   — single batch snapshot
+GET   /sync/blades               — all blades (optionally filtered by work order)
+GET   /sync/batches/{work_order_number}   — single work order snapshot
 
 These endpoints are read-only and are ONLY meaningful when this instance is
 running as the OH station (STATION_TYPE=OH in .env).  On the Assembly PC they
@@ -68,14 +68,14 @@ async def sync_status(
     summary="Pull all blade records (for Assembly to verify against OH data)",
 )
 async def sync_blades(
-    batch_number: str | None = Query(default=None, description="Filter by batch number"),
+    work_order_number: str | None = Query(default=None, description="Filter by work order number"),
     status_filter: BladeStatus | None = Query(default=None, alias="status"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(*_SYNC_ROLES)),
 ) -> OHSyncResponse:
     conditions = [Blade.deleted_at.is_(None)]
-    if batch_number:
-        conditions.append(Blade.batch_number == batch_number)
+    if work_order_number:
+        conditions.append(Blade.work_order_number == work_order_number)
     if status_filter:
         conditions.append(Blade.status == status_filter)
 
@@ -92,7 +92,6 @@ async def sync_blades(
                 id=b.id,
                 serial_number=b.serial_number,
                 blade_type=b.blade_type,
-                batch_number=b.batch_number,
                 status=b.status,
                 weight=float(m.weight) if m and m.weight is not None else None,
                 dti_h1=float(m.dti_h1) if m and hasattr(m, "dti_h1") and m.dti_h1 is not None else None,
@@ -115,18 +114,18 @@ async def sync_blades(
 
 
 @router.get(
-    "/batches/{batch_number}",
+    "/batches/{work_order_number}",
     response_model=OHSyncResponse,
-    summary="Pull a single batch snapshot from OH",
+    summary="Pull a single work order snapshot from OH",
 )
 async def sync_batch(
-    batch_number: str,
+    work_order_number: str,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(*_SYNC_ROLES)),
 ) -> OHSyncResponse:
     res = await db.execute(
         select(Blade).where(
-            Blade.batch_number == batch_number,
+            Blade.work_order_number == work_order_number,
             Blade.deleted_at.is_(None),
         ).order_by(Blade.serial_number)
     )
@@ -140,7 +139,6 @@ async def sync_batch(
                 id=b.id,
                 serial_number=b.serial_number,
                 blade_type=b.blade_type,
-                batch_number=b.batch_number,
                 status=b.status,
                 weight=float(m.weight) if m and m.weight is not None else None,
                 dti_h1=float(m.dti_h1) if m and hasattr(m, "dti_h1") and m.dti_h1 is not None else None,

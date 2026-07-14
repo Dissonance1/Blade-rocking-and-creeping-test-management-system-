@@ -20,26 +20,26 @@ class AssemblyRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    # ── Batch receipts ────────────────────────────────────────────────────────
+    # ── Work order receipts ───────────────────────────────────────────────────
 
-    async def get_receipt_by_batch(self, batch_number: str) -> AssemblyBatchReceipt | None:
+    async def get_receipt_by_batch(self, work_order_number: str) -> AssemblyBatchReceipt | None:
         res = await self.db.execute(
             select(AssemblyBatchReceipt).where(
-                AssemblyBatchReceipt.batch_number == batch_number
+                AssemblyBatchReceipt.work_order_number == work_order_number
             )
         )
         return res.scalar_one_or_none()
 
     async def create_receipt(
         self,
-        batch_number: str,
+        work_order_number: str,
         received_by_id: uuid.UUID,
         station_id: uuid.UUID | None,
         total_expected: int,
         notes: str | None,
     ) -> AssemblyBatchReceipt:
         receipt = AssemblyBatchReceipt(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             received_by_id=received_by_id,
             station_id=station_id,
             total_expected=total_expected,
@@ -119,12 +119,12 @@ class AssemblyRepository:
     # ── Batch-level aggregate counts ──────────────────────────────────────────
 
     async def count_blades_by_status(
-        self, batch_number: str
+        self, work_order_number: str
     ) -> dict[BladeStatus, int]:
         res = await self.db.execute(
             select(Blade.status, func.count(Blade.id))
             .where(
-                Blade.batch_number == batch_number,
+                Blade.work_order_number == work_order_number,
                 Blade.deleted_at.is_(None),
             )
             .group_by(Blade.status)
@@ -145,11 +145,11 @@ class AssemblyRepository:
 
     async def get_batch_blades(
         self,
-        batch_number: str,
+        work_order_number: str,
         status: BladeStatus | None = None,
     ) -> list[Blade]:
         conditions = [
-            Blade.batch_number == batch_number,
+            Blade.work_order_number == work_order_number,
             Blade.deleted_at.is_(None),
         ]
         if status:

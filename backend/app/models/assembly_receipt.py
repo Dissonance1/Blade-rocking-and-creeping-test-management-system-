@@ -1,9 +1,9 @@
 """
-AssemblyBatchReceipt — records when an Assembly operator marks a batch
-as physically received at the 720 Hanger station.
+AssemblyBatchReceipt — records when an Assembly operator marks a work
+order as physically received at the 720 Hanger station.
 
-One receipt per batch.  Created by ASSEMBLY_OPERATOR via
-POST /api/v1/assembly/batches/{batch_number}/receive.
+One receipt per work order.  Created by ASSEMBLY_OPERATOR via
+POST /api/v1/assembly/work-orders/{work_order_number}/receive.
 """
 
 import uuid
@@ -13,6 +13,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import BLADES_PER_WORK_ORDER
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -21,7 +22,7 @@ class AssemblyBatchReceipt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "assembly_batch_receipts"
 
-    batch_number: Mapped[str] = mapped_column(
+    work_order_number: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, index=True
     )
     received_by_id: Mapped[uuid.UUID] = mapped_column(
@@ -40,8 +41,8 @@ class AssemblyBatchReceipt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     total_expected: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=180,
-        comment="Expected blade count (90 LPTR + 90 HPTR)"
+        Integer, nullable=False, default=BLADES_PER_WORK_ORDER,
+        comment="Expected blade count for this work order (one blade type)"
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -60,7 +61,7 @@ class AssemblyBatchReceipt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
-        return f"<AssemblyBatchReceipt batch={self.batch_number}>"
+        return f"<AssemblyBatchReceipt work_order={self.work_order_number}>"
 
 
 from app.models.user import User  # noqa: E402, F401

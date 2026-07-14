@@ -147,6 +147,14 @@ const router = createBrowserRouter([
           </RequireRole>
         ),
       },
+      {
+        path: "/blades/:workOrderNumber/entry",
+        element: (
+          <RequireRole roles={["OH_OPERATOR", "SUPER_ADMIN"]}>
+            <BladeEntryPage />
+          </RequireRole>
+        ),
+      },
       { path: "/blades/:id", element: <BladeDetailPage /> },
       { path: "/blades/:id/timeline", element: <WorkflowTimelinePage /> },
       {
@@ -198,7 +206,7 @@ const router = createBrowserRouter([
       { path: "/profile", element: <MyProfile /> },
 
       {
-        path: "/assembly/verify/:batchNumber",
+        path: "/assembly/verify/:workOrderNumber",
         element: (
           <RequireRole roles={["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]}>
             <AssemblyVerificationPage />
@@ -207,7 +215,7 @@ const router = createBrowserRouter([
       },
       { path: "/batch-tracking", element: <BatchTrackingPage /> },
       {
-        path: "/batches/:batchNumber/modify",
+        path: "/batches/:workOrderNumber/modify",
         element: (
           <RequireRole roles={["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]}>
             <ModifyBatchPage />
@@ -215,7 +223,7 @@ const router = createBrowserRouter([
         ),
       },
       {
-        path: "/batches/:batchNumber/accept",
+        path: "/batches/:workOrderNumber/accept",
         element: (
           <RequireRole roles={["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]}>
             <AcceptBatchPage />

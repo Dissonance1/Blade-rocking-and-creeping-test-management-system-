@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +10,9 @@ import {
   AlertTriangle,
   FlaskConical,
   Package,
+  Wifi,
+  WifiOff,
+  Crosshair,
 } from "lucide-react";
 import { RockingCreepIcon } from "@/components/common/CustomIcons";
 import { toast } from "sonner";
@@ -19,7 +22,17 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { batchService, type BladeRockingCreepEntry } from "@/services/batchService";
 import { bladeService } from "@/services/bladeService";
+import { useDTISocket } from "@/hooks/useDTISocket";
 import { cn } from "@/utils/cn";
+
+// Only one DTI gauge is connected for Rocking & Creep entry — a fixed station id.
+const DTI_STATION = "1";
+
+type ActiveField = "rocking" | "creep";
+interface ActiveTarget {
+  bladeId: string;
+  field: ActiveField;
+}
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
 
@@ -69,15 +82,20 @@ export default function RockingCreepPage() {
   const queryClient = useQueryClient();
   const [selectedBatch, setSelectedBatch] = useState("");
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
+  const [activeTarget, setActiveTarget] = useState<ActiveTarget | null>(null);
 
-  // ── Only batches where Assembly has assigned at least one slot ──────────────
+  // ── DTI gauge — one physical button press = one captured value ─────────────
+  const { lastReading, connected: dtiConnected } = useDTISocket(DTI_STATION);
+  const lastAppliedAtRef = useRef<number>(0);
+
+  // ── Only work orders where Assembly has assigned at least one slot ──────────
   const { data: batches = [] } = useQuery({
     queryKey: ["batches", "with-slots"],
     queryFn: () => batchService.list({ has_slot_allocations: true }),
     staleTime: 30_000,
   });
 
-  // ── Blades for selected batch with slot + rocking/creep data ────────────────
+  // ── Blades for selected work order with slot + rocking/creep data ───────────
   const {
     data: entries = [],
     isLoading,
@@ -154,12 +172,79 @@ export default function RockingCreepPage() {
     [rowState, saveMutation]
   );
 
+  // An entry is "done" once it has every value its blade type requires,
+  // per server-confirmed data — NOT client-only rowState, so this stays
+  // correct across refetches (e.g. after a save invalidates the query).
+  const isEntryComplete = useCallback((e: BladeRockingCreepEntry) => {
+    if (e.rocking_value == null) return false;
+    return e.blade_type === "LPTR" ? e.creep_value != null : true;
+  }, []);
+
+  // ── Next editable target after (entries[index], field) ──────────────────────
+  const advanceTarget = useCallback(
+    (fromEntry: BladeRockingCreepEntry, fromField: ActiveField) => {
+      if (fromField === "rocking" && fromEntry.blade_type === "LPTR") {
+        setActiveTarget({ bladeId: fromEntry.blade_id, field: "creep" });
+        return;
+      }
+      const idx = entries.findIndex((e) => e.blade_id === fromEntry.blade_id);
+      const next = entries.slice(idx + 1).find((e) => !!e.slot_number && !isEntryComplete(e));
+      setActiveTarget(next ? { bladeId: next.blade_id, field: "rocking" } : null);
+    },
+    [entries, isEntryComplete]
+  );
+
+  // Default the active target to the first editable, not-yet-complete blade
+  // once a work order's data loads (or a save refetches it) — but never
+  // override an operator's own click, and never re-target an already-complete
+  // row (otherwise finishing the last blade would loop the cursor back to
+  // row 1 on the post-save refetch, risking an accidental overwrite there).
+  useEffect(() => {
+    if (activeTarget || !entries.length) return;
+    const first = entries.find((e) => !!e.slot_number && !isEntryComplete(e));
+    if (first) setActiveTarget({ bladeId: first.blade_id, field: "rocking" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries]);
+
+  // ── Apply each new DTI gauge reading to whichever cell is active ────────────
+  // NOTE: the backend requires rocking_value AND creep_value together in one
+  // PATCH for LPTR blades (rejects a rocking-only save with 422) — so for LPTR
+  // we buffer the Rocking capture locally and only save once Creep arrives too,
+  // matching the same completeness rule the manual Save button already enforces.
+  useEffect(() => {
+    if (!lastReading || !activeTarget) return;
+    const capturedAt = lastReading.capturedAt.getTime();
+    if (capturedAt === lastAppliedAtRef.current) return; // already applied this reading
+    lastAppliedAtRef.current = capturedAt;
+
+    const entry = entries.find((e) => e.blade_id === activeTarget.bladeId);
+    if (!entry || !entry.slot_number) return; // target no longer editable — ignore
+
+    const value = Number(lastReading.value.toFixed(4));
+    const { bladeId, field } = activeTarget;
+    const existingRow = rowState[bladeId] ?? EMPTY_ROW;
+    const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
+    setRowState((prev) => patchRow(prev, bladeId, { [field]: String(value), saved: false }));
+
+    const isLPTR = entry.blade_type === "LPTR";
+    const rockingNum = updatedRow.rocking !== "" ? parseFloat(updatedRow.rocking) : null;
+    const creepNum   = updatedRow.creep   !== "" ? parseFloat(updatedRow.creep)   : null;
+    const readyToSave = isLPTR ? rockingNum !== null && creepNum !== null : rockingNum !== null;
+
+    if (readyToSave) {
+      saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
+    }
+    advanceTarget(entry, field);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastReading]);
+
   // ── Stats derived from entries ───────────────────────────────────────────────
   const totalCount     = entries.length;
   const slottedCount   = entries.filter((e) => !!e.slot_number).length;
   const completedCount = entries.filter(
     (e) => e.rocking_value != null || (rowState[e.blade_id]?.saved ?? false)
   ).length;
+  const activeEntry = activeTarget ? entries.find((e) => e.blade_id === activeTarget.bladeId) : undefined;
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -180,14 +265,14 @@ export default function RockingCreepPage() {
 
       <div className="w-full px-4 sm:px-6 py-6 sm:py-8 space-y-6">
 
-      {/* Batch selector + stats bar */}
+      {/* Work order selector + stats bar */}
       <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60">
         <CardContent className="pt-4 pb-4">
           <div className="flex flex-wrap items-center gap-4">
-            {/* Batch selector */}
+            {/* Work order selector */}
             <div className="flex items-center gap-2 flex-1 min-w-[220px] max-w-xs">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                Select Batch
+                Select Work Order
               </label>
               <div className="relative flex-1">
                 <select
@@ -195,13 +280,14 @@ export default function RockingCreepPage() {
                   onChange={(e) => {
                     setSelectedBatch(e.target.value);
                     setRowState({});
+                    setActiveTarget(null);
                   }}
                   className="w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
                 >
-                  <option value="">— choose a batch —</option>
+                  <option value="">— choose a work order —</option>
                   {batches.map((b) => (
-                    <option key={b.batch_number} value={b.batch_number}>
-                      {b.batch_number}
+                    <option key={b.work_order_number} value={b.work_order_number}>
+                      {b.work_order_number}
                       {b.part_number ? ` · ${b.part_number}` : ""}
                       {` (${b.blade_count} blades)`}
                     </option>
@@ -211,7 +297,7 @@ export default function RockingCreepPage() {
               </div>
             </div>
 
-            {/* Stats pills (only when a batch is loaded) */}
+            {/* Stats pills (only when a work order is loaded) */}
             {selectedBatch && !isLoading && (
               <div className="flex items-center gap-3 text-sm">
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-background px-3 py-1 font-medium text-slate-700 dark:text-slate-300">
@@ -225,17 +311,34 @@ export default function RockingCreepPage() {
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   {completedCount} / {totalCount} entered
                 </span>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-medium",
+                    dtiConnected
+                      ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300"
+                      : "bg-slate-100 dark:bg-background text-slate-400"
+                  )}
+                >
+                  {dtiConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+                  DTI {dtiConnected ? "connected" : "offline"}
+                </span>
+                {activeEntry && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 dark:bg-orange-900/20 px-3 py-1 font-medium text-orange-600 dark:text-orange-400">
+                    <Crosshair className="w-3.5 h-3.5" />
+                    Next capture → {activeEntry.serial_number} ({activeTarget?.field === "creep" ? "Creep" : "Rocking"})
+                  </span>
+                )}
               </div>
             )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Empty — no batch selected */}
+      {/* Empty — no work order selected */}
       {!selectedBatch && (
         <div className="flex flex-col items-center justify-center py-24 gap-4 text-slate-400 dark:text-slate-600">
           <FlaskConical className="w-16 h-16 opacity-30" />
-          <p className="text-lg font-medium">Select a batch above to begin entry</p>
+          <p className="text-lg font-medium">Select a work order above to begin entry</p>
           <p className="text-sm text-center max-w-xs">
             Rocking and Creep values can be entered once Assembly has assigned slot numbers to the blades.
           </p>
@@ -246,7 +349,7 @@ export default function RockingCreepPage() {
       {selectedBatch && isLoading && (
         <div className="flex items-center justify-center py-20 gap-3 text-slate-500 dark:text-slate-400">
           <Loader2 className="w-6 h-6 animate-spin" />
-          Loading batch data…
+          Loading work order data…
         </div>
       )}
 
@@ -255,7 +358,7 @@ export default function RockingCreepPage() {
         <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 overflow-hidden">
           <CardHeader className="pb-0 pt-4 px-4 border-b border-slate-100 dark:border-slate-700/50">
             <CardTitle className="text-base text-slate-900 dark:text-white flex items-center gap-2">
-              Batch {selectedBatch}
+              Work Order {selectedBatch}
               {isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
             </CardTitle>
           </CardHeader>
@@ -370,7 +473,13 @@ export default function RockingCreepPage() {
                                   patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
                                 )
                               }
-                              className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
+                              onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
+                              className={cn(
+                                "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
+                                activeTarget?.bladeId === entry.blade_id &&
+                                  activeTarget.field === "rocking" &&
+                                  "ring-2 ring-orange-400 border-orange-400"
+                              )}
                             />
                           ) : (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
@@ -393,7 +502,13 @@ export default function RockingCreepPage() {
                                   patchRow(prev, entry.blade_id, { creep: e.target.value, saved: false })
                                 )
                               }
-                              className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8"
+                              onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "creep" })}
+                              className={cn(
+                                "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
+                                activeTarget?.bladeId === entry.blade_id &&
+                                  activeTarget.field === "creep" &&
+                                  "ring-2 ring-orange-400 border-orange-400"
+                              )}
                             />
                           ) : (
                             <span className="text-xs text-slate-400 dark:text-slate-500 italic">
@@ -450,11 +565,11 @@ export default function RockingCreepPage() {
         </Card>
       )}
 
-      {/* Empty batch — no blades */}
+      {/* Empty work order — no blades */}
       {selectedBatch && !isLoading && entries.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400 dark:text-slate-600">
           <Package className="w-12 h-12 opacity-30" />
-          <p className="font-medium">No blades found in batch {selectedBatch}</p>
+          <p className="font-medium">No blades found in work order {selectedBatch}</p>
         </div>
       )}
 

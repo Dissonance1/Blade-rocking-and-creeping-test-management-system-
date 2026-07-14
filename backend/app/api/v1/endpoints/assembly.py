@@ -1,14 +1,14 @@
 """
 Assembly station endpoints (720 Hanger).
 
-POST   /assembly/batches/{batch_number}/receive         — mark batch as received
-GET    /assembly/batches/{batch_number}/receipt         — get receipt details
-GET    /assembly/batches/{batch_number}/progress        — verification progress
-GET    /assembly/batches/{batch_number}/blades          — list blades in batch
-POST   /assembly/blades/{blade_id}/verify               — scan + validate blade
-POST   /assembly/blades/{blade_id}/accept               — accept blade (+ optional overrides)
-POST   /assembly/blades/{blade_id}/reject               — reject blade
-POST   /assembly/batches/{batch_number}/start-setmaking — trigger set-making
+POST   /assembly/work-orders/{work_order_number}/receive         — mark work order as received
+GET    /assembly/work-orders/{work_order_number}/receipt         — get receipt details
+GET    /assembly/work-orders/{work_order_number}/progress        — verification progress
+GET    /assembly/work-orders/{work_order_number}/blades          — list blades in work order
+POST   /assembly/blades/{blade_id}/verify                        — scan + validate blade
+POST   /assembly/blades/{blade_id}/accept                        — accept blade (+ optional overrides)
+POST   /assembly/blades/{blade_id}/reject                        — reject blade
+POST   /assembly/work-orders/{work_order_number}/start-setmaking — trigger set-making
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.db.session import get_db
 from app.models.blade import Blade
 from app.models.enums import BladeStatus, BladeType, RoleName
 from app.models.user import User
+from app.models.work_order import WorkOrder
 from app.schemas.assembly import (
     AssemblyBladeRecordResponse,
     BatchProgressResponse,
@@ -61,17 +62,17 @@ async def _get_blade_or_404(blade_id: uuid.UUID, db: AsyncSession) -> Blade:
 
 
 # ---------------------------------------------------------------------------
-# Batch receipt
+# Work order receipt
 # ---------------------------------------------------------------------------
 
 @router.post(
-    "/batches/{batch_number}/receive",
+    "/work-orders/{work_order_number}/receive",
     response_model=BatchReceiptResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Mark a batch as received at Assembly",
+    summary="Mark a work order as received at Assembly",
 )
 async def receive_batch(
-    batch_number: str,
+    work_order_number: str,
     body: BatchReceiveRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(*_ASSEMBLY_ROLES)),
@@ -79,7 +80,7 @@ async def receive_batch(
     svc = AssemblyService(db)
     try:
         result = await svc.receive_batch(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             operator=current_user,
             station_id=body.station_id,
             notes=body.notes,
@@ -91,26 +92,26 @@ async def receive_batch(
 
 
 @router.get(
-    "/batches/{batch_number}/receipt",
+    "/work-orders/{work_order_number}/receipt",
     response_model=BatchReceiptResponse,
-    summary="Get batch receipt details",
+    summary="Get work order receipt details",
 )
 async def get_receipt(
-    batch_number: str,
+    work_order_number: str,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(*_ASSEMBLY_ROLES, RoleName.QA_VIEWER)),
 ) -> BatchReceiptResponse:
     from app.repositories.assembly_repository import AssemblyRepository
     repo = AssemblyRepository(db)
-    receipt = await repo.get_receipt_by_batch(batch_number)
+    receipt = await repo.get_receipt_by_batch(work_order_number)
     if receipt is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            detail=f"Batch '{batch_number}' has not been received at Assembly yet.",
+            detail=f"Work order '{work_order_number}' has not been received at Assembly yet.",
         )
     return BatchReceiptResponse(
         id=receipt.id,
-        batch_number=receipt.batch_number,
+        work_order_number=receipt.work_order_number,
         received_at=receipt.received_at,
         received_by_id=receipt.received_by_id,
         station_id=receipt.station_id,
@@ -121,46 +122,46 @@ async def get_receipt(
 
 
 # ---------------------------------------------------------------------------
-# Batch progress
+# Work order progress
 # ---------------------------------------------------------------------------
 
 @router.get(
-    "/batches/{batch_number}/progress",
+    "/work-orders/{work_order_number}/progress",
     response_model=BatchProgressResponse,
-    summary="Batch verification progress at Assembly",
+    summary="Work order verification progress at Assembly",
 )
 async def batch_progress(
-    batch_number: str,
+    work_order_number: str,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(*_ASSEMBLY_ROLES, RoleName.QA_VIEWER)),
 ) -> BatchProgressResponse:
     svc = AssemblyService(db)
-    return await svc.get_batch_progress(batch_number)
+    return await svc.get_batch_progress(work_order_number)
 
 
 # ---------------------------------------------------------------------------
-# List blades in batch
+# List blades in work order
 # ---------------------------------------------------------------------------
 
 @router.get(
-    "/batches/{batch_number}/blades",
-    summary="List blades in a batch with their Assembly verification status",
+    "/work-orders/{work_order_number}/blades",
+    summary="List blades in a work order with their Assembly verification status",
 )
 async def list_batch_blades(
-    batch_number: str,
+    work_order_number: str,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(*_ASSEMBLY_ROLES, RoleName.QA_VIEWER)),
 ) -> dict:
     from app.repositories.assembly_repository import AssemblyRepository
     repo = AssemblyRepository(db)
-    blades = await repo.get_batch_blades(batch_number)
+    blades = await repo.get_batch_blades(work_order_number)
     if not blades:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            detail=f"No blades found in batch '{batch_number}'.",
+            detail=f"No blades found in work order '{work_order_number}'.",
         )
 
-    receipt = await repo.get_receipt_by_batch(batch_number)
+    receipt = await repo.get_receipt_by_batch(work_order_number)
     blade_records: dict[uuid.UUID, dict] = {}
     if receipt:
         records = await repo.list_blade_records(receipt.id)
@@ -172,7 +173,7 @@ async def list_batch_blades(
             }
 
     return {
-        "batch_number": batch_number,
+        "work_order_number": work_order_number,
         "total": len(blades),
         "blades": [
             {
@@ -205,7 +206,7 @@ async def verify_blade(
     blade = await _get_blade_or_404(blade_id, db)
     svc = AssemblyService(db)
     try:
-        result = await svc.verify_blade(blade, blade.batch_number, body)
+        result = await svc.verify_blade(blade, blade.work_order_number, body)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     await db.commit()
@@ -228,7 +229,7 @@ async def accept_blade(
     try:
         result = await svc.accept_blade(
             blade=blade,
-            batch_number=blade.batch_number,
+            work_order_number=blade.work_order_number,
             payload=body,
             operator=current_user,
             station_id=None,
@@ -255,7 +256,7 @@ async def reject_blade(
     try:
         result = await svc.reject_blade(
             blade=blade,
-            batch_number=blade.batch_number,
+            work_order_number=blade.work_order_number,
             payload=body,
             operator=current_user,
             station_id=None,
@@ -271,30 +272,44 @@ async def reject_blade(
 # ---------------------------------------------------------------------------
 
 @router.post(
-    "/batches/{batch_number}/start-setmaking",
+    "/work-orders/{work_order_number}/start-setmaking",
     response_model=SetMakingResponse,
-    summary="Trigger set-making after all blades in batch are verified",
+    summary="Trigger set-making after all blades in the work order are verified",
 )
 async def start_setmaking(
-    batch_number: str,
+    work_order_number: str,
     body: StartSetMakingRequest,
-    blade_type: BladeType | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> SetMakingResponse:
     """
     Validate set-making readiness and return confirmation.
 
-    ``blade_type=HPTR``: gated to OH_OPERATOR/SUPER_ADMIN. HPTR never leaves
-    OH, so readiness means every HPTR blade in the batch has reached
+    A Work Order is now always exactly one blade_type (no more mixed
+    LPTR+HPTR under one work order number), so the required role and the
+    readiness gate are derived from the work order's own ``blade_type``
+    instead of a caller-supplied query parameter.
+
+    HPTR work order: gated to OH_OPERATOR/SUPER_ADMIN. HPTR never leaves
+    OH, so readiness means every HPTR blade in the work order has reached
     MEASUREMENTS_RECORDED (or beyond).
 
-    Omitted / ``blade_type=LPTR`` (default): unchanged existing behavior,
-    gated to ASSEMBLY_OPERATOR/SUPER_ADMIN, readiness means every blade has
-    been assembly_verified.
+    LPTR work order (default): unchanged existing behavior, gated to
+    ASSEMBLY_OPERATOR/SUPER_ADMIN, readiness means every blade has been
+    assembly_verified.
     """
+    wo_res = await db.execute(
+        select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+    )
+    work_order = wo_res.scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Work order '{work_order_number}' not found.",
+        )
+
     user_roles = _user_role_names(current_user)
-    is_hptr = blade_type == BladeType.HPTR
+    is_hptr = work_order.blade_type == BladeType.HPTR
     if RoleName.SUPER_ADMIN not in user_roles:
         required_role = RoleName.OH_OPERATOR if is_hptr else RoleName.ASSEMBLY_OPERATOR
         if required_role not in user_roles:
@@ -304,14 +319,14 @@ async def start_setmaking(
             )
 
     svc = AssemblyService(db)
-    progress = await svc.get_batch_progress(batch_number)
+    progress = await svc.get_batch_progress(work_order_number)
 
     if is_hptr:
         if not progress.hptr_set_making_ready:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    f"Batch is not ready for HPTR set-making. "
+                    f"Work order is not ready for HPTR set-making. "
                     f"{progress.hptr_measurements_recorded}/{progress.hptr_total} HPTR blades "
                     f"have recorded measurements."
                 ),
@@ -319,14 +334,14 @@ async def start_setmaking(
 
         log.info(
             "assembly.setmaking_triggered",
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             blade_type="HPTR",
             measured=progress.hptr_measurements_recorded,
             operator_id=str(current_user.id),
         )
 
         return SetMakingResponse(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             status="INITIATED",
             total_blades=progress.hptr_measurements_recorded,
             message=(
@@ -339,7 +354,7 @@ async def start_setmaking(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"Batch is not ready for set-making. "
+                f"Work order is not ready for set-making. "
                 f"{progress.assembly_verified}/{progress.total_expected} blades verified, "
                 f"{progress.pending} still pending verification."
             ),
@@ -351,13 +366,13 @@ async def start_setmaking(
     # to run the HAL algorithm and assign slots.
     log.info(
         "assembly.setmaking_triggered",
-        batch_number=batch_number,
+        work_order_number=work_order_number,
         verified=progress.assembly_verified,
         operator_id=str(current_user.id),
     )
 
     return SetMakingResponse(
-        batch_number=batch_number,
+        work_order_number=work_order_number,
         status="INITIATED",
         total_blades=progress.assembly_verified,
         message=(

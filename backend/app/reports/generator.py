@@ -239,10 +239,10 @@ class ReportGenerator:
                     cell.fill = alt_fill(row_idx)
         auto_width(ws_wf)
 
-        # ---- Sheet 5: Batch Traceability ----
-        ws_bt = wb.create_sheet("Batch Traceability")
+        # ---- Sheet 5: Work Order Traceability ----
+        ws_bt = wb.create_sheet("Work Order Traceability")
         bt_headers = [
-            "Batch Number", "Serial Number", "Melt Number",
+            "Work Order Number", "Serial Number", "Melt Number",
             "Blade Type", "Status", "Slot Number",
             "Rocking Value", "Creep Value",
         ]
@@ -260,16 +260,16 @@ class ReportGenerator:
             if existing is None or (rv is not None or cv is not None):
                 meas_by_blade_xl[bid] = (rv, cv)
 
-        # Sort blades by batch_number then serial_number for clean grouping
+        # Sort blades by work_order_number then serial_number for clean grouping
         sorted_blades = sorted(
             blades,
-            key=lambda b: (getattr(b, "batch_number", "") or "", getattr(b, "serial_number", "")),
+            key=lambda b: (getattr(b, "work_order_number", "") or "", getattr(b, "serial_number", "")),
         )
         for row_idx, blade in enumerate(sorted_blades, start=2):
             bid = str(getattr(blade, "id", ""))
             rv, cv = meas_by_blade_xl.get(bid, (None, None))
             row_data = [
-                getattr(blade, "batch_number", "") or "—",
+                getattr(blade, "work_order_number", "") or "—",
                 getattr(blade, "serial_number", ""),
                 getattr(blade, "melt_number", ""),
                 _ev(getattr(blade, "blade_type", "")),
@@ -565,12 +565,12 @@ class ReportGenerator:
             tbl.setStyle(TableStyle(base_ts(DARK_BLUE)))
             story.append(tbl)
 
-        # ── 5. Batch Traceability ────────────────────────────────────────
-        # 8 cols: Batch(2.5) Serial(3.5) Melt(2.5) Type(1.5) Status(3.0) Slot(1.5) Rock(2.0) Creep(1.5) = 18.0
-        story.append(Paragraph("5. Batch Traceability", section_style))
+        # ── 5. Work Order Traceability ────────────────────────────────────
+        # 8 cols: Work Order(2.5) Serial(3.5) Melt(2.5) Type(1.5) Status(3.0) Slot(1.5) Rock(2.0) Creep(1.5) = 18.0
+        story.append(Paragraph("5. Work Order Traceability", section_style))
         C_BT = [2.5*cm, 3.5*cm, 2.5*cm, 1.5*cm, 3.0*cm, 1.5*cm, 2.0*cm, 1.5*cm]
         bt_rows = [[
-            H("Batch"), H("Serial No."), H("Melt No."),
+            H("Work Order"), H("Serial No."), H("Melt No."),
             H("Type"), H("Status"), H("Slot"),
             H("Rocking"), H("Creep"),
         ]]
@@ -587,14 +587,14 @@ class ReportGenerator:
 
         sorted_blades_pdf = sorted(
             blades,
-            key=lambda b: (getattr(b, "batch_number", "") or "", getattr(b, "serial_number", "")),
+            key=lambda b: (getattr(b, "work_order_number", "") or "", getattr(b, "serial_number", "")),
         )
         for b in sorted_blades_pdf:
             bid = str(getattr(b, "id", ""))
             rv, cv = meas_by_blade_pdf.get(bid, (None, None))
             status_txt = (_ev(getattr(b, "status", "")) or "—").replace("_", " ").title()
             bt_rows.append([
-                P(getattr(b, "batch_number", "") or "—"),
+                P(getattr(b, "work_order_number", "") or "—"),
                 P(getattr(b, "serial_number", "")),
                 P(getattr(b, "melt_number", "")),
                 P(_ev(getattr(b, "blade_type", "")) or "—", center=True),

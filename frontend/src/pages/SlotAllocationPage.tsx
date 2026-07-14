@@ -90,11 +90,11 @@ function UpdateBalancingDialog({
 // ─── Reject batch dialog ──────────────────────────────────────────────────────
 
 function RejectBatchDialog({
-  batchNumber,
+  workOrderNumber,
   open,
   onClose,
 }: {
-  batchNumber: string;
+  workOrderNumber: string;
   open: boolean;
   onClose: () => void;
 }) {
@@ -102,11 +102,11 @@ function RejectBatchDialog({
   const [remarks, setRemarks] = useState("");
 
   const mutation = useMutation({
-    mutationFn: () => batchService.reject(batchNumber, remarks),
+    mutationFn: () => batchService.reject(workOrderNumber, remarks),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["batches"] });
       qc.invalidateQueries({ queryKey: ["blades"] });
-      toast.success(`Batch ${batchNumber} rejected`);
+      toast.success(`Work Order ${workOrderNumber} rejected`);
       onClose();
     },
     onError: () => toast.error("Failed to reject batch"),
@@ -118,7 +118,7 @@ function RejectBatchDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-red-500">
             <XOctagon className="w-5 h-5" />
-            Reject Batch {batchNumber}
+            Reject Work Order {workOrderNumber}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
@@ -423,7 +423,7 @@ export default function SlotAllocationPage() {
   // Blades in selected batch
   const { data: bladesData, isLoading: bladesLoading } = useQuery({
     queryKey: ["blades", "batch", selectedBatch],
-    queryFn: () => bladeService.list({ batch_number: selectedBatch, limit: 200 }),
+    queryFn: () => bladeService.list({ work_order_number: selectedBatch, limit: 200 }),
     enabled: !!selectedBatch,
     staleTime: 0,
   });
@@ -432,7 +432,7 @@ export default function SlotAllocationPage() {
   // Saved slot allocations — scoped to selected batch server-side
   const { data: batchSlotsRaw = [], isLoading: slotsLoading } = useQuery({
     queryKey: ["slots", selectedBatch],
-    queryFn: () => slotService.list({ batch_number: selectedBatch, limit: 200 }),
+    queryFn: () => slotService.list({ work_order_number: selectedBatch, limit: 200 }),
     enabled: !!selectedBatch,
     refetchInterval: 30_000,
   });
@@ -455,7 +455,7 @@ export default function SlotAllocationPage() {
 
   const hasSavedSlots = batchSlots.length > 0;
   const isLoading = bladesLoading || slotsLoading;
-  const batchInfo = batches.find((b) => b.batch_number === selectedBatch);
+  const batchInfo = batches.find((b) => b.work_order_number === selectedBatch);
 
   // Save slots mutation
   const saveMutation = useMutation({
@@ -527,8 +527,8 @@ export default function SlotAllocationPage() {
                 >
                   <option value="">— Select an accepted batch —</option>
                   {eligibleBatches.map((b) => (
-                    <option key={b.batch_number} value={b.batch_number}>
-                      {b.batch_number}
+                    <option key={b.work_order_number} value={b.work_order_number}>
+                      {b.work_order_number}
                       {b.nomenclature ? ` · ${b.nomenclature}` : ""}
                       {` · ${b.current_status_label}`}
                     </option>
@@ -641,7 +641,7 @@ export default function SlotAllocationPage() {
       />
       {selectedBatch && (
         <RejectBatchDialog
-          batchNumber={selectedBatch}
+          workOrderNumber={selectedBatch}
           open={showReject}
           onClose={() => setShowReject(false)}
         />

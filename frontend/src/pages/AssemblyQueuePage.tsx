@@ -135,21 +135,21 @@ export default function AssemblyQueuePage() {
   const { data: batchBladesData, isLoading } = useQuery({
     queryKey: ["blades", "assembly-blades", batchFilter],
     queryFn: () =>
-      bladeService.list({ batch_number: batchFilter || undefined, limit: 500 }),
+      bladeService.list({ work_order_number: batchFilter || undefined, limit: 500 }),
     staleTime: 0,
   });
 
   const receiveMutation = useMutation({
-    mutationFn: async (batchNumber: string) => {
+    mutationFn: async (workOrderNumber: string) => {
       // Update batch-level event (ignore if already received)
-      try { await batchService.receive(batchNumber); } catch { /* already received */ }
+      try { await batchService.receive(workOrderNumber); } catch { /* already received */ }
       // Create AssemblyBatchReceipt + transition blades → ASSEMBLY_RECEIVED (ignore if already done)
-      try { await assemblyService.receiveBatch(batchNumber, {}); } catch { /* receipt exists */ }
+      try { await assemblyService.receiveBatch(workOrderNumber, {}); } catch { /* receipt exists */ }
     },
-    onSuccess: (_, batchNumber) => {
+    onSuccess: (_, workOrderNumber) => {
       queryClient.invalidateQueries({ queryKey: ["batches"] });
-      queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", batchNumber] });
-      toast.success(`Batch ${batchNumber} received — blades are ready for verification`);
+      queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", workOrderNumber] });
+      toast.success(`Work Order ${workOrderNumber} received — blades are ready for verification`);
     },
     onError: (err: unknown) => {
       const msg =
@@ -160,12 +160,12 @@ export default function AssemblyQueuePage() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: ({ batchNumber, remarks }: { batchNumber: string; remarks: string }) =>
-      batchService.reject(batchNumber, remarks),
-    onSuccess: (_, { batchNumber }) => {
+    mutationFn: ({ workOrderNumber, remarks }: { workOrderNumber: string; remarks: string }) =>
+      batchService.reject(workOrderNumber, remarks),
+    onSuccess: (_, { workOrderNumber }) => {
       queryClient.invalidateQueries({ queryKey: ["batches"] });
-      queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", batchNumber] });
-      toast.success(`Batch ${batchNumber} rejected`);
+      queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", workOrderNumber] });
+      toast.success(`Work Order ${workOrderNumber} rejected`);
       setRejectingBatch(null);
       setBatchRemarks("");
     },
@@ -188,8 +188,8 @@ export default function AssemblyQueuePage() {
     [batches]
   );
 
-  const batchNumbers = useMemo(() => {
-    const nums = assemblyBatches.map((b) => b.batch_number);
+  const workOrderNumbers = useMemo(() => {
+    const nums = assemblyBatches.map((b) => b.work_order_number);
     return [...new Set(nums)].sort();
   }, [assemblyBatches]);
 
@@ -288,11 +288,11 @@ export default function AssemblyQueuePage() {
                   batch.current_status === "SENT_TO_ASSEMBLY" ||
                   batch.current_status === "RECEIVED_BY_ASSEMBLY" ||
                   batch.current_status === "MODIFIED";
-                const isRejecting = rejectingBatch === batch.batch_number;
+                const isRejecting = rejectingBatch === batch.work_order_number;
 
                 return (
                   <Card
-                    key={batch.batch_number}
+                    key={batch.work_order_number}
                     className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20"
                   >
                     <CardContent className="p-4 space-y-3">
@@ -302,7 +302,7 @@ export default function AssemblyQueuePage() {
                           <Package className="w-5 h-5 text-violet-500 flex-shrink-0" />
                           <div className="min-w-0">
                             <p className="font-semibold text-slate-900 dark:text-white font-mono truncate">
-                              {batch.batch_number}
+                              {batch.work_order_number}
                             </p>
                             <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                               <span
@@ -331,10 +331,10 @@ export default function AssemblyQueuePage() {
                                 size="sm"
                                 variant="outline"
                                 className="border-2 border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 text-xs h-8"
-                                disabled={receiveMutation.isPending && receiveMutation.variables === batch.batch_number}
-                                onClick={() => receiveMutation.mutate(batch.batch_number)}
+                                disabled={receiveMutation.isPending && receiveMutation.variables === batch.work_order_number}
+                                onClick={() => receiveMutation.mutate(batch.work_order_number)}
                               >
-                                {receiveMutation.isPending && receiveMutation.variables === batch.batch_number ? (
+                                {receiveMutation.isPending && receiveMutation.variables === batch.work_order_number ? (
                                   <Loader2 className="w-3 h-3 animate-spin mr-1" />
                                 ) : (
                                   <PackageCheck className="w-3 h-3 mr-1" />
@@ -346,7 +346,7 @@ export default function AssemblyQueuePage() {
                               size="sm"
                               variant="outline"
                               className="border-2 border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 text-xs h-8"
-                              onClick={() => navigate(`/batches/${batch.batch_number}/accept`)}
+                              onClick={() => navigate(`/batches/${batch.work_order_number}/accept`)}
                             >
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               Accept
@@ -355,7 +355,7 @@ export default function AssemblyQueuePage() {
                               size="sm"
                               variant="outline"
                               className="border-2 border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 text-xs h-8"
-                              onClick={() => navigate(`/batches/${batch.batch_number}/modify`)}
+                              onClick={() => navigate(`/batches/${batch.work_order_number}/modify`)}
                             >
                               <Wrench className="w-3 h-3 mr-1" />
                               Modify
@@ -364,7 +364,7 @@ export default function AssemblyQueuePage() {
                               size="sm"
                               variant="outline"
                               className="border-2 border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 text-xs h-8"
-                              onClick={() => { setRejectingBatch(batch.batch_number); setBatchRemarks(""); }}
+                              onClick={() => { setRejectingBatch(batch.work_order_number); setBatchRemarks(""); }}
                             >
                               <XCircle className="w-3 h-3 mr-1" />
                               Reject
@@ -377,8 +377,8 @@ export default function AssemblyQueuePage() {
                       {isRejecting && (
                         <div className="pt-3 border-t border-slate-200 dark:border-slate-700 space-y-3">
                           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                            Reject Batch —{" "}
-                            <span className="font-mono text-orange-500">{batch.batch_number}</span>
+                            Reject Work Order —{" "}
+                            <span className="font-mono text-orange-500">{batch.work_order_number}</span>
                           </p>
                           <Textarea
                             value={batchRemarks}
@@ -390,7 +390,7 @@ export default function AssemblyQueuePage() {
                             <Button
                               size="sm"
                               onClick={() =>
-                                rejectMutation.mutate({ batchNumber: batch.batch_number, remarks: batchRemarks.trim() })
+                                rejectMutation.mutate({ workOrderNumber: batch.work_order_number, remarks: batchRemarks.trim() })
                               }
                               disabled={rejectMutation.isPending || !batchRemarks.trim()}
                               className={cn(
@@ -443,7 +443,7 @@ export default function AssemblyQueuePage() {
               className="rounded-md border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px] shadow-sm"
             >
               <option value="">All Batches</option>
-              {batchNumbers.map((bn) => (
+              {workOrderNumbers.map((bn) => (
                 <option key={bn} value={bn}>{bn}</option>
               ))}
             </select>

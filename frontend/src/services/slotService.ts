@@ -2,7 +2,7 @@ import api from "./api";
 import type { SlotAllocation, SlotAssignRequest, BalancingUpdate, PaginatedResponse } from "@/types";
 
 export const slotService = {
-  list: async (params?: { skip?: number; limit?: number; batch_number?: string }): Promise<SlotAllocation[]> => {
+  list: async (params?: { skip?: number; limit?: number; work_order_number?: string }): Promise<SlotAllocation[]> => {
     const { data } = await api.get<PaginatedResponse<SlotAllocation>>("/slots/", { params });
     // Backend returns paginated; extract items array
     return Array.isArray(data) ? data : (data as PaginatedResponse<SlotAllocation>).items ?? [];
@@ -32,8 +32,7 @@ export const slotService = {
   swap: async (payload: {
     slot_number_a: string;
     slot_number_b: string;
-    blade_type: "LPTR" | "HPTR";
-    batch_number: string;
+    work_order_number: string;
     reason: string;
   }): Promise<SlotAllocation[]> => {
     const { data } = await api.post<SlotAllocation[]>("/slots/swap", payload);

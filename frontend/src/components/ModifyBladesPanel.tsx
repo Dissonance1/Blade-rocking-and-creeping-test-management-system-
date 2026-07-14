@@ -121,7 +121,7 @@ function emptyEditFields(blade: BladeListItem): EditableFields {
 // ─── ModifyBladesPanel ────────────────────────────────────────────────────────
 
 interface ModifyBladesPanelProps {
-  batchNumber: string;
+  workOrderNumber: string;
   blades: BladeListItem[];
   onSubmit: (data: ModifySubmitData) => void;
   onCancel: () => void;
@@ -131,7 +131,7 @@ interface ModifyBladesPanelProps {
 }
 
 export function ModifyBladesPanel({
-  batchNumber,
+  workOrderNumber,
   blades,
   onSubmit,
   onCancel,
@@ -233,7 +233,7 @@ export function ModifyBladesPanel({
         <Pencil className="w-4 h-4 text-amber-500 flex-shrink-0" />
         <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
           Modify Blades —{" "}
-          <span className="font-mono text-orange-500">{batchNumber}</span>
+          <span className="font-mono text-orange-500">{workOrderNumber}</span>
         </p>
         <span className="text-xs text-slate-400 dark:text-slate-500">
           Click <strong>Edit</strong> on a blade row to correct any field

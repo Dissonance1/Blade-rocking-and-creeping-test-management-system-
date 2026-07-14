@@ -2,11 +2,11 @@
 AssemblyService — business logic for the Assembly station (720 Hanger).
 
 Responsibilities:
-- Mark a batch as received (transitions all SENT_TO_ASSEMBLY blades to ASSEMBLY_RECEIVED)
+- Mark a work order as received (transitions all SENT_TO_ASSEMBLY blades to ASSEMBLY_RECEIVED)
 - Record per-blade scan / measurement data and validate against OH snapshot
 - Accept (ACCEPTED or MODIFIED) or reject individual blades
-- Compute batch progress
-- Trigger set-making once all 180 blades are accepted
+- Compute work order progress
+- Trigger set-making once all blades in the work order (BLADES_PER_WORK_ORDER) are accepted
 
 Tolerances used for automatic validation:
   Weight:  ±0.5 g   (iScale resolution 0.1 g)
@@ -23,6 +23,7 @@ import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import BLADES_PER_WORK_ORDER
 from app.models.assembly_blade_record import AssemblyBladeRecord
 from app.models.assembly_receipt import AssemblyBatchReceipt
 from app.models.blade import Blade
@@ -117,29 +118,30 @@ class AssemblyService:
 
     async def receive_batch(
         self,
-        batch_number: str,
+        work_order_number: str,
         operator: User,
         station_id: uuid.UUID | None,
         notes: str | None,
     ) -> BatchReceiptResponse:
-        existing = await self._repo.get_receipt_by_batch(batch_number)
+        existing = await self._repo.get_receipt_by_batch(work_order_number)
         if existing:
             raise ValueError(
-                f"Batch '{batch_number}' was already received at Assembly "
+                f"Work order '{work_order_number}' was already received at Assembly "
                 f"on {existing.received_at.date()}."
             )
 
         blades = await self._repo.get_batch_blades(
-            batch_number, status=BladeStatus.SENT_TO_ASSEMBLY
+            work_order_number, status=BladeStatus.SENT_TO_ASSEMBLY
         )
         if not blades:
             raise ValueError(
-                f"No blades with status SENT_TO_ASSEMBLY found in batch '{batch_number}'. "
-                "Ensure OH has sent the batch before marking it received."
+                f"No blades with status SENT_TO_ASSEMBLY found in work order "
+                f"'{work_order_number}'. Ensure OH has sent the work order before "
+                "marking it received."
             )
 
         receipt = await self._repo.create_receipt(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             received_by_id=operator.id,
             station_id=station_id,
             total_expected=len(blades),
@@ -153,26 +155,26 @@ class AssemblyService:
                 to_status=BladeStatus.ASSEMBLY_RECEIVED,
                 user=operator,
                 station_id=station_id,
-                remarks=f"Batch received at Assembly by {operator.username}",
+                remarks=f"Work order received at Assembly by {operator.username}",
             )
 
         log.info(
             "assembly.batch_received",
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             blade_count=len(blades),
             operator_id=str(operator.id),
         )
 
-        # One batch-level notification to OH — not one per blade
+        # One work-order-level notification to OH — not one per blade
         await self._notifier.notify_batch_received(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             blade_count=len(blades),
             operator_display=operator.full_name or operator.username,
         )
 
         return BatchReceiptResponse(
             id=receipt.id,
-            batch_number=receipt.batch_number,
+            work_order_number=receipt.work_order_number,
             received_at=receipt.received_at,
             received_by_id=receipt.received_by_id,
             station_id=receipt.station_id,
@@ -211,7 +213,7 @@ class AssemblyService:
     async def verify_blade(
         self,
         blade: Blade,
-        batch_number: str,
+        work_order_number: str,
         payload: BladeVerifyRequest,
     ) -> BladeVerifyResponse:
         if blade.status != BladeStatus.ASSEMBLY_RECEIVED:
@@ -219,14 +221,15 @@ class AssemblyService:
                 f"Blade must be in ASSEMBLY_RECEIVED status to be verified. "
                 f"Current status: {blade.status.value}"
             )
-        if blade.batch_number != batch_number:
+        if blade.work_order_number != work_order_number:
             raise ValueError(
-                f"Blade '{blade.serial_number}' does not belong to batch '{batch_number}'."
+                f"Blade '{blade.serial_number}' does not belong to work order "
+                f"'{work_order_number}'."
             )
 
-        receipt = await self._repo.get_receipt_by_batch(batch_number)
+        receipt = await self._repo.get_receipt_by_batch(work_order_number)
         if receipt is None:
-            raise ValueError(f"Batch '{batch_number}' has not been received yet.")
+            raise ValueError(f"Work order '{work_order_number}' has not been received yet.")
 
         # Fetch or create the blade record
         record = await self._repo.get_blade_record(blade.id, receipt.id)
@@ -295,7 +298,7 @@ class AssemblyService:
     async def accept_blade(
         self,
         blade: Blade,
-        batch_number: str,
+        work_order_number: str,
         payload: BladeAcceptRequest,
         operator: User,
         station_id: uuid.UUID | None,
@@ -306,9 +309,9 @@ class AssemblyService:
                 f"Current status: {blade.status.value}"
             )
 
-        receipt = await self._repo.get_receipt_by_batch(batch_number)
+        receipt = await self._repo.get_receipt_by_batch(work_order_number)
         if receipt is None:
-            raise ValueError(f"Batch '{batch_number}' has not been received yet.")
+            raise ValueError(f"Work order '{work_order_number}' has not been received yet.")
 
         record = await self._repo.get_blade_record(blade.id, receipt.id)
         if record is None:
@@ -360,7 +363,7 @@ class AssemblyService:
     async def reject_blade(
         self,
         blade: Blade,
-        batch_number: str,
+        work_order_number: str,
         payload: BladeRejectRequest,
         operator: User,
         station_id: uuid.UUID | None,
@@ -371,9 +374,9 @@ class AssemblyService:
                 f"Current status: {blade.status.value}"
             )
 
-        receipt = await self._repo.get_receipt_by_batch(batch_number)
+        receipt = await self._repo.get_receipt_by_batch(work_order_number)
         if receipt is None:
-            raise ValueError(f"Batch '{batch_number}' has not been received yet.")
+            raise ValueError(f"Work order '{work_order_number}' has not been received yet.")
 
         record = await self._repo.get_blade_record(blade.id, receipt.id)
         if record is None:
@@ -401,61 +404,89 @@ class AssemblyService:
 
     # ── 5. Batch progress ─────────────────────────────────────────────────────
 
-    async def get_batch_progress(self, batch_number: str) -> BatchProgressResponse:
-        receipt = await self._repo.get_receipt_by_batch(batch_number)
-        total_expected = receipt.total_expected if receipt else 180
+    async def get_batch_progress(self, work_order_number: str) -> BatchProgressResponse:
+        # A Work Order is now always exactly one blade_type (never a mix of
+        # LPTR + HPTR), so we look up the header once and branch on it,
+        # rather than always computing both an Assembly-side tally and an
+        # OH-side HPTR tally against the same work_order_number.
+        from sqlalchemy import func, select
 
-        status_counts = await self._repo.count_blades_by_status(batch_number)
+        from app.models.work_order import WorkOrder
+
+        wo_res = await self.db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+        work_order = wo_res.scalar_one_or_none()
+        blade_type = work_order.blade_type if work_order is not None else None
+
+        if blade_type == BladeType.HPTR:
+            # HPTR never leaves OH — its "set making ready" gate is simply
+            # "every HPTR blade in the work order has reached
+            # MEASUREMENTS_RECORDED (or beyond, since blades already
+            # slotted/balanced still count as measured)". Computed directly
+            # from Blade rows — Assembly never creates a receipt for an
+            # HPTR work order.
+            hptr_total = (
+                await self.db.execute(
+                    select(func.count(Blade.id)).where(
+                        Blade.work_order_number == work_order_number,
+                        Blade.blade_type == BladeType.HPTR,
+                        Blade.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one()
+            hptr_measurements_recorded = (
+                await self.db.execute(
+                    select(func.count(Blade.id)).where(
+                        Blade.work_order_number == work_order_number,
+                        Blade.blade_type == BladeType.HPTR,
+                        Blade.deleted_at.is_(None),
+                        Blade.status.in_(
+                            [
+                                BladeStatus.MEASUREMENTS_RECORDED,
+                                BladeStatus.SLOT_ASSIGNED,
+                                BladeStatus.BALANCING_IN_PROGRESS,
+                                BladeStatus.BALANCING_COMPLETED,
+                                BladeStatus.FINAL_VERIFICATION,
+                                BladeStatus.COMPLETED,
+                            ]
+                        ),
+                    )
+                )
+            ).scalar_one()
+
+            return BatchProgressResponse(
+                work_order_number=work_order_number,
+                total_expected=hptr_total or BLADES_PER_WORK_ORDER,
+                assembly_received=0,
+                assembly_verified=0,
+                assembly_rejected=0,
+                pending=0,
+                set_making_ready=False,
+                hptr_total=hptr_total,
+                hptr_measurements_recorded=hptr_measurements_recorded,
+                hptr_set_making_ready=(hptr_total > 0 and hptr_measurements_recorded >= hptr_total),
+            )
+
+        # LPTR (default) — existing Assembly-side verification flow.
+        receipt = await self._repo.get_receipt_by_batch(work_order_number)
+        total_expected = receipt.total_expected if receipt else BLADES_PER_WORK_ORDER
+
+        status_counts = await self._repo.count_blades_by_status(work_order_number)
         assembly_received = status_counts.get(BladeStatus.ASSEMBLY_RECEIVED, 0)
         assembly_verified = status_counts.get(BladeStatus.ASSEMBLY_VERIFIED, 0)
         assembly_rejected = status_counts.get(BladeStatus.REJECTED, 0)
         pending = assembly_received  # still awaiting scan
 
-        # HPTR never leaves OH — its "set making ready" gate is simply "every
-        # HPTR blade in the batch has reached MEASUREMENTS_RECORDED (or
-        # beyond, since blades already slotted/balanced still count as
-        # measured)". Computed directly from Blade rows, not from the
-        # Assembly-only AssemblyBatchReceipt/total_expected snapshot.
-        from sqlalchemy import func, select
-
-        hptr_total = (
-            await self.db.execute(
-                select(func.count(Blade.id)).where(
-                    Blade.batch_number == batch_number,
-                    Blade.blade_type == BladeType.HPTR,
-                    Blade.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one()
-        hptr_measurements_recorded = (
-            await self.db.execute(
-                select(func.count(Blade.id)).where(
-                    Blade.batch_number == batch_number,
-                    Blade.blade_type == BladeType.HPTR,
-                    Blade.deleted_at.is_(None),
-                    Blade.status.in_(
-                        [
-                            BladeStatus.MEASUREMENTS_RECORDED,
-                            BladeStatus.SLOT_ASSIGNED,
-                            BladeStatus.BALANCING_IN_PROGRESS,
-                            BladeStatus.BALANCING_COMPLETED,
-                            BladeStatus.FINAL_VERIFICATION,
-                            BladeStatus.COMPLETED,
-                        ]
-                    ),
-                )
-            )
-        ).scalar_one()
-
         return BatchProgressResponse(
-            batch_number=batch_number,
+            work_order_number=work_order_number,
             total_expected=total_expected,
             assembly_received=assembly_received + assembly_verified + assembly_rejected,
             assembly_verified=assembly_verified,
             assembly_rejected=assembly_rejected,
             pending=pending,
             set_making_ready=(assembly_verified >= total_expected),
-            hptr_total=hptr_total,
-            hptr_measurements_recorded=hptr_measurements_recorded,
-            hptr_set_making_ready=(hptr_total > 0 and hptr_measurements_recorded >= hptr_total),
+            hptr_total=0,
+            hptr_measurements_recorded=0,
+            hptr_set_making_ready=False,
         )

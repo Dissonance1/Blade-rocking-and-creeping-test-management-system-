@@ -34,7 +34,6 @@ from app.schemas.user import (
 
 # Blade
 from app.schemas.blade import (
-    BladeCreate,
     BladeListItem,
     BladeResponse,
     BladeSearchParams,
@@ -44,6 +43,15 @@ from app.schemas.blade import (
     SendToAssemblyRequest,
     StationSummary,
     RejectionReasonSummary,
+)
+
+# Work order
+from app.schemas.work_order import (
+    WorkOrderCompleteResponse,
+    WorkOrderCreate,
+    WorkOrderDetailResponse,
+    WorkOrderRowResponse,
+    WorkOrderRowUpdate,
 )
 
 # Measurement
@@ -105,7 +113,6 @@ __all__ = [
     "UserResponse",
     "UserUpdate",
     # blade
-    "BladeCreate",
     "BladeListItem",
     "BladeResponse",
     "BladeSearchParams",
@@ -115,6 +122,12 @@ __all__ = [
     "SendToAssemblyRequest",
     "StationSummary",
     "RejectionReasonSummary",
+    # work order
+    "WorkOrderCompleteResponse",
+    "WorkOrderCreate",
+    "WorkOrderDetailResponse",
+    "WorkOrderRowResponse",
+    "WorkOrderRowUpdate",
     # measurement
     "HeightData",
     "MeasurementCreate",

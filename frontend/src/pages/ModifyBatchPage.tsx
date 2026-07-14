@@ -9,14 +9,14 @@ import { batchService } from "@/services/batchService";
 import { ModifyBladesPanel, type ModifySubmitData } from "@/components/ModifyBladesPanel";
 
 export default function ModifyBatchPage() {
-  const { batchNumber } = useParams<{ batchNumber: string }>();
+  const { workOrderNumber } = useParams<{ workOrderNumber: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data: bladesData, isLoading } = useQuery({
-    queryKey: ["blades", "modify-page", batchNumber],
-    queryFn: () => bladeService.list({ batch_number: batchNumber!, limit: 200 }),
-    enabled: !!batchNumber,
+    queryKey: ["blades", "modify-page", workOrderNumber],
+    queryFn: () => bladeService.list({ work_order_number: workOrderNumber!, limit: 200 }),
+    enabled: !!workOrderNumber,
     staleTime: 30_000,
   });
 
@@ -24,12 +24,12 @@ export default function ModifyBatchPage() {
 
   const modifyMutation = useMutation({
     mutationFn: ({ modifications, remarks }: ModifySubmitData) =>
-      batchService.modify(batchNumber!, modifications, remarks),
+      batchService.modify(workOrderNumber!, modifications, remarks),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["batches"] });
       queryClient.invalidateQueries({ queryKey: ["blades"] });
-      toast.success(`Batch ${batchNumber} — Modifications saved. Now assign slots and accept.`);
-      navigate(`/batches/${batchNumber}/accept`);
+      toast.success(`Work Order ${workOrderNumber} — Modifications saved. Now assign slots and accept.`);
+      navigate(`/batches/${workOrderNumber}/accept`);
     },
     onError: (err: unknown) => {
       const msg =
@@ -39,7 +39,7 @@ export default function ModifyBatchPage() {
     },
   });
 
-  if (!batchNumber) return null;
+  if (!workOrderNumber) return null;
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -59,8 +59,8 @@ export default function ModifyBatchPage() {
           </div>
           <div className="min-w-0 text-center flex flex-col items-center">
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white truncate">
-              Modify Batch{" "}
-              <span className="font-mono text-orange-500">{batchNumber}</span>
+              Modify Work Order{" "}
+              <span className="font-mono text-orange-500">{workOrderNumber}</span>
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
               Click <strong>Edit</strong> on any blade row to correct its measurements, stage changes, then submit with a remark.
@@ -79,7 +79,7 @@ export default function ModifyBatchPage() {
           ) : batchBlades.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-3">
               <AlertCircle className="w-8 h-8 opacity-50" />
-              <p>No blades found for batch {batchNumber}.</p>
+              <p>No blades found for work order {workOrderNumber}.</p>
               <Button variant="outline" size="sm" onClick={() => navigate("/assembly-queue")}>
                 Back to Queue
               </Button>
@@ -88,7 +88,7 @@ export default function ModifyBatchPage() {
             <div className="bg-white dark:bg-background rounded-xl border border-slate-200 dark:border-slate-700 p-4 sm:p-6 shadow-sm">
               <ModifyBladesPanel
                 fullPage
-                batchNumber={batchNumber}
+                workOrderNumber={workOrderNumber}
                 blades={batchBlades}
                 onSubmit={(data) => modifyMutation.mutate(data)}
                 onCancel={() => navigate("/assembly-queue")}

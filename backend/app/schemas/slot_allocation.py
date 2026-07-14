@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from pydantic import Field, field_validator
 
-from app.models.enums import BladeType
 from app.schemas.base import BaseSchema
 from app.schemas.user import UserListItem
 
@@ -98,14 +97,18 @@ class SlotSwapRequest(BaseSchema):
     deactivated and replaced with two new rows carrying the swapped slot
     numbers; both are reset to unbalanced since they're now in new physical
     positions and must be re-tested.
+
+    ``blade_type`` is not accepted here — a work order now always maps to
+    exactly one blade type, so the endpoint derives it by looking up the
+    ``WorkOrder`` for ``work_order_number`` rather than trusting a
+    client-supplied value.
     """
 
     slot_number_a: str = Field(..., min_length=1, max_length=32)
     slot_number_b: str = Field(..., min_length=1, max_length=32)
-    blade_type: BladeType
-    batch_number: str = Field(
+    work_order_number: str = Field(
         ...,
-        description="Scopes the lookup to this batch's allocations only",
+        description="Scopes the lookup to this work order's allocations only",
     )
     reason: str = Field(
         ...,

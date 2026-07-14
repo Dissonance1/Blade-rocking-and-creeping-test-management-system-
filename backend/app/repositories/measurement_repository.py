@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import MeasurementType
 from app.models.measurement import Measurement
 from app.repositories.base import BaseRepository
 from app.schemas.measurement import MeasurementCreate, MeasurementUpdate
@@ -53,6 +55,56 @@ class MeasurementRepository(BaseRepository[Measurement, MeasurementCreate, Measu
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # Idempotent per-row autosave upsert
+    # ------------------------------------------------------------------
+
+    async def upsert_initial(
+        self,
+        blade_id: uuid.UUID,
+        weight_grams: float,
+        static_moment_gcm: float,
+        measured_by_id: uuid.UUID,
+        station_id: uuid.UUID | None,
+    ) -> Measurement:
+        """
+        Insert or update the ``INITIAL`` measurement row for *blade_id*.
+
+        Relies on the ``uq_measurement_blade_type`` unique constraint on
+        ``(blade_id, measurement_type)`` — safe to call repeatedly with the
+        same or updated values (e.g. autosave retries, weight corrections).
+        """
+        stmt = (
+            pg_insert(Measurement)
+            .values(
+                blade_id=blade_id,
+                measurement_type=MeasurementType.INITIAL,
+                weight_grams=weight_grams,
+                static_moment_gcm=static_moment_gcm,
+                measured_by_id=measured_by_id,
+                station_id=station_id,
+            )
+            .on_conflict_do_update(
+                constraint="uq_measurement_blade_type",
+                set_={
+                    "weight_grams": weight_grams,
+                    "static_moment_gcm": static_moment_gcm,
+                    "measured_by_id": measured_by_id,
+                    "station_id": station_id,
+                },
+            )
+            .returning(Measurement)
+        )
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        measurement = result.scalar_one()
+        log.info(
+            "measurement_repository.upsert_initial",
+            blade_id=str(blade_id),
+            measurement_id=str(measurement.id),
+        )
+        return measurement
 
     # ------------------------------------------------------------------
     # QA approval

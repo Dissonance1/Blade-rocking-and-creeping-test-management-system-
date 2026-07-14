@@ -271,7 +271,7 @@ export default function BladeDetailPage() {
             </Button>
 
             {blade.status === "MEASUREMENTS_RECORDED" &&
-              !blade.batch_number &&
+              !blade.work_order_number &&
               hasRole(["OH_OPERATOR", "SUPER_ADMIN"]) && (
                 <Button
                   size="sm"
@@ -287,12 +287,12 @@ export default function BladeDetailPage() {
               )}
 
             {blade.status === "MEASUREMENTS_RECORDED" &&
-              blade.batch_number &&
+              blade.work_order_number &&
               hasRole(["OH_OPERATOR", "SUPER_ADMIN"]) && (
                 <div className="flex items-center gap-2 flex-wrap rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/40 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300 max-w-full">
                   <Package className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>
-                    Part of batch <span className="font-mono font-semibold mx-1">{blade.batch_number}</span>
+                    Part of work order <span className="font-mono font-semibold mx-1">{blade.work_order_number}</span>
                     — send the full batch from OH Queue
                   </span>
                 </div>
@@ -351,7 +351,7 @@ export default function BladeDetailPage() {
                   <InfoField label="Shop Order" value={blade.shop_order_number} />
                   <InfoField label="Part Number" value={blade.part_number} />
                   <InfoField label="Nomenclature" value={blade.nomenclature} />
-                  <InfoField label="Batch Number" value={(blade as any).batch_number} />
+                  <InfoField label="Work Order Number" value={blade.work_order_number} />
                   <InfoField label="Engine Number" value={blade.engine_number} />
                   <InfoField label="Engine Hours" value={(blade as any).engine_hours} />
                   <InfoField label="Component Hours" value={(blade as any).component_hours} />

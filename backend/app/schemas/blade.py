@@ -8,7 +8,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from app.models.enums import BladeStatus, BladeType
 from app.schemas.base import BaseSchema
@@ -33,75 +33,6 @@ class RejectionReasonSummary(BaseSchema):
 
 
 # ---------------------------------------------------------------------------
-# Create
-# ---------------------------------------------------------------------------
-
-class BladeCreate(BaseSchema):
-    """
-    Payload for registering a new blade in the system.
-
-    ``serial_number`` is the authoritative identifier; all other
-    traceability fields are optional at creation time and can be
-    filled in during OH inspection.
-    """
-
-    serial_number: str = Field(
-        ...,
-        min_length=1,
-        max_length=64,
-        description="Unique blade serial number (physically stamped on the blade)",
-        examples=["SN-2024-001234"],
-    )
-    melt_number: str | None = Field(
-        default=None,
-        max_length=64,
-        description="Metallurgical melt/heat number",
-        examples=["MH-78432"],
-    )
-    work_order_number: str | None = Field(
-        default=None, max_length=64, examples=["WO-2024-0099"]
-    )
-    shop_order_number: str | None = Field(
-        default=None, max_length=64, examples=["SO-0456"]
-    )
-    part_number: str | None = Field(
-        default=None, max_length=64, examples=["PT-JT9D-1A"]
-    )
-    nomenclature: str | None = Field(
-        default=None,
-        max_length=128,
-        description="Human-readable blade/part name",
-        examples=["HP Compressor Blade Stage 3"],
-    )
-    engine_number: str | None = Field(
-        default=None, max_length=64, examples=["ENG-20240012"]
-    )
-    running_hours: Decimal | None = Field(
-        default=None,
-        ge=0,
-        description="Accumulated engine running hours at intake (legacy)",
-    )
-    batch_number: str | None = Field(
-        default=None, max_length=64, description="Batch number for grouping blades"
-    )
-    engine_hours: str | None = Field(
-        default=None, max_length=64, description="Engine hours in HH:MM:SS format"
-    )
-    component_hours: str | None = Field(
-        default=None, max_length=64, description="Component hours in HH:MM:SS format; defaults to engine_hours if not set"
-    )
-    blade_type: BladeType = BladeType.LPTR
-    station_id: uuid.UUID | None = Field(
-        default=None, description="Initial station assignment (defaults to OH)"
-    )
-
-    @field_validator("serial_number")
-    @classmethod
-    def serial_number_upper(cls, v: str) -> str:
-        return v.strip().upper()
-
-
-# ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
 
@@ -121,7 +52,6 @@ class BladeUpdate(BaseSchema):
     nomenclature: str | None = Field(default=None, max_length=128)
     engine_number: str | None = Field(default=None, max_length=64)
     running_hours: Decimal | None = Field(default=None, ge=0)
-    batch_number: str | None = Field(default=None, max_length=64)
     engine_hours: str | None = Field(default=None, max_length=64)
     component_hours: str | None = Field(default=None, max_length=64)
     assigned_to_id: uuid.UUID | None = None
@@ -219,9 +149,6 @@ class BladeSearchParams(BaseSchema):
     )
     assigned_to_id: uuid.UUID | None = None
     created_by_id: uuid.UUID | None = None
-    batch_number: str | None = Field(
-        default=None, description="Filter by exact batch number"
-    )
     ocr_mismatch_only: bool = Field(
         default=False, description="If true, return only blades with OCR mismatches"
     )
@@ -270,7 +197,6 @@ class BladeListItem(BaseSchema):
     assigned_to: UserListItem | None = None
     created_at: datetime
     updated_at: datetime
-    batch_number: str | None = None
     blade_type: BladeType = BladeType.LPTR
     # Latest INITIAL measurement values (populated by list endpoint)
     weight_grams: float | None = None
@@ -290,7 +216,6 @@ class BladeResponse(BaseSchema):
     nomenclature: str | None = None
     engine_number: str | None = None
     running_hours: Decimal | None = None
-    batch_number: str | None = None
     engine_hours: str | None = None
     component_hours: str | None = None
 
@@ -301,7 +226,6 @@ class BladeResponse(BaseSchema):
     assigned_to: UserListItem | None = None
 
     # OCR
-    ocr_serial_number: str | None = None
     ocr_melt_number: str | None = None
     ocr_mismatch_flag: bool
     ocr_mismatch_notes: str | None = None

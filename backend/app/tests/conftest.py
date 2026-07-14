@@ -32,9 +32,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+import app.models  # noqa: F401 — registers every model on Base.metadata
 from app.core.config import settings
 from app.core.security import create_access_token, hash_password
-from app.db.base import Base
+from app.models.base import Base
 from app.models.blade import Blade
 from app.models.enums import BladeStatus, MeasurementType, RoleName, StationType
 from app.models.measurement import Measurement

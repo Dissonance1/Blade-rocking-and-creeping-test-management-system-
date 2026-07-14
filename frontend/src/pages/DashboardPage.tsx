@@ -436,11 +436,11 @@ export default function DashboardPage() {
                   {activeBatches.slice(0, 5).map((b) => {
                     const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
                     return (
-                      <div key={b.batch_number}>
+                      <div key={b.work_order_number}>
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                              {b.batch_number}
+                              {b.work_order_number}
                             </p>
                             <p className="text-xs text-slate-400 dark:text-slate-300 truncate">
                               {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -123,7 +124,10 @@ class Measurement(UUIDPrimaryKeyMixin, Base):
     )
 
     __table_args__ = (
-        Index("ix_measurements_blade_type", "blade_id", "measurement_type"),
+        UniqueConstraint(
+            "blade_id", "measurement_type",
+            name="uq_measurement_blade_type",
+        ),
         Index("ix_measurements_measured_at", "measured_at"),
     )
 

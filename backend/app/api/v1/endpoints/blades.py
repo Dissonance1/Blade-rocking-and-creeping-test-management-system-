@@ -1,7 +1,9 @@
 """
 Blade CRUD and workflow action endpoints.
 
-POST   /blades/                          — create blade
+Blade creation is exclusively via POST /work-orders/ (grid scaffold) —
+there is no longer a standalone blade-creation endpoint here.
+
 GET    /blades/                          — list blades (search/filter)
 GET    /blades/{blade_id}                — get blade detail
 PUT    /blades/{blade_id}                — update blade basic info
@@ -47,7 +49,6 @@ from app.db.session import get_db
 from app.models.enums import AttachmentType, BladeStatus, BladeType
 from app.schemas.base import PaginatedResponse, StatusResponse
 from app.schemas.blade import (
-    BladeCreate,
     BladeListItem,
     BladeResponse,
     BladeSearchParams,
@@ -104,8 +105,6 @@ def _build_blade_filters(q: BladeSearchParams) -> list:
         conditions.append(Blade.assigned_to_id == q.assigned_to_id)
     if q.created_by_id:
         conditions.append(Blade.created_by_id == q.created_by_id)
-    if q.batch_number:
-        conditions.append(Blade.batch_number == q.batch_number)
     if q.ocr_mismatch_only:
         conditions.append(Blade.ocr_mismatch_flag.is_(True))
     if q.date_from:
@@ -144,121 +143,6 @@ async def _log_workflow_transition(
 
 
 # ---------------------------------------------------------------------------
-# POST /
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/",
-    response_model=BladeResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register a new blade",
-)
-async def create_blade(
-    body: BladeCreate,
-    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> Any:
-    """
-    Register a new turbine blade in the system.
-
-    The blade is created in ``CREATED`` status and immediately transitions
-    to ``OH_INSPECTION``.  Only OH_OPERATORs and SUPER_ADMINs may perform
-    this action.
-
-    Raises:
-        HTTP 409 — a blade with the given serial number already exists.
-    """
-    from app.models.blade import Blade
-
-    # Each batch holds up to 90 LPTR blades + 90 HPTR blades = 180 total.
-    BATCH_MAX_PER_TYPE = 90
-
-    # `use_enum_values=True` on BaseSchema means body.blade_type may already be
-    # a plain str rather than a BladeType member — normalize once, up front.
-    blade_type_val = (
-        body.blade_type
-        if isinstance(body.blade_type, BladeType)
-        else BladeType(body.blade_type)
-    )
-
-    # Uniqueness check — serial numbers are scoped per (batch_number, blade_type):
-    # each batch numbers its LPTR blades 1..90 and HPTR blades 1..90 independently,
-    # so the same serial recurs by design across different batches/types.
-    existing = await db.execute(
-        select(Blade).where(
-            Blade.serial_number == body.serial_number,
-            Blade.batch_number == body.batch_number,
-            Blade.blade_type == blade_type_val,
-            Blade.deleted_at.is_(None),
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"A {blade_type_val.value} blade with serial number '{body.serial_number}' "
-                f"already exists in batch '{body.batch_number}'"
-            ),
-        )
-
-    # Batch size limit — per blade type (90 LPTR + 90 HPTR per batch)
-    if body.batch_number:
-        type_label = blade_type_val.value.upper()
-        type_count_result = await db.execute(
-            select(func.count(Blade.id)).where(
-                Blade.batch_number == body.batch_number,
-                Blade.blade_type == blade_type_val,
-                Blade.deleted_at.is_(None),
-            )
-        )
-        current_type_count = type_count_result.scalar_one()
-        if current_type_count >= BATCH_MAX_PER_TYPE:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Batch '{body.batch_number}' already has {current_type_count} {type_label} blades. "
-                    f"Each batch allows up to {BATCH_MAX_PER_TYPE} LPTR + {BATCH_MAX_PER_TYPE} HPTR "
-                    f"blades (180 total)."
-                ),
-            )
-
-    blade = Blade(
-        serial_number=body.serial_number,
-        melt_number=body.melt_number,
-        work_order_number=body.work_order_number,
-        shop_order_number=body.shop_order_number,
-        part_number=body.part_number,
-        nomenclature=body.nomenclature,
-        engine_number=body.engine_number,
-        batch_number=body.batch_number,
-        engine_hours=getattr(body, "engine_hours", None),
-        component_hours=getattr(body, "component_hours", None),
-        current_station_id=body.station_id,
-        created_by_id=current_user.id,
-        status=BladeStatus.OH_INSPECTION,
-        blade_type=body.blade_type if hasattr(body, "blade_type") else None,
-    )
-    db.add(blade)
-    await db.flush()
-
-    await _log_workflow_transition(
-        db=db,
-        blade=blade,
-        from_status=None,
-        to_status=BladeStatus.OH_INSPECTION,
-        actor_id=current_user.id,
-        remarks="Blade registered and entered OH inspection",
-    )
-
-    await db.commit()
-    await db.refresh(blade)
-
-    logger.info("blade_created", blade_id=str(blade.id), serial=blade.serial_number)
-    return blade
-
-
-# ---------------------------------------------------------------------------
 # GET /
 # ---------------------------------------------------------------------------
 
@@ -277,7 +161,6 @@ async def list_blades(
     melt_number: str | None = Query(default=None),
     work_order_number: str | None = Query(default=None),
     part_number: str | None = Query(default=None),
-    batch_number: str | None = Query(default=None),
     blade_type: "BladeType | None" = Query(default=None),
     blade_status: BladeStatus | None = Query(default=None, alias="status"),
     blade_statuses: str | None = Query(default=None, alias="statuses"),
@@ -312,8 +195,6 @@ async def list_blades(
         conditions.append(Blade.work_order_number.ilike(f"%{work_order_number}%"))
     if part_number:
         conditions.append(Blade.part_number.ilike(f"%{part_number}%"))
-    if batch_number:
-        conditions.append(Blade.batch_number == batch_number)
     if blade_type:
         conditions.append(Blade.blade_type == blade_type)
     if blade_status:
@@ -417,7 +298,6 @@ async def list_blades(
             "part_number": b.part_number,
             "nomenclature": b.nomenclature,
             "engine_number": b.engine_number,
-            "batch_number": b.batch_number,
             "blade_type": b.blade_type,
             "status": b.status,
             "ocr_mismatch_flag": b.ocr_mismatch_flag,
@@ -459,156 +339,6 @@ async def list_rejection_reasons(
         {"id": str(r.id), "code": r.code, "description": r.description, "is_active": r.is_active}
         for r in reasons
     ]
-
-
-# ---------------------------------------------------------------------------
-# GET /batch-lookup
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/batch-lookup",
-    status_code=status.HTTP_200_OK,
-    summary="Look up batch group fields by batch number",
-)
-async def batch_lookup(
-    batch_number: str,
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    """
-    Return work_order_number, part_number, engine_number, nomenclature
-    stored in the batch_groups table for the given batch number.
-    """
-    from app.models.batch_group import BatchGroup
-    from sqlalchemy import select as sa_select
-
-    result = await db.execute(
-        sa_select(BatchGroup).where(BatchGroup.batch_number == batch_number)
-    )
-    bg = result.scalar_one_or_none()
-    if bg is None:
-        return {"found": False, "work_order_number": None, "part_number": None, "engine_number": None, "nomenclature": None}
-    return {
-        "found": True,
-        "work_order_number": bg.work_order_number,
-        "part_number": bg.part_number,
-        "engine_number": bg.engine_number,
-        "nomenclature": bg.nomenclature,
-    }
-
-
-# ---------------------------------------------------------------------------
-# GET /next-serial-number
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/next-serial-number",
-    status_code=status.HTTP_200_OK,
-    summary="Next auto-assigned serial number for a batch + blade type",
-)
-async def next_serial_number(
-    batch_number: str,
-    blade_type: BladeType,
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    """
-    Serial numbers are counted per (batch_number, blade_type), starting at 1
-    (e.g. a batch's 90 LPTR blades are "1".."90" and its 90 HPTR blades are,
-    independently, also "1".."90"). Returns the next number after the highest
-    already used — including soft-deleted rows, since the DB constraint does
-    too and would otherwise reject a reused number.
-    """
-    from app.models.blade import Blade
-
-    result = await db.execute(
-        select(Blade.serial_number).where(
-            Blade.batch_number == batch_number,
-            Blade.blade_type == blade_type,
-        )
-    )
-    highest = 0
-    for (serial,) in result.all():
-        if serial.isdigit():
-            highest = max(highest, int(serial))
-    return {"next_serial_number": str(highest + 1)}
-
-
-# ---------------------------------------------------------------------------
-# GET /serial-exists
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/serial-exists",
-    status_code=status.HTTP_200_OK,
-    summary="Check whether a serial number is already used in a batch + blade type",
-)
-async def serial_exists(
-    batch_number: str,
-    blade_type: BladeType,
-    serial_number: str,
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    from app.models.blade import Blade
-
-    result = await db.execute(
-        select(Blade.id).where(
-            Blade.batch_number == batch_number,
-            Blade.blade_type == blade_type,
-            Blade.serial_number == serial_number,
-            Blade.deleted_at.is_(None),
-        )
-    )
-    return {"exists": result.scalar_one_or_none() is not None}
-
-
-@router.post(
-    "/batch-groups",
-    status_code=status.HTTP_200_OK,
-    summary="Save or update a batch group mapping",
-)
-async def upsert_batch_group(
-    payload: dict,
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    """
-    Create or update the batch_groups record for the given batch_number.
-    Called automatically after a blade is successfully created with a batch number.
-    """
-    from app.models.batch_group import BatchGroup
-    from sqlalchemy import select as sa_select
-
-    batch_number: str = payload.get("batch_number", "").strip()
-    if not batch_number:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="batch_number is required")
-
-    result = await db.execute(
-        sa_select(BatchGroup).where(BatchGroup.batch_number == batch_number)
-    )
-    bg = result.scalar_one_or_none()
-
-    if bg:
-        bg.work_order_number = payload.get("work_order_number") or bg.work_order_number
-        bg.part_number       = payload.get("part_number")       or bg.part_number
-        bg.engine_number     = payload.get("engine_number")     or bg.engine_number
-        bg.nomenclature      = payload.get("nomenclature")      or bg.nomenclature
-    else:
-        bg = BatchGroup(
-            batch_number=batch_number,
-            work_order_number=payload.get("work_order_number"),
-            part_number=payload.get("part_number"),
-            engine_number=payload.get("engine_number"),
-            nomenclature=payload.get("nomenclature"),
-        )
-        db.add(bg)
-
-    await db.commit()
-    return {"saved": True, "batch_number": batch_number}
 
 
 # ---------------------------------------------------------------------------
@@ -750,15 +480,16 @@ async def send_to_assembly(
             detail="HPTR blades stay in OH and are never sent to Assembly. Use the OH Slot Allocation tools instead.",
         )
 
-    # Blades that belong to a batch must be sent as a full batch (90 blades),
-    # not individually.  Use POST /batches/{batch_number}/send-to-assembly instead.
-    if blade.batch_number:
+    # Every blade belongs to a Work Order and must be sent as a full set
+    # (90 blades), not individually. Use
+    # POST /work-orders/{work_order_number}/send-to-assembly instead.
+    if blade.work_order_number:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"Blade '{blade.serial_number}' belongs to batch '{blade.batch_number}'. "
-                "Batched blades must be sent to Assembly together when the batch is full (90 blades). "
-                "Use the 'Send Batch to Assembly' action on the OH Queue page."
+                f"Blade '{blade.serial_number}' belongs to Work Order '{blade.work_order_number}'. "
+                "Work Order blades must be sent to Assembly together when the set is complete (90 blades). "
+                "Use the 'Send Work Order to Assembly' action on the OH Queue page."
             ),
         )
 
@@ -856,10 +587,10 @@ async def return_to_oh(
     await db.commit()
     await db.refresh(blade)
 
-    # When every blade in the batch is back at OH, send one batch-level notification.
-    batch_number = blade.batch_number
-    if batch_number:
-        async def _notify_batch_returned(_batch: str) -> None:
+    # When every blade in the work order is back at OH, send one notification.
+    work_order_number = blade.work_order_number
+    if work_order_number:
+        async def _notify_work_order_returned(_wo: str) -> None:
             from app.notifications.service import NotificationService
             from app.models.notification import NotificationType
             from app.db.session import AsyncSessionLocal
@@ -867,7 +598,7 @@ async def return_to_oh(
                 async with AsyncSessionLocal() as _db:
                     remaining = (await _db.execute(
                         select(func.count(Blade.id)).where(
-                            Blade.batch_number == _batch,
+                            Blade.work_order_number == _wo,
                             Blade.deleted_at.is_(None),
                             Blade.status.notin_([
                                 BladeStatus.RETURNED_TO_OH,
@@ -881,15 +612,15 @@ async def return_to_oh(
                         svc = NotificationService(_db)
                         await svc.notify_roles(
                             roles=["OH_OPERATOR", "SUPER_ADMIN"],
-                            title=f"Batch {_batch} returned to OH",
-                            body=f"All blades in batch {_batch} have been returned from Assembly. Final verification can begin.",
+                            title=f"Work Order {_wo} returned to OH",
+                            body=f"All blades in Work Order {_wo} have been returned from Assembly. Final verification can begin.",
                             notification_type=NotificationType.WORKFLOW_UPDATED,
-                            metadata={"batch_number": _batch},
+                            metadata={"work_order_number": _wo},
                         )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("notify_batch_returned_failed", error=str(exc))
+                logger.warning("notify_work_order_returned_failed", error=str(exc))
 
-        background_tasks.add_task(_notify_batch_returned, batch_number)
+        background_tasks.add_task(_notify_work_order_returned, work_order_number)
 
     logger.info("blade_returned_to_oh", blade_id=str(blade_id))
     return blade
@@ -952,10 +683,10 @@ async def complete_blade(
     await db.commit()
     await db.refresh(blade)
 
-    # When every blade in the batch is COMPLETED, notify Assembly + Super Admin.
-    batch_number = blade.batch_number
-    if batch_number:
-        async def _notify_batch_completed(_batch: str) -> None:
+    # When every blade in the work order is COMPLETED, notify Assembly + Super Admin.
+    work_order_number = blade.work_order_number
+    if work_order_number:
+        async def _notify_work_order_completed(_wo: str) -> None:
             from app.notifications.service import NotificationService
             from app.models.notification import NotificationType
             from app.db.session import AsyncSessionLocal
@@ -963,7 +694,7 @@ async def complete_blade(
                 async with AsyncSessionLocal() as _db:
                     remaining = (await _db.execute(
                         select(func.count(Blade.id)).where(
-                            Blade.batch_number == _batch,
+                            Blade.work_order_number == _wo,
                             Blade.deleted_at.is_(None),
                             Blade.status != BladeStatus.COMPLETED,
                             Blade.status != BladeStatus.REJECTED,
@@ -973,15 +704,15 @@ async def complete_blade(
                         svc = NotificationService(_db)
                         await svc.notify_roles(
                             roles=["ASSEMBLY_OPERATOR", "SUPER_ADMIN"],
-                            title=f"Batch {_batch} — Final verification complete",
-                            body=f"All blades in batch {_batch} have passed final OH verification and are marked COMPLETED.",
+                            title=f"Work Order {_wo} — Final verification complete",
+                            body=f"All blades in Work Order {_wo} have passed final OH verification and are marked COMPLETED.",
                             notification_type=NotificationType.GENERAL,
-                            metadata={"batch_number": _batch},
+                            metadata={"work_order_number": _wo},
                         )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("notify_batch_completed_failed", error=str(exc))
+                logger.warning("notify_work_order_completed_failed", error=str(exc))
 
-        background_tasks.add_task(_notify_batch_completed, batch_number)
+        background_tasks.add_task(_notify_work_order_completed, work_order_number)
 
     logger.info("blade_completed", blade_id=str(blade_id))
     return blade

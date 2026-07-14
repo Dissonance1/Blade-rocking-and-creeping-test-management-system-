@@ -2,7 +2,7 @@ import api from "./api";
 
 export interface BatchEvent {
   id: string;
-  batch_number: string;
+  work_order_number: string;
   event_type:
     | "SENT_TO_ASSEMBLY"
     | "RECEIVED_BY_ASSEMBLY"
@@ -26,8 +26,11 @@ export type BatchStatus =
   | "SLOTS_ALLOCATED";
 
 export interface BatchSummary {
-  batch_number: string;
+  work_order_number: string;
+  blade_type: "LPTR" | "HPTR" | null;
   blade_count: number;
+  /** Rows with both Melt Number and Weight actually stored — NOT the same as blade_count (always 90 once scaffolded). */
+  rows_complete_count: number;
   blades_sent: number;
   blades_completed: number;
   hptr_count: number;
@@ -38,10 +41,11 @@ export interface BatchSummary {
   first_blade_at: string | null;
   first_sent_at: string | null;
   last_event: BatchEvent | null;
-  work_order_number: string | null;
   part_number: string | null;
   engine_number: string | null;
   nomenclature: string | null;
+  /** True only once all 90 rows have Melt Number + Weight and Complete has been run. */
+  is_entry_complete: boolean;
 }
 
 export interface BatchDetail extends BatchSummary {
@@ -49,7 +53,7 @@ export interface BatchDetail extends BatchSummary {
 }
 
 export interface BatchSendResult {
-  batch_number: string;
+  work_order_number: string;
   total_blades: number;
   sent_count: number;
   skipped_count: number;
@@ -64,7 +68,7 @@ export interface HptrSlotAssignment {
 }
 
 export interface HptrAssignSlotResult {
-  batch_number: string;
+  work_order_number: string;
   blade_type: "HPTR";
   blades_assigned: number;
   start_slot: number;
@@ -88,12 +92,12 @@ export interface BladeRockingCreepEntry {
 
 export const batchService = {
   list: async (params?: { has_slot_allocations?: boolean }): Promise<BatchSummary[]> => {
-    const { data } = await api.get<BatchSummary[]>("/batches/", { params });
+    const { data } = await api.get<BatchSummary[]>("/work-orders/", { params });
     return data;
   },
 
   get: async (batchNumber: string): Promise<BatchDetail> => {
-    const { data } = await api.get<BatchDetail>(`/batches/${batchNumber}`);
+    const { data } = await api.get<BatchDetail>(`/work-orders/${batchNumber}`);
     return data;
   },
 
@@ -102,7 +106,7 @@ export const batchService = {
     remarks?: string
   ): Promise<BatchSendResult> => {
     const { data } = await api.post<BatchSendResult>(
-      `/batches/${batchNumber}/send-to-assembly`,
+      `/work-orders/${batchNumber}/send-to-assembly`,
       { remarks }
     );
     return data;
@@ -110,7 +114,7 @@ export const batchService = {
 
   receive: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
     const { data } = await api.post<BatchEvent>(
-      `/batches/${batchNumber}/receive`,
+      `/work-orders/${batchNumber}/receive`,
       { remarks }
     );
     return data;
@@ -118,7 +122,7 @@ export const batchService = {
 
   accept: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
     const { data } = await api.post<BatchEvent>(
-      `/batches/${batchNumber}/accept`,
+      `/work-orders/${batchNumber}/accept`,
       { remarks }
     );
     return data;
@@ -126,7 +130,7 @@ export const batchService = {
 
   reject: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
     const { data } = await api.post<BatchEvent>(
-      `/batches/${batchNumber}/reject`,
+      `/work-orders/${batchNumber}/reject`,
       { remarks }
     );
     return data;
@@ -143,7 +147,7 @@ export const batchService = {
     remarks: string
   ): Promise<BatchEvent> => {
     const { data } = await api.post<BatchEvent>(
-      `/batches/${batchNumber}/modify`,
+      `/work-orders/${batchNumber}/modify`,
       { remarks, modifications }
     );
     return data;
@@ -153,9 +157,9 @@ export const batchService = {
     batchNumber: string,
     imbalanceSlot: number,
     totalSlots: number
-  ): Promise<{ batch_number: string; blades_assigned: number; message: string }> => {
+  ): Promise<{ work_order_number: string; blades_assigned: number; message: string }> => {
     const { data } = await api.post(
-      `/batches/${batchNumber}/assign-slot`,
+      `/work-orders/${batchNumber}/assign-slot`,
       { blade_type: "LPTR", imbalance_slot: imbalanceSlot, total_slots: totalSlots }
     );
     return data;
@@ -175,7 +179,7 @@ export const batchService = {
     unbalanceValue?: number
   ): Promise<HptrAssignSlotResult> => {
     const { data } = await api.post(
-      `/batches/${batchNumber}/assign-slot`,
+      `/work-orders/${batchNumber}/assign-slot`,
       {
         blade_type: "HPTR",
         start_slot: startSlot,
@@ -189,7 +193,7 @@ export const batchService = {
 
   getRockingCreep: async (batchNumber: string): Promise<BladeRockingCreepEntry[]> => {
     const { data } = await api.get<BladeRockingCreepEntry[]>(
-      `/batches/${batchNumber}/rocking-creep`
+      `/work-orders/${batchNumber}/rocking-creep`
     );
     return data;
   },
@@ -202,8 +206,8 @@ export const batchService = {
   rejectHptrSlots: async (
     batchNumber: string,
     reason?: string
-  ): Promise<{ batch_number: string; blades_reset: number; message: string }> => {
-    const { data } = await api.post(`/batches/${batchNumber}/reject-hptr-slots`, { reason });
+  ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/reject-hptr-slots`, { reason });
     return data;
   },
 
@@ -215,8 +219,8 @@ export const batchService = {
   completeHptrBalancing: async (
     batchNumber: string,
     remarks?: string
-  ): Promise<{ batch_number: string; blades_completed: number; message: string }> => {
-    const { data } = await api.post(`/batches/${batchNumber}/complete-hptr-balancing`, { remarks });
+  ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-hptr-balancing`, { remarks });
     return data;
   },
 };

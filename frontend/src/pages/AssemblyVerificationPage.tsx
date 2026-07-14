@@ -214,7 +214,7 @@ function BladeRow({
 type DecisionState = "idle" | "result" | "rejecting" | "modifying";
 
 export default function AssemblyVerificationPage() {
-  const { batchNumber } = useParams<{ batchNumber: string }>();
+  const { workOrderNumber } = useParams<{ workOrderNumber: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -309,36 +309,36 @@ export default function AssemblyVerificationPage() {
   // ── Data fetching ───────────────────────────────────────────────────────
 
   const { data: bladesData, isLoading: bladesLoading } = useQuery({
-    queryKey: ["blades", "batch", batchNumber],
-    queryFn: () => bladeService.list({ batch_number: batchNumber!, limit: 200 }),
-    enabled: !!batchNumber,
+    queryKey: ["blades", "batch", workOrderNumber],
+    queryFn: () => bladeService.list({ work_order_number: workOrderNumber!, limit: 200 }),
+    enabled: !!workOrderNumber,
     refetchInterval: 10_000,
   });
 
   // Auto-init: if batch has no ASSEMBLY_RECEIVED blades yet, call receiveBatch to transition them
   useEffect(() => {
-    if (!batchNumber || autoInitDone || bladesLoading) return;
+    if (!workOrderNumber || autoInitDone || bladesLoading) return;
     const hasAssemblyBlades = (bladesData?.items ?? []).some((b) =>
       ["ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "REJECTED"].includes(b.status)
     );
     if (bladesData && !hasAssemblyBlades) {
       assemblyService
-        .receiveBatch(batchNumber, {})
+        .receiveBatch(workOrderNumber, {})
         .catch(() => { /* receipt may already exist */ })
         .finally(() => {
           setAutoInitDone(true);
-          queryClient.invalidateQueries({ queryKey: ["blades", "batch", batchNumber] });
-          queryClient.invalidateQueries({ queryKey: ["assembly", "progress", batchNumber] });
+          queryClient.invalidateQueries({ queryKey: ["blades", "batch", workOrderNumber] });
+          queryClient.invalidateQueries({ queryKey: ["assembly", "progress", workOrderNumber] });
         });
     } else {
       setAutoInitDone(true);
     }
-  }, [bladesData, bladesLoading, batchNumber, autoInitDone, queryClient]);
+  }, [bladesData, bladesLoading, workOrderNumber, autoInitDone, queryClient]);
 
   const { data: progress } = useQuery({
-    queryKey: ["assembly", "progress", batchNumber],
-    queryFn: () => assemblyService.getBatchProgress(batchNumber!),
-    enabled: !!batchNumber,
+    queryKey: ["assembly", "progress", workOrderNumber],
+    queryFn: () => assemblyService.getBatchProgress(workOrderNumber!),
+    enabled: !!workOrderNumber,
     refetchInterval: 5_000,
   });
 
@@ -385,8 +385,8 @@ export default function AssemblyVerificationPage() {
       assemblyService.acceptBlade(selectedBlade!.id, { notes: acceptNotes || undefined }),
     onSuccess: () => {
       toast.success(`${selectedBlade!.serial_number} accepted`);
-      queryClient.invalidateQueries({ queryKey: ["blades", "batch", batchNumber] });
-      queryClient.invalidateQueries({ queryKey: ["assembly", "progress", batchNumber] });
+      queryClient.invalidateQueries({ queryKey: ["blades", "batch", workOrderNumber] });
+      queryClient.invalidateQueries({ queryKey: ["assembly", "progress", workOrderNumber] });
       setDecision("idle");
       setVerifyResult(null);
       setSelectedBlade(null);
@@ -404,8 +404,8 @@ export default function AssemblyVerificationPage() {
       assemblyService.rejectBlade(selectedBlade!.id, { notes: rejectReason }),
     onSuccess: () => {
       toast.success(`${selectedBlade!.serial_number} rejected`);
-      queryClient.invalidateQueries({ queryKey: ["blades", "batch", batchNumber] });
-      queryClient.invalidateQueries({ queryKey: ["assembly", "progress", batchNumber] });
+      queryClient.invalidateQueries({ queryKey: ["blades", "batch", workOrderNumber] });
+      queryClient.invalidateQueries({ queryKey: ["assembly", "progress", workOrderNumber] });
       setDecision("idle");
       setVerifyResult(null);
       setSelectedBlade(null);
@@ -420,7 +420,7 @@ export default function AssemblyVerificationPage() {
   });
 
   const setMakingMutation = useMutation({
-    mutationFn: () => assemblyService.startSetMaking(batchNumber!),
+    mutationFn: () => assemblyService.startSetMaking(workOrderNumber!),
     onSuccess: (res) => {
       toast.success(res.message || "Set-making initiated");
       queryClient.invalidateQueries({ queryKey: ["batches"] });
@@ -457,11 +457,11 @@ export default function AssemblyVerificationPage() {
         weight_grams: modFields.weight_grams !== "" ? parseFloat(modFields.weight_grams) : original.weight_grams,
         static_moment_gcm: modFields.static_moment_gcm !== "" ? parseFloat(modFields.static_moment_gcm) : original.static_moment_gcm,
       };
-      return batchService.modify(batchNumber!, [{ blade_id: selectedBlade.id, serial_number: selectedBlade.serial_number, original, updated }], modRemarks);
+      return batchService.modify(workOrderNumber!, [{ blade_id: selectedBlade.id, serial_number: selectedBlade.serial_number, original, updated }], modRemarks);
     },
     onSuccess: () => {
       toast.success("Blade data saved — please re-verify with corrected values");
-      queryClient.invalidateQueries({ queryKey: ["blades", "batch", batchNumber] });
+      queryClient.invalidateQueries({ queryKey: ["blades", "batch", workOrderNumber] });
       queryClient.invalidateQueries({ queryKey: ["blade", selectedBlade?.id] });
       setDecision("idle");
       setVerifyResult(null);
@@ -528,8 +528,8 @@ export default function AssemblyVerificationPage() {
             <div className="flex-1 min-w-0 flex flex-col sm:flex-row flex-wrap items-start sm:items-center justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-tight truncate">
-                  Blade Verification — Batch{" "}
-                  <span className="text-orange-500 font-mono">{batchNumber}</span>
+                  Blade Verification — Work Order{" "}
+                  <span className="text-orange-500 font-mono">{workOrderNumber}</span>
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 mt-1">
                   <span className="text-xs text-slate-500 dark:text-slate-400">

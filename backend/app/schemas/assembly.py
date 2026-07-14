@@ -24,7 +24,7 @@ class BatchReceiveRequest(BaseSchema):
 
 class BatchReceiptResponse(BaseSchema):
     id: uuid.UUID
-    batch_number: str
+    work_order_number: str
     received_at: datetime
     received_by_id: uuid.UUID
     station_id: uuid.UUID | None
@@ -38,7 +38,7 @@ class BatchReceiptResponse(BaseSchema):
 # ---------------------------------------------------------------------------
 
 class BatchProgressResponse(BaseSchema):
-    batch_number: str
+    work_order_number: str
     total_expected: int
     assembly_received: int    # blades with status ASSEMBLY_RECEIVED
     assembly_verified: int    # accepted + modified
@@ -162,7 +162,7 @@ class StartSetMakingRequest(BaseSchema):
 
 
 class SetMakingResponse(BaseSchema):
-    batch_number: str
+    work_order_number: str
     status: str   # "INITIATED"
     total_blades: int
     message: str
@@ -177,7 +177,6 @@ class OHBladeSnapshot(BaseSchema):
     id: uuid.UUID
     serial_number: str
     blade_type: BladeType
-    batch_number: str | None
     status: BladeStatus
     weight: float | None       # latest measurement weight
     dti_h1: float | None

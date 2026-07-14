@@ -101,7 +101,6 @@ export interface Blade {
   part_number: string;
   nomenclature: string;
   engine_number?: string | null;
-  batch_number?: string | null;
   engine_hours?: string | null;
   component_hours?: string | null;
   blade_type?: BladeType | null;
@@ -138,7 +137,6 @@ export interface BladeListItem {
   created_at: string;
   updated_at: string;
   /** Latest INITIAL measurement values (populated by list endpoint) */
-  batch_number?: string | null;
   weight_grams?: number | null;
   static_moment_gcm?: number | null;
   height_data?: Record<string, number> | null;
@@ -152,7 +150,6 @@ export interface BladeCreateRequest {
   part_number: string;
   nomenclature?: string;
   engine_number?: string;
-  batch_number?: string;
   engine_hours?: string;
   component_hours?: string;
   blade_type?: BladeType;
@@ -189,7 +186,7 @@ export interface Measurement {
   id: string;
   blade_id: string;
   measurement_type: MeasurementType;
-  batch_number?: string | null;
+  work_order_number?: string | null;
   weight_grams?: number | null;
   static_moment_gcm?: number | null;
   rocking_value?: number | null;
@@ -397,7 +394,7 @@ export interface BladeSearchParams {
   page?: number;
   status?: BladeStatus;
   statuses?: BladeStatus[];
-  batch_number?: string;
+  work_order_number?: string;
   blade_type?: BladeType;
   station_id?: string;
   q?: string;

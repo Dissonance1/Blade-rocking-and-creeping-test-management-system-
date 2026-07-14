@@ -2,12 +2,14 @@
 API tests for the /api/v1/blades endpoints.
 
 Coverage:
-    POST   /blades/
     GET    /blades/
     GET    /blades/{id}
     POST   /blades/{id}/send-to-assembly
     POST   /blades/{id}/reject
     POST   /blades/{id}/reopen
+
+Blade creation is exclusively via POST /work-orders/ (grid scaffold) —
+see test_work_orders.py — there is no standalone blade-creation endpoint.
 """
 
 from __future__ import annotations
@@ -27,96 +29,6 @@ BASE = "/api/v1/blades"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _blade_payload(serial_suffix: str = "") -> dict:
-    """Build a minimal valid blade creation payload."""
-    suffix = serial_suffix or uuid.uuid4().hex[:8].upper()
-    return {
-        "serial_number": f"BLD-API-{suffix}",
-        "melt_number": "MELT-TEST",
-        "work_order_number": "WO-2024-TEST",
-        "part_number": "PT-4470",
-        "nomenclature": "HP Turbine Blade Stage 1",
-    }
-
-
-# ---------------------------------------------------------------------------
-# POST / — create blade
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_blade_as_oh_operator(
-    client: AsyncClient, auth_headers: dict
-) -> None:
-    """OH_OPERATOR can create a blade — returns 201 with OH_INSPECTION status."""
-    payload = _blade_payload()
-    resp = await client.post(BASE + "/", json=payload, headers=auth_headers)
-    assert resp.status_code == 201, resp.text
-    data = resp.json()
-    assert data["serial_number"] == payload["serial_number"]
-    assert data["status"] == BladeStatus.OH_INSPECTION.value
-
-
-@pytest.mark.asyncio
-async def test_create_blade_as_super_admin(
-    client: AsyncClient, super_admin_headers: dict
-) -> None:
-    """SUPER_ADMIN can also create blades."""
-    resp = await client.post(BASE + "/", json=_blade_payload(), headers=super_admin_headers)
-    assert resp.status_code == 201
-
-
-@pytest.mark.asyncio
-async def test_create_blade_as_assembly_operator_forbidden(
-    client: AsyncClient, assembly_headers: dict
-) -> None:
-    """ASSEMBLY_OPERATOR cannot create blades — returns 403."""
-    resp = await client.post(BASE + "/", json=_blade_payload(), headers=assembly_headers)
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_create_blade_as_qa_viewer_forbidden(
-    client: AsyncClient, qa_headers: dict
-) -> None:
-    """QA_VIEWER cannot create blades — returns 403."""
-    resp = await client.post(BASE + "/", json=_blade_payload(), headers=qa_headers)
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_create_blade_unauthenticated(client: AsyncClient) -> None:
-    """Unauthenticated request returns 401."""
-    resp = await client.post(BASE + "/", json=_blade_payload())
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_create_blade_duplicate_serial(
-    client: AsyncClient, auth_headers: dict
-) -> None:
-    """Duplicate serial number returns 409 Conflict."""
-    payload = _blade_payload("DUPE-001")
-    # First creation succeeds
-    r1 = await client.post(BASE + "/", json=payload, headers=auth_headers)
-    assert r1.status_code == 201
-
-    # Second creation with same serial must fail
-    r2 = await client.post(BASE + "/", json=payload, headers=auth_headers)
-    assert r2.status_code in (400, 409)
-
-
-@pytest.mark.asyncio
-async def test_create_blade_missing_serial_number(
-    client: AsyncClient, auth_headers: dict
-) -> None:
-    """Payload missing serial_number returns 422."""
-    payload = _blade_payload()
-    del payload["serial_number"]
-    resp = await client.post(BASE + "/", json=payload, headers=auth_headers)
-    assert resp.status_code == 422
-
 
 # ---------------------------------------------------------------------------
 # GET / — list blades

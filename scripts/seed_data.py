@@ -47,7 +47,7 @@ from app.core.security import hash_password
 from app.models.blade import Blade
 from app.models.enums import BladeStatus, BladeType, RoleName, StationType
 from app.models.user import Role, User, UserRole
-from app.models.batch_group import BatchGroup
+from app.models.work_order import WorkOrder
 from app.models.workflow import RejectionReason, Station
 
 # ---------------------------------------------------------------------------
@@ -267,63 +267,69 @@ async def _create_sample_blades(
     oh_station: Station,
 ) -> None:
     """
-    Create 10 batches of blades in OH_INSPECTION status.
+    Create sample Work Orders — each a full 90-blade, single-blade-type
+    scaffold in OH_INSPECTION status, alternating LPTR/HPTR across the set.
 
-    Batch number format: {work_order}_{engine_no_stripped}_{part_suffix}_{DDMMYY}
-
-    Batches 1-3  → 90 blades each   (OH)
-    Batches 4-5  → 88 / 78 blades   (OH)
-    Batches 6-10 → 90 blades each   (OH)
+    Work Order Number format: {work_order}_{engine_no_stripped}_{part_suffix}_{DDMMYY}
     """
 
-    WORK_ORDER   = "45786"
     ENGINE_NO    = "14-587-63"
     ENGINE_STRIP = "1458763"        # hyphens removed
     PART_NUMBER  = "104.04.02.020"
     PART_SUFFIX  = "02020"          # last five digits, dots removed
     NOMENCLATURE = "HP Turbine Blade Stage 1"
+    BLADES_PER_WORK_ORDER = 90
 
-    # (date_suffix_DDMMYY, blade_count)
-    BATCH_SPECS = [
-        ("180626", 90),
-        ("190626", 90),
-        ("200626", 90),
-        ("210626", 88),
-        ("220626", 78),
-        ("230626", 90),
-        ("240626", 90),
-        ("250626", 90),
-        ("260626", 90),
-        ("270626", 90),
+    # (date_suffix_DDMMYY, blade_type)
+    WORK_ORDER_SPECS = [
+        ("180626", BladeType.LPTR),
+        ("190626", BladeType.HPTR),
+        ("200626", BladeType.LPTR),
+        ("210626", BladeType.HPTR),
+        ("220626", BladeType.LPTR),
     ]
 
     total_blades = 0
-    total_batches = 0
+    total_work_orders = 0
 
-    for batch_idx, (date_sfx, blade_count) in enumerate(BATCH_SPECS, start=1):
-        bn = f"{WORK_ORDER}_{ENGINE_STRIP}_{PART_SUFFIX}_{date_sfx}"
+    for wo_idx, (date_sfx, blade_type) in enumerate(WORK_ORDER_SPECS, start=1):
+        base = f"{ENGINE_STRIP}_{PART_SUFFIX}_{date_sfx}"
+        wo_number = f"{base}_{blade_type.value}"
 
-        existing_bg = (
-            await db.execute(select(BatchGroup).where(BatchGroup.batch_number == bn))
+        work_order = (
+            await db.execute(select(WorkOrder).where(WorkOrder.work_order_number == wo_number))
         ).scalar_one_or_none()
-        if not existing_bg:
-            db.add(BatchGroup(
-                batch_number=bn,
-                work_order_number=WORK_ORDER,
+        if work_order is None:
+            work_order = WorkOrder(
+                id=uuid.uuid4(),
+                work_order_number=wo_number,
+                shop_order_number=f"SO{base}",
                 part_number=PART_NUMBER,
+                blade_type=blade_type,
                 engine_number=ENGINE_NO,
-                nomenclature=NOMENCLATURE,
-            ))
-            total_batches += 1
-            _log_created(f"BatchGroup {bn}  ({blade_count} blades)")
+                engine_hours=f"{round(random.uniform(500, 5000), 2)}:00:00",
+                component_hours=f"{round(random.uniform(200, 3000), 2)}:00:00",
+                created_by_id=oh_user.id,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(work_order)
+            await db.flush()
+            total_work_orders += 1
+            _log_created(f"WorkOrder {wo_number}  ({blade_type.value}, {BLADES_PER_WORK_ORDER} blades)")
         else:
-            _log_exists(f"BatchGroup {bn}")
+            _log_exists(f"WorkOrder {wo_number}")
 
-        created_in_batch = 0
-        for blade_idx in range(1, blade_count + 1):
-            serial = f"SN{batch_idx:02d}{blade_idx:04d}"
+        created_in_wo = 0
+        for s_no in range(1, BLADES_PER_WORK_ORDER + 1):
+            serial = f"{s_no:02d}"
             existing = (
-                await db.execute(select(Blade).where(Blade.serial_number == serial))
+                await db.execute(
+                    select(Blade).where(
+                        Blade.work_order_id == work_order.id,
+                        Blade.serial_number == serial,
+                    )
+                )
             ).scalar_one_or_none()
             if existing:
                 continue
@@ -331,16 +337,16 @@ async def _create_sample_blades(
             blade = Blade(
                 id=uuid.uuid4(),
                 serial_number=serial,
-                melt_number=f"MLT{batch_idx:02d}{blade_idx:04d}",
-                work_order_number=WORK_ORDER,
-                shop_order_number=f"SO{WORK_ORDER}",
+                melt_number=f"MLT{wo_idx:02d}{s_no:04d}",
+                work_order_id=work_order.id,
+                work_order_number=wo_number,
+                shop_order_number=work_order.shop_order_number,
                 part_number=PART_NUMBER,
                 nomenclature=NOMENCLATURE,
                 engine_number=ENGINE_NO,
-                batch_number=bn,
-                engine_hours=str(round(random.uniform(500, 5000), 2)),
-                component_hours=str(round(random.uniform(200, 3000), 2)),
-                blade_type=BladeType.LPTR if blade_idx % 2 != 0 else BladeType.HPTR,
+                engine_hours=work_order.engine_hours,
+                component_hours=work_order.component_hours,
+                blade_type=blade_type,
                 status=BladeStatus.OH_INSPECTION,
                 current_station_id=oh_station.id,
                 created_by_id=oh_user.id,
@@ -349,19 +355,19 @@ async def _create_sample_blades(
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(blade)
-            created_in_batch += 1
+            created_in_wo += 1
             total_blades += 1
 
             # Flush every 50 blades to avoid huge in-memory batches
             if total_blades % 50 == 0:
                 await db.flush()
 
-        if created_in_batch:
-            _log_created(f"  {created_in_batch} blade(s) created")
+        if created_in_wo:
+            _log_created(f"  {created_in_wo} blade(s) created")
 
     await db.flush()
     print(
-        f"\n  Total: {total_blades} blade(s) across {total_batches} batch(es) created."
+        f"\n  Total: {total_blades} blade(s) across {total_work_orders} work order(s) created."
     )
 
 

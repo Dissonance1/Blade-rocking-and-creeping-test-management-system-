@@ -44,7 +44,7 @@ function RefreshToast() {
       <div className="flex items-start gap-2.5 px-4 py-3">
         <KTIcon iconName="check-circle" className="text-lg leading-none text-emerald-500 shrink-0 mt-0.5" />
         <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">Batch list refreshed</p>
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">Work order list refreshed</p>
         </div>
       </div>
       <div className="h-1 w-full bg-blue-100 dark:bg-blue-500/20">
@@ -184,12 +184,12 @@ function ModificationChanges({ changes }: { changes: Record<string, unknown> | n
   );
 }
 
-// ─── Batch detail panel ───────────────────────────────────────────────────────
+// ─── Work order detail panel ─────────────────────────────────────────────────
 
-function BatchDetailPanel({ batchNumber }: { batchNumber: string }) {
+function BatchDetailPanel({ workOrderNumber }: { workOrderNumber: string }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["batch", batchNumber],
-    queryFn: () => batchService.get(batchNumber),
+    queryKey: ["batch", workOrderNumber],
+    queryFn: () => batchService.get(workOrderNumber),
   });
 
   if (isLoading) {
@@ -283,11 +283,14 @@ function BatchDetailPanel({ batchNumber }: { batchNumber: string }) {
   );
 }
 
-// ─── Batch card (read-only) ───────────────────────────────────────────────────
+// ─── Work order card (read-only) ─────────────────────────────────────────────
 
 function BatchCard({ batch }: { batch: BatchSummary }) {
   const [expanded, setExpanded] = useState(false);
-  const filledPct = Math.round((batch.blade_count / 90) * 100);
+  // rows_complete_count = blades with Melt Number + Weight actually stored —
+  // NOT blade_count, which is the fixed 90-row scaffold present from the
+  // moment the Work Order is started, before any row is filled in.
+  const filledPct = Math.round((batch.rows_complete_count / 90) * 100);
   const sentPct = Math.round((batch.blades_sent / 90) * 100);
 
   return (
@@ -296,7 +299,7 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <CardTitle className="text-sm font-semibold text-slate-900 dark:text-white font-mono truncate">
-              {batch.batch_number}
+              {batch.work_order_number}
             </CardTitle>
             {batch.nomenclature && (
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
@@ -312,16 +315,16 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
         {/* Blade progress bar */}
         <div className="space-y-1">
           <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
-            <span>Blades in batch</span>
-            <span className={cn(batch.blade_count >= 90 ? "text-emerald-500 font-semibold" : "")}>
-              {batch.blade_count} / 90{batch.blade_count >= 90 ? " (Full)" : ""}
+            <span>Blade entry progress</span>
+            <span className={cn(batch.is_entry_complete ? "text-emerald-500 font-semibold" : "")}>
+              {batch.rows_complete_count} / 90{batch.is_entry_complete ? " (Complete)" : ""}
             </span>
           </div>
           <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                batch.blade_count >= 90
+                batch.is_entry_complete
                   ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
                   : "bg-gradient-to-r from-orange-400 to-orange-500"
               )}
@@ -390,7 +393,7 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
           )}
         </Button>
 
-        {expanded && <BatchDetailPanel batchNumber={batch.batch_number} />}
+        {expanded && <BatchDetailPanel workOrderNumber={batch.work_order_number} />}
       </CardContent>
     </Card>
   );
@@ -401,8 +404,8 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
 export default function BatchTrackingPage() {
   const hasRole = useAuthStore((s) => s.hasRole);
 
-  // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) batch view.
-  // Assembly Operator sees only batches that have been sent/received at assembly.
+  // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) work order view.
+  // Assembly Operator sees only work orders that have been sent/received at assembly.
   const isOHView = hasRole(["OH_OPERATOR", "QA_VIEWER", "SUPER_ADMIN"]);
   const isAssemblyView = hasRole(["ASSEMBLY_OPERATOR"]) && !hasRole(["SUPER_ADMIN"]);
 
@@ -436,8 +439,8 @@ export default function BatchTrackingPage() {
     "REJECTED",
   ];
 
-  // OH view: all batches regardless of status
-  // Assembly view: only batches that crossed into assembly
+  // OH view: all work orders regardless of status
+  // Assembly view: only work orders that crossed into assembly
   const sorted = [...batches]
     .filter((b) => isOHView || ASSEMBLY_STATUSES.includes(b.current_status))
     .sort((a, b) => (statusOrder[a.current_status] ?? 99) - (statusOrder[b.current_status] ?? 99));
@@ -447,10 +450,10 @@ export default function BatchTrackingPage() {
   const accepted = sorted.filter((b) => b.current_status === "ACCEPTED").length;
   const rejected = sorted.filter((b) => b.current_status === "REJECTED").length;
 
-  const pageTitle = isAssemblyView ? "Assembly Batch Overview" : "OH Batch Overview";
+  const pageTitle = isAssemblyView ? "Assembly Work Order Overview" : "OH Work Order Overview";
   const pageSubtitle = isAssemblyView
-    ? "Batches received at 720 Hanger (Assembly)"
-    : "Batches created and managed at 701 Hanger (OH)";
+    ? "Work orders received at 720 Hanger (Assembly)"
+    : "Work orders created and managed at 701 Hanger (OH)";
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -485,7 +488,7 @@ export default function BatchTrackingPage() {
         {/* KPI row */}
         <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <KpiCard
-            title="Total Batches"
+            title="Total Work Orders"
             value={total}
             icon={<Package className="w-5 h-5" />}
             accent="slate"
@@ -510,14 +513,14 @@ export default function BatchTrackingPage() {
           />
         </div>
 
-        {/* Batch grid */}
+        {/* Work order grid */}
         <Card className="shrink-0 bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
           <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
             <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
               <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
                 <KTIcon iconName="chart-line-up" className="text-base leading-none" />
               </span>
-              All Batches
+              All Work Orders
               {!isLoading && (
                 <span className="text-sm font-normal text-slate-400 dark:text-slate-400">
                   ({sorted.length})
@@ -533,19 +536,19 @@ export default function BatchTrackingPage() {
             ) : isError ? (
               <div className="flex items-center justify-center gap-2 h-full min-h-[12rem] text-red-500 dark:text-red-400">
                 <AlertCircle className="w-5 h-5" />
-                <span>Failed to load batches</span>
+                <span>Failed to load work orders</span>
               </div>
             ) : sorted.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full min-h-[12rem] text-slate-400 dark:text-slate-500 gap-3">
                 <Package className="w-10 h-10 opacity-40" />
                 <p className="text-center text-sm max-w-sm">
-                  No batches found. Register blades with a batch number to get started.
+                  No work orders found. Register blades with a work order number to get started.
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-1 items-start">
                 {sorted.map((batch) => (
-                  <BatchCard key={batch.batch_number} batch={batch} />
+                  <BatchCard key={batch.work_order_number} batch={batch} />
                 ))}
               </div>
             )}

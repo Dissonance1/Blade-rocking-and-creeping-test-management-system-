@@ -84,11 +84,11 @@ function SavedHalfTable({ title, rows }: { title: string; rows: SavedRow[] }) {
 function SavedHptrSlotsTable({
   rows,
   totalSlots,
-  batchNumber,
+  workOrderNumber,
 }: {
   rows: SavedRow[];
   totalSlots: number;
-  batchNumber: string;
+  workOrderNumber: string;
 }) {
   const half = totalSlots / 2;
   const bySlot = (r: SavedRow) => parseInt(r.slot.slot_number, 10);
@@ -99,7 +99,7 @@ function SavedHptrSlotsTable({
   async function handleExport() {
     setExporting(true);
     try {
-      await reportService.exportHptrSlots(batchNumber);
+      await reportService.exportHptrSlots(workOrderNumber);
     } catch {
       toast.error("Failed to export Excel file");
     } finally {
@@ -171,7 +171,7 @@ function SlotAllocationTab({
       <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
         <CardContent className="pt-5 pb-4 space-y-4">
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            {eligibleCount} of {totalHptr} HPTR blade{totalHptr !== 1 ? "s" : ""} in this batch have
+            {eligibleCount} of {totalHptr} HPTR blade{totalHptr !== 1 ? "s" : ""} in this work order have
             recorded measurements and are ready for slot allocation.
           </p>
           <div className="flex flex-wrap items-end gap-4">
@@ -505,7 +505,7 @@ function AlreadySavedNotice({ onGoToBalancing }: { onGoToBalancing: () => void }
     <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
       <CheckCircle2 className="w-10 h-10 opacity-30" />
       <p className="text-sm text-center max-w-sm">
-        This batch's HPTR slots are already saved. Track physical balancing or fix up a slot
+        This work order's HPTR slots are already saved. Track physical balancing or fix up a slot
         from the Balancing tab.
       </p>
       <Button variant="outline" size="sm" onClick={onGoToBalancing}>
@@ -520,13 +520,13 @@ function AlreadySavedNotice({ onGoToBalancing }: { onGoToBalancing: () => void }
 function BalancingTab({
   rows,
   totalSlots,
-  batchNumber,
+  workOrderNumber,
   onComplete,
   completing,
 }: {
   rows: SavedRow[];
   totalSlots: number;
-  batchNumber: string;
+  workOrderNumber: string;
   onComplete: () => void;
   completing: boolean;
 }) {
@@ -541,7 +541,7 @@ function BalancingTab({
 
   return (
     <div className="space-y-5">
-      <SavedHptrSlotsTable rows={rows} totalSlots={totalSlots} batchNumber={batchNumber} />
+      <SavedHptrSlotsTable rows={rows} totalSlots={totalSlots} workOrderNumber={workOrderNumber} />
 
       <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
         <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -550,8 +550,8 @@ function BalancingTab({
               Physical balancing confirmed?
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Save to mark this batch's HPTR balancing complete. It stops showing up in the batch
-              selector above once saved.
+              Save to mark this work order's HPTR balancing complete. It stops showing up in the
+              work order selector above once saved.
             </p>
           </div>
           <Button
@@ -588,13 +588,13 @@ export default function OHSlotAllocationPage() {
     staleTime: 30_000,
   });
 
-  // Only offer batches that are a full, pure HPTR batch (all HPTR_TOTAL_SLOTS
-  // blades are HPTR — no LPTR mixed in, no partial batch) and not yet marked
-  // balancing-complete (Balancing tab's Save button). Batches with slots
-  // already saved but not yet completed stay selectable too (not just the
-  // currently-active one) so OH can come back later to continue physical
-  // balancing or reject/redo — the Balancing tab, not the dropdown, is what
-  // gates that state.
+  // Only offer work orders that are a full, pure HPTR work order (all
+  // HPTR_TOTAL_SLOTS blades are HPTR — no LPTR mixed in, no partial work
+  // order) and not yet marked balancing-complete (Balancing tab's Save
+  // button). Work orders with slots already saved but not yet completed stay
+  // selectable too (not just the currently-active one) so OH can come back
+  // later to continue physical balancing or reject/redo — the Balancing tab,
+  // not the dropdown, is what gates that state.
   const batches = useMemo(() => {
     const eligible = allBatches.filter(
       (b) =>
@@ -602,8 +602,8 @@ export default function OHSlotAllocationPage() {
         b.hptr_count === HPTR_TOTAL_SLOTS &&
         b.hptr_balanced_count < b.hptr_count
     );
-    if (selectedBatch && !eligible.some((b) => b.batch_number === selectedBatch)) {
-      const current = allBatches.find((b) => b.batch_number === selectedBatch);
+    if (selectedBatch && !eligible.some((b) => b.work_order_number === selectedBatch)) {
+      const current = allBatches.find((b) => b.work_order_number === selectedBatch);
       if (current) return [...eligible, current];
     }
     return eligible;
@@ -611,7 +611,7 @@ export default function OHSlotAllocationPage() {
 
   const { data: hptrBladesData, isLoading: bladesLoading } = useQuery({
     queryKey: ["blades", "hptr-batch", selectedBatch],
-    queryFn: () => bladeService.list({ batch_number: selectedBatch, blade_type: "HPTR", limit: 200 }),
+    queryFn: () => bladeService.list({ work_order_number: selectedBatch, blade_type: "HPTR", limit: 200 }),
     enabled: !!selectedBatch,
     staleTime: 0,
   });
@@ -619,7 +619,7 @@ export default function OHSlotAllocationPage() {
 
   const { data: batchSlotsRaw = [], isLoading: slotsLoading } = useQuery({
     queryKey: ["slots", selectedBatch],
-    queryFn: () => slotService.list({ batch_number: selectedBatch, limit: 200 }),
+    queryFn: () => slotService.list({ work_order_number: selectedBatch, limit: 200 }),
     enabled: !!selectedBatch,
     refetchInterval: 30_000,
   });
@@ -663,7 +663,7 @@ export default function OHSlotAllocationPage() {
       return;
     }
     if (eligibleBlades.length === 0) {
-      toast.error("No HPTR blades ready for slot allocation in this batch");
+      toast.error("No HPTR blades ready for slot allocation in this work order");
       return;
     }
     setAllocation(computeInitialHptrSlots(eligibleBlades, K, N));
@@ -751,10 +751,10 @@ export default function OHSlotAllocationPage() {
       .map((s) => ({ slot: s, blade: bladeMap.get(s.blade_id) }));
   }, [savedHptrSlots, bladeMap]);
 
-  // Jump to whichever tab matches this batch's actual state: a batch with
-  // slots already saved opens straight to Balancing; a fresh one opens to
-  // Slot Allocation. Re-evaluated whenever the saved/unsaved state flips
-  // (right after Save, or after Reject Batch resets it).
+  // Jump to whichever tab matches this work order's actual state: a work
+  // order with slots already saved opens straight to Balancing; a fresh one
+  // opens to Slot Allocation. Re-evaluated whenever the saved/unsaved state
+  // flips (right after Save, or after Reject Work Order resets it).
   useEffect(() => {
     if (!selectedBatch || isLoading) return;
     setActiveTab(hasSavedSlots ? "balancing" : "slot-allocation");
@@ -785,21 +785,21 @@ export default function OHSlotAllocationPage() {
       </div>
 
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
-        {/* Batch selector */}
+        {/* Work order selector */}
         <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
           <CardContent className="pt-5 pb-4">
             <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
-              Select Batch
+              Select Work Order
             </Label>
             <select
               value={selectedBatch}
               onChange={(e) => handleBatchChange(e.target.value)}
               className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
             >
-              <option value="">— Select a batch —</option>
+              <option value="">— Select a work order —</option>
               {batches.map((b) => (
-                <option key={b.batch_number} value={b.batch_number}>
-                  {b.batch_number}{b.nomenclature ? ` · ${b.nomenclature}` : ""}
+                <option key={b.work_order_number} value={b.work_order_number}>
+                  {b.work_order_number}{b.nomenclature ? ` · ${b.nomenclature}` : ""}
                 </option>
               ))}
             </select>
@@ -809,7 +809,7 @@ export default function OHSlotAllocationPage() {
         {!selectedBatch && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500 gap-3">
             <PackageSearch className="w-12 h-12 opacity-30" />
-            <p className="text-sm">Select a batch above to begin HPTR slot allocation</p>
+            <p className="text-sm">Select a work order above to begin HPTR slot allocation</p>
           </div>
         )}
 
@@ -822,7 +822,7 @@ export default function OHSlotAllocationPage() {
         {selectedBatch && !isLoading && hptrBlades.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500 gap-3">
             <PackageSearch className="w-12 h-12 opacity-30" />
-            <p className="text-sm">No HPTR blades found in batch {selectedBatch}</p>
+            <p className="text-sm">No HPTR blades found in work order {selectedBatch}</p>
           </div>
         )}
 
@@ -880,7 +880,7 @@ export default function OHSlotAllocationPage() {
               <BalancingTab
                 rows={savedRows}
                 totalSlots={N}
-                batchNumber={selectedBatch}
+                workOrderNumber={selectedBatch}
                 onComplete={() => completeMutation.mutate()}
                 completing={completeMutation.isPending}
               />

@@ -15,25 +15,25 @@ export const assemblyService = {
   /** Mark a batch as received at Assembly — creates AssemblyBatchReceipt and transitions blades */
   receiveBatch: (batchNumber: string, data: BatchReceiveRequest = {}) =>
     api
-      .post<BatchReceiptResponse>(`/assembly/batches/${batchNumber}/receive`, data)
+      .post<BatchReceiptResponse>(`/assembly/work-orders/${batchNumber}/receive`, data)
       .then((r) => r.data),
 
   /** Fetch the receipt for a batch (404 if not yet received at assembly) */
   getBatchReceipt: (batchNumber: string) =>
     api
-      .get<BatchReceiptResponse>(`/assembly/batches/${batchNumber}/receipt`)
+      .get<BatchReceiptResponse>(`/assembly/work-orders/${batchNumber}/receipt`)
       .then((r) => r.data),
 
   /** Verification progress: received / verified / rejected / pending counts */
   getBatchProgress: (batchNumber: string) =>
     api
-      .get<BatchProgressResponse>(`/assembly/batches/${batchNumber}/progress`)
+      .get<BatchProgressResponse>(`/assembly/work-orders/${batchNumber}/progress`)
       .then((r) => r.data),
 
   /** Blades in this batch that have assembly records (verified / rejected) */
   getBatchBlades: (batchNumber: string) =>
     api
-      .get<AssemblyBladeRecord[]>(`/assembly/batches/${batchNumber}/blades`)
+      .get<AssemblyBladeRecord[]>(`/assembly/work-orders/${batchNumber}/blades`)
       .then((r) => r.data),
 
   /**
@@ -67,7 +67,7 @@ export const assemblyService = {
   startSetMaking: (batchNumber: string, notes?: string, bladeType?: "LPTR" | "HPTR") =>
     api
       .post<SetMakingResponse>(
-        `/assembly/batches/${batchNumber}/start-setmaking`,
+        `/assembly/work-orders/${batchNumber}/start-setmaking`,
         { notes },
         { params: bladeType ? { blade_type: bladeType } : undefined }
       )

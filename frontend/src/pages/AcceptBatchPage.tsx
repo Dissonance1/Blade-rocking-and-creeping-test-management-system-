@@ -94,25 +94,25 @@ function SplitBladeTable({ blades }: { blades: BladeListItem[] }) {
 }
 
 export default function AcceptBatchPage() {
-  const { batchNumber } = useParams<{ batchNumber: string }>();
+  const { workOrderNumber } = useParams<{ workOrderNumber: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const { data: bladesData, isLoading } = useQuery({
-    queryKey: ["blades", "accept-page", batchNumber],
-    queryFn: () => bladeService.list({ batch_number: batchNumber!, limit: 200 }),
-    enabled: !!batchNumber,
+    queryKey: ["blades", "accept-page", workOrderNumber],
+    queryFn: () => bladeService.list({ work_order_number: workOrderNumber!, limit: 200 }),
+    enabled: !!workOrderNumber,
     staleTime: 30_000,
   });
 
   const batchBlades = bladesData?.items ?? [];
 
   const acceptMutation = useMutation({
-    mutationFn: () => batchService.accept(batchNumber!),
+    mutationFn: () => batchService.accept(workOrderNumber!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["batches"] });
       queryClient.invalidateQueries({ queryKey: ["blades"] });
-      toast.success(`Batch ${batchNumber} accepted — OH has been notified`);
+      toast.success(`Work Order ${workOrderNumber} accepted — OH has been notified`);
       navigate("/assembly-queue");
     },
     onError: (err: unknown) => {
@@ -123,7 +123,7 @@ export default function AcceptBatchPage() {
     },
   });
 
-  if (!batchNumber) return null;
+  if (!workOrderNumber) return null;
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -143,8 +143,8 @@ export default function AcceptBatchPage() {
           </div>
           <div className="min-w-0 text-center flex flex-col items-center">
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white truncate">
-              Accept Batch{" "}
-              <span className="font-mono text-orange-500">{batchNumber}</span>
+              Accept Work Order{" "}
+              <span className="font-mono text-orange-500">{workOrderNumber}</span>
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
               Review all blade details, then confirm acceptance. Slot assignment is done in the LPTR Slot Allocation page.
@@ -163,7 +163,7 @@ export default function AcceptBatchPage() {
           ) : batchBlades.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-32 text-slate-400 dark:text-slate-500 gap-3">
               <AlertCircle className="w-8 h-8 opacity-50" />
-              <p>No blades found for batch {batchNumber}.</p>
+              <p>No blades found for work order {workOrderNumber}.</p>
               <Button variant="outline" size="sm" onClick={() => navigate("/assembly-queue")}>
                 Back to Queue
               </Button>
@@ -189,7 +189,7 @@ export default function AcceptBatchPage() {
                   </p>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
                     This will mark{" "}
-                    <span className="font-mono text-orange-500">{batchNumber}</span>{" "}
+                    <span className="font-mono text-orange-500">{workOrderNumber}</span>{" "}
                     as accepted and notify OH. Then go to{" "}
                     <strong>LPTR Slot Allocation</strong> to assign disc slots.
                   </p>

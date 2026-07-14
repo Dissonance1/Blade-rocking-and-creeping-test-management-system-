@@ -335,21 +335,32 @@ async def swap_slots(
     balancing testing means swapping it with another slot's blade. Both
     allocations are reset to unbalanced since they're now in new positions.
 
+    ``blade_type`` is not accepted from the caller — since one work order
+    now always maps to exactly one blade type, it is derived by looking up
+    the ``WorkOrder`` for ``body.work_order_number``.
+
     Raises:
         HTTP 403 — caller's role doesn't match the blade type.
-        HTTP 404 — either slot has no active allocation.
+        HTTP 404 — work order not found, or either slot has no active allocation.
         HTTP 422 — the two slot numbers are identical.
     """
     from datetime import datetime, timezone
 
     from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
 
-    # `use_enum_values=True` on BaseSchema means body.blade_type may already
-    # be a plain str rather than a BladeType member — normalize once, up front.
-    blade_type_val = (
-        body.blade_type if isinstance(body.blade_type, BladeType) else BladeType(body.blade_type)
-    )
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == body.work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work order '{body.work_order_number}' not found",
+        )
+    blade_type_val = work_order.blade_type
 
     _require_role_for_blade_type(current_user, blade_type_val)
 
@@ -368,7 +379,7 @@ async def swap_slots(
                     SlotAllocation.slot_number == slot_number,
                     SlotAllocation.is_active.is_(True),
                     Blade.blade_type == blade_type_val,
-                    Blade.batch_number == body.batch_number,
+                    Blade.work_order_number == body.work_order_number,
                 )
             )
         ).scalar_one_or_none()
@@ -378,12 +389,12 @@ async def swap_slots(
     if alloc_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_a}' in batch '{body.batch_number}'",
+            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_a}' in work order '{body.work_order_number}'",
         )
     if alloc_b is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_b}' in batch '{body.batch_number}'",
+            detail=f"No active {blade_type_val.value} allocation at slot '{body.slot_number_b}' in work order '{body.work_order_number}'",
         )
 
     now = datetime.now(timezone.utc)
@@ -424,7 +435,7 @@ async def swap_slots(
     logger.info(
         "slots_swapped",
         blade_type=blade_type_val.value,
-        batch=body.batch_number,
+        work_order=body.work_order_number,
         slot_a=body.slot_number_a,
         slot_b=body.slot_number_b,
     )
@@ -495,11 +506,11 @@ async def update_balancing(
     await db.commit()
     await db.refresh(allocation)
 
-    # When this blade is balanced, check if ALL blades in the batch are done.
-    if body.is_balanced and blade.batch_number:
-        _batch_num = blade.batch_number
+    # When this blade is balanced, check if ALL blades in the work order are done.
+    if body.is_balanced and blade.work_order_number:
+        _wo_num = blade.work_order_number
         _blade_serial = blade.serial_number
-        async def _notify_batch_balanced(_batch: str, _serial: str) -> None:
+        async def _notify_work_order_balanced(_work_order: str, _serial: str) -> None:
             from app.notifications.service import NotificationService
             from app.models.notification import NotificationType
             from app.models.blade import Blade as _Blade
@@ -510,7 +521,7 @@ async def update_balancing(
                 async with AsyncSessionLocal() as _db:
                     unbalanced = (await _db.execute(
                         _sel(_func.count(_Blade.id)).where(
-                            _Blade.batch_number == _batch,
+                            _Blade.work_order_number == _work_order,
                             _Blade.deleted_at.is_(None),
                             _Blade.status.notin_([
                                 _BS.BALANCING_COMPLETED,
@@ -525,15 +536,15 @@ async def update_balancing(
                         svc = NotificationService(_db)
                         await svc.notify_roles(
                             roles=["OH_OPERATOR", "ASSEMBLY_OPERATOR", "SUPER_ADMIN"],
-                            title=f"Batch {_batch} — Balancing complete",
-                            body=f"All blades in batch {_batch} have been balanced and are ready to return to OH for final verification.",
+                            title=f"Work Order {_work_order} — Balancing complete",
+                            body=f"All blades in work order {_work_order} have been balanced and are ready to return to OH for final verification.",
                             notification_type=NotificationType.BALANCING_DONE,
-                            metadata={"batch_number": _batch},
+                            metadata={"work_order_number": _work_order},
                         )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("notify_batch_balanced_failed", error=str(exc))
+                logger.warning("notify_work_order_balanced_failed", error=str(exc))
 
-        background_tasks.add_task(_notify_batch_balanced, _batch_num, _blade_serial)
+        background_tasks.add_task(_notify_work_order_balanced, _wo_num, _blade_serial)
 
     logger.info(
         "balancing_updated",
@@ -561,22 +572,22 @@ async def list_slots(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=500),
     is_balanced: bool | None = Query(default=None),
-    batch_number: str | None = Query(default=None),
+    work_order_number: str | None = Query(default=None),
 ) -> Any:
     """
     Return all currently active slot allocations, optionally filtered by
-    balancing status and/or batch number.  Results are ordered by slot number.
+    balancing status and/or work order number.  Results are ordered by slot number.
     """
     from app.models.blade import Blade as _Blade
     from app.models.slot_allocation import SlotAllocation
 
-    if batch_number:
+    if work_order_number:
         stmt_base = (
             select(SlotAllocation)
             .join(_Blade, _Blade.id == SlotAllocation.blade_id)
             .where(
                 SlotAllocation.is_active.is_(True),
-                _Blade.batch_number == batch_number,
+                _Blade.work_order_number == work_order_number,
                 _Blade.deleted_at.is_(None),
             )
         )
@@ -586,7 +597,7 @@ async def list_slots(
             .join(_Blade, _Blade.id == SlotAllocation.blade_id)
             .where(
                 SlotAllocation.is_active.is_(True),
-                _Blade.batch_number == batch_number,
+                _Blade.work_order_number == work_order_number,
                 _Blade.deleted_at.is_(None),
             )
         )

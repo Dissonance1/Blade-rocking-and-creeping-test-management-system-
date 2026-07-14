@@ -1,5 +1,5 @@
 """
-BatchEvent model — records Assembly-initiated actions on a batch.
+WorkOrderEvent model — records Assembly-initiated actions on a work order.
 
 RECEIVED_BY_ASSEMBLY, ACCEPTED, REJECTED, MODIFIED are persisted here.
 CREATED and SENT_TO_ASSEMBLY statuses are inferred from blade data.
@@ -16,12 +16,12 @@ from app.models.base import Base, UUIDPrimaryKeyMixin
 from app.models.enums import BatchEventType
 
 
-class BatchEvent(UUIDPrimaryKeyMixin, Base):
-    """Immutable record of an Assembly action on a batch."""
+class WorkOrderEvent(UUIDPrimaryKeyMixin, Base):
+    """Immutable record of an Assembly action on a work order."""
 
-    __tablename__ = "batch_events"
+    __tablename__ = "work_order_events"
 
-    batch_number: Mapped[str] = mapped_column(
+    work_order_number: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True
     )
     event_type: Mapped[BatchEventType] = mapped_column(
@@ -49,11 +49,11 @@ class BatchEvent(UUIDPrimaryKeyMixin, Base):
     )
 
     __table_args__ = (
-        Index("ix_batch_events_batch_ts", "batch_number", "timestamp"),
+        Index("ix_work_order_events_wo_ts", "work_order_number", "timestamp"),
     )
 
     def __repr__(self) -> str:
-        return f"<BatchEvent {self.batch_number} {self.event_type.value}>"
+        return f"<WorkOrderEvent {self.work_order_number} {self.event_type.value}>"
 
 
 from app.models.user import User  # noqa: E402, F401

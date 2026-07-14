@@ -41,56 +41,9 @@ def _crud_blade_path(blade_id: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. Assembly operator cannot create blades
+# Blade creation RBAC is now covered in test_work_orders.py — POST /blades/
+# no longer exists; blade creation is exclusively via POST /work-orders/.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_assembly_operator_cannot_create_blade(
-    client: AsyncClient, assembly_headers: dict
-) -> None:
-    """ASSEMBLY_OPERATOR → POST /blades/ → 403."""
-    resp = await client.post(
-        f"{BASE}/blades/",
-        json={
-            "serial_number": f"BLD-RBAC-{uuid.uuid4().hex[:6].upper()}",
-            "melt_number": "MELT-001",
-        },
-        headers=assembly_headers,
-    )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_qa_viewer_cannot_create_blade(
-    client: AsyncClient, qa_headers: dict
-) -> None:
-    """QA_VIEWER → POST /blades/ → 403."""
-    resp = await client.post(
-        f"{BASE}/blades/",
-        json={"serial_number": f"BLD-QA-{uuid.uuid4().hex[:6].upper()}"},
-        headers=qa_headers,
-    )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_oh_operator_can_create_blade(
-    client: AsyncClient, auth_headers: dict
-) -> None:
-    """OH_OPERATOR → POST /blades/ → 201 (not 403)."""
-    resp = await client.post(
-        f"{BASE}/blades/",
-        json={
-            "serial_number": f"BLD-OH-{uuid.uuid4().hex[:8].upper()}",
-            "melt_number": "MELT-001",
-            "part_number": "PT-4470",
-        },
-        headers=auth_headers,
-    )
-    assert resp.status_code != 403
-    assert resp.status_code == 201
-
 
 # ---------------------------------------------------------------------------
 # 2. QA viewer cannot modify anything
@@ -269,7 +222,7 @@ async def test_assembly_operator_cannot_reject_blade(
     [
         ("get", "/blades/"),
         ("get", f"/blades/{uuid.uuid4()}"),
-        ("post", "/blades/"),
+        ("post", "/work-orders/"),
         ("get", "/users/"),
     ],
 )

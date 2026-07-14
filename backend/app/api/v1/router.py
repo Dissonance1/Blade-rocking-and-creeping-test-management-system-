@@ -14,7 +14,6 @@ from app.api.v1.endpoints import (
     assembly,
     audit_logs,
     auth,
-    batches,
     blades,
     dti,
     measurements,
@@ -26,6 +25,7 @@ from app.api.v1.endpoints import (
     sync,
     users,
     weighing,
+    work_orders,
     workflows,
 )
 
@@ -122,12 +122,12 @@ api_router.include_router(
 )
 
 # ---------------------------------------------------------------------------
-# Batch workflow
+# Work Order workflow
 # ---------------------------------------------------------------------------
 api_router.include_router(
-    batches.router,
-    prefix="/batches",
-    tags=["batches"],
+    work_orders.router,
+    prefix="/work-orders",
+    tags=["work-orders"],
 )
 
 # ---------------------------------------------------------------------------
