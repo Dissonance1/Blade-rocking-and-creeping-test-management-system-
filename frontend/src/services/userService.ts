@@ -52,11 +52,6 @@ export const userService = {
     };
   },
 
-  get: async (id: string): Promise<User> => {
-    const { data } = await api.get<BackendUserListItem>(`/users/${id}`);
-    return normaliseUser(data);
-  },
-
   create: async (payload: CreateUserPayload): Promise<User> => {
     const { data } = await api.post<BackendUserListItem>("/users/", payload);
     const user = normaliseUser(data);
@@ -84,14 +79,6 @@ export const userService = {
   // DELETE /users/{id}/roles/{role_name} — role_name in path
   removeRole: async (userId: string, roleName: UserRole): Promise<void> => {
     await api.delete(`/users/${userId}/roles/${roleName}`);
-  },
-
-  lock: async (id: string): Promise<void> => {
-    await api.post(`/users/${id}/lock`);
-  },
-
-  unlock: async (id: string): Promise<void> => {
-    await api.post(`/users/${id}/unlock`);
   },
 
   delete: async (id: string): Promise<void> => {

@@ -20,11 +20,6 @@ export const reportService = {
     return data;
   },
 
-  get: async (id: string): Promise<Report> => {
-    const { data } = await api.get<Report>(`/reports/${id}`);
-    return data;
-  },
-
   generate: async (payload: GenerateReportPayload): Promise<Report> => {
     const { data } = await api.post<Report>("/reports/generate", payload);
     return data;
@@ -52,13 +47,6 @@ export const reportService = {
     anchor.click();
     document.body.removeChild(anchor);
     window.URL.revokeObjectURL(url);
-  },
-
-  exportBlades: async (params?: { status?: string; skip?: number; limit?: number }): Promise<Blob> => {
-    const { data } = await api.post("/reports/export/blades", params ?? {}, {
-      responseType: "blob",
-    });
-    return data as Blob;
   },
 
   /** Excel export of a batch's saved HPTR slot assignments (W1/W2 sheets) — triggers the browser download directly. */

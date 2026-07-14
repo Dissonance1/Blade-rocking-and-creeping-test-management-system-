@@ -87,42 +87,6 @@ class SlotReassignRequest(BaseSchema):
         return v.strip().upper()
 
 
-class SlotSwapRequest(BaseSchema):
-    """
-    Payload for swapping the blades occupying two already-saved slots.
-
-    Used to correct a blade that fails physical balancing testing after
-    save, where both slots are occupied so a simple reassign (which
-    requires an empty target) doesn't apply. Both allocations are
-    deactivated and replaced with two new rows carrying the swapped slot
-    numbers; both are reset to unbalanced since they're now in new physical
-    positions and must be re-tested.
-
-    ``blade_type`` is not accepted here — a work order now always maps to
-    exactly one blade type, so the endpoint derives it by looking up the
-    ``WorkOrder`` for ``work_order_number`` rather than trusting a
-    client-supplied value.
-    """
-
-    slot_number_a: str = Field(..., min_length=1, max_length=32)
-    slot_number_b: str = Field(..., min_length=1, max_length=32)
-    work_order_number: str = Field(
-        ...,
-        description="Scopes the lookup to this work order's allocations only",
-    )
-    reason: str = Field(
-        ...,
-        min_length=5,
-        max_length=2048,
-        description="Mandatory reason for the swap (audit trail)",
-    )
-
-    @field_validator("slot_number_a", "slot_number_b")
-    @classmethod
-    def slot_number_upper(cls, v: str) -> str:
-        return v.strip().upper()
-
-
 class BalancingUpdateRequest(BaseSchema):
     """
     Payload for recording the balancing outcome of a slot allocation.

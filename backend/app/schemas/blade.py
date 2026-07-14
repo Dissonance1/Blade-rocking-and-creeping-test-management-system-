@@ -41,8 +41,8 @@ class BladeUpdate(BaseSchema):
     Partial update for a blade record.
 
     Only supply fields that should change; all are optional.
-    Status transitions must go through BladeStatusUpdate to ensure
-    workflow-log creation.
+    Status transitions go through the dedicated per-action endpoints
+    (send-to-assembly, reject, reopen, etc.) to ensure workflow-log creation.
     """
 
     melt_number: str | None = Field(default=None, max_length=64)
@@ -58,32 +58,6 @@ class BladeUpdate(BaseSchema):
 
     # OCR correction (operator can override mismatched OCR fields)
     ocr_mismatch_notes: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Status transition
-# ---------------------------------------------------------------------------
-
-class BladeStatusUpdate(BaseSchema):
-    """
-    Payload for transitioning a blade to a new workflow status.
-
-    ``remarks`` are appended to the WorkflowLog entry created alongside
-    the transition.
-    """
-
-    status: BladeStatus = Field(
-        ..., description="The target status the blade should transition to"
-    )
-    remarks: str | None = Field(
-        default=None,
-        max_length=2048,
-        description="Optional operator notes for this transition",
-    )
-    station_id: uuid.UUID | None = Field(
-        default=None,
-        description="Override destination station; defaults to the current user's station",
-    )
 
 
 class SendToAssemblyRequest(BaseSchema):

@@ -199,19 +199,6 @@ export const batchService = {
   },
 
   /**
-   * Physical balancing testing found the set still unbalanced — deactivates
-   * the batch's saved HPTR slot allocation and resets the blades to
-   * Measurements Recorded so OH can redo Slot Allocation from scratch.
-   */
-  rejectHptrSlots: async (
-    batchNumber: string,
-    reason?: string
-  ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
-    const { data } = await api.post(`/work-orders/${batchNumber}/reject-hptr-slots`, { reason });
-    return data;
-  },
-
-  /**
    * Physical balancing testing confirmed the set is balanced — transitions
    * every HPTR blade in the batch to BALANCING_COMPLETED. Once complete,
    * the batch stops showing up as selectable in the OH Slot Allocation page.

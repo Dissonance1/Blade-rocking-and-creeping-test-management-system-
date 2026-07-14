@@ -49,25 +49,11 @@ export const authService = {
     return { user: normaliseUser(rawUser), tokens };
   },
 
-  getMe: async (): Promise<User> => {
-    const { data } = await api.get<BackendUser>("/auth/me");
-    return normaliseUser(data);
-  },
-
-  logout: async (): Promise<void> => {
-    await api.post("/auth/logout").catch(() => {});
-  },
-
   changePassword: async (old_password: string, new_password: string): Promise<void> => {
     await api.post("/auth/me/change-password", {
       current_password: old_password,
       new_password,
       confirm_new_password: new_password,
     });
-  },
-
-  refreshToken: async (refresh_token: string): Promise<{ access_token: string }> => {
-    const { data } = await api.post<{ access_token: string }>("/auth/refresh", { refresh_token });
-    return data;
   },
 };

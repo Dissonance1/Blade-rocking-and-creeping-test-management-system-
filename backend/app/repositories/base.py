@@ -56,38 +56,6 @@ class BaseRepository(Generic[ModelT, CreateSchemaT, UpdateSchemaT]):
         return result.scalar_one_or_none()
 
     # ------------------------------------------------------------------
-    # Paginated fetch
-    # ------------------------------------------------------------------
-
-    async def get_multi(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        filters: dict[str, Any] | None = None,
-    ) -> tuple[list[ModelT], int]:
-        """
-        Return a page of records and the total count.
-
-        ``filters`` is a mapping of column-name → exact value.  Use
-        :meth:`_apply_filters` for more complex predicates.
-        """
-        base_stmt = select(self.model).where(
-            self.model.deleted_at.is_(None),  # type: ignore[attr-defined]
-        )
-        if filters:
-            base_stmt = self._apply_filters(base_stmt, filters)
-
-        # Count
-        count_stmt = select(func.count()).select_from(base_stmt.subquery())
-        total: int = (await self.db.execute(count_stmt)).scalar_one()
-
-        # Page
-        page_stmt = base_stmt.offset(skip).limit(limit)
-        rows = (await self.db.execute(page_stmt)).scalars().all()
-
-        return list(rows), total
-
-    # ------------------------------------------------------------------
     # Create
     # ------------------------------------------------------------------
 
@@ -198,29 +166,3 @@ class BaseRepository(Generic[ModelT, CreateSchemaT, UpdateSchemaT]):
         )
         count: int = (await self.db.execute(stmt)).scalar_one()
         return count > 0
-
-    # ------------------------------------------------------------------
-    # Protected helpers
-    # ------------------------------------------------------------------
-
-    def _apply_filters(self, stmt: Any, filters: dict[str, Any]) -> Any:
-        """
-        Append equality WHERE clauses to *stmt* from a ``{column: value}`` dict.
-
-        Only columns that actually exist on the model are applied; unknown keys
-        are silently skipped so callers can pass a superset without errors.
-        """
-        for column_name, value in filters.items():
-            column = getattr(self.model, column_name, None)
-            if column is None:
-                log.warning(
-                    "repository.filter.unknown_column",
-                    model=self.model.__name__,
-                    column=column_name,
-                )
-                continue
-            if value is None:
-                stmt = stmt.where(column.is_(None))
-            else:
-                stmt = stmt.where(column == value)
-        return stmt

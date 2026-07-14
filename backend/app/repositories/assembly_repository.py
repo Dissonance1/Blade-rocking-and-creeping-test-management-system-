@@ -64,12 +64,6 @@ class AssemblyRepository:
         )
         return res.scalar_one_or_none()
 
-    async def get_blade_record_by_id(self, record_id: uuid.UUID) -> AssemblyBladeRecord | None:
-        res = await self.db.execute(
-            select(AssemblyBladeRecord).where(AssemblyBladeRecord.id == record_id)
-        )
-        return res.scalar_one_or_none()
-
     async def list_blade_records(
         self, batch_receipt_id: uuid.UUID
     ) -> list[AssemblyBladeRecord]:
@@ -120,16 +114,6 @@ class AssemblyRepository:
                 Blade.deleted_at.is_(None),
             )
             .group_by(Blade.status)
-        )
-        return {row[0]: row[1] for row in res.all()}
-
-    async def count_verification_statuses(
-        self, batch_receipt_id: uuid.UUID
-    ) -> dict[AssemblyVerificationStatus, int]:
-        res = await self.db.execute(
-            select(AssemblyBladeRecord.status, func.count(AssemblyBladeRecord.id))
-            .where(AssemblyBladeRecord.batch_receipt_id == batch_receipt_id)
-            .group_by(AssemblyBladeRecord.status)
         )
         return {row[0]: row[1] for row in res.all()}
 
