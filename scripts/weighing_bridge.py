@@ -46,7 +46,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_PORT   = "COM6"
+DEFAULT_PORT   = "COM3"
 DEFAULT_SERVER = "http://localhost"
 PUSH_PATH      = "/api/v1/weighing/push"
 BAUD_RATES     = [9600, 4800, 2400, 19200, 38400]
@@ -115,7 +115,7 @@ def run(port: str, server: str) -> None:
         log.error(
             "[http ] cannot reach server at %s: %s\n"
             "  • Is the server running?  (docker compose ps)\n"
-            "  • Is the URL correct?  Try https://localhost or https://<server-ip>",
+            "  • Is the URL correct?  Try http://localhost or https://<server-ip>",
             server, exc,
         )
         return

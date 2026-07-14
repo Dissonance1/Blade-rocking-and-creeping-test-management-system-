@@ -86,6 +86,8 @@ interface BladeEntryState {
   loadFromServer: (detail: WorkOrderDetail) => void;
   applyServerRow: (row: import("@/services/workOrderService").WorkOrderRow) => void;
   setCellValue: (rowIndex: number, column: GridColumn, value: string) => boolean;
+  lockRowWeight: (rowIndex: number) => void;
+  unlockRow: (rowIndex: number) => void;
   markRowSaving: (rowIndex: number) => void;
   markRowSaved: (rowIndex: number) => void;
   markRowError: (rowIndex: number, message: string) => void;
@@ -209,6 +211,24 @@ export const useBladeEntryStore = create<BladeEntryState>((set, get) => ({
     });
     return readyToSave;
   },
+
+  lockRowWeight: (rowIndex) =>
+    set((s) => {
+      const existing = s.rows[rowIndex];
+      if (!existing) return s;
+      const rows = s.rows.slice();
+      rows[rowIndex] = { ...existing, locked: true };
+      return { rows };
+    }),
+
+  unlockRow: (rowIndex) =>
+    set((s) => {
+      const existing = s.rows[rowIndex];
+      if (!existing) return s;
+      const rows = s.rows.slice();
+      rows[rowIndex] = { ...existing, locked: false };
+      return { rows };
+    }),
 
   markRowSaving: (rowIndex) =>
     set((s) => {

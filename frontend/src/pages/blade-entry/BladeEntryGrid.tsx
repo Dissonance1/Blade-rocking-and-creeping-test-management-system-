@@ -3,13 +3,10 @@ import {
   Wifi,
   WifiOff,
   Loader2,
-  Lock,
-  Unlock,
   Check,
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/utils/cn";
 import CameraModal from "@/components/common/CameraModal";
 import RussianKeyboard from "@/components/common/RussianKeyboard";
 import { useWeighingSocket } from "@/hooks/useWeighingSocket";
@@ -37,6 +34,8 @@ export default function BladeEntryGrid() {
     completeDialogOpen,
     completeErrors,
     setCellValue,
+    lockRowWeight,
+    unlockRow,
     markRowSaving,
     markRowSaved,
     markRowError,
@@ -50,8 +49,7 @@ export default function BladeEntryGrid() {
   const workOrderNumber = commonInfo.work_order_number;
 
   // ── Single shared weighing-socket + camera + RU keyboard for the whole grid ──
-  const { currentReading, status: scaleStatus, locked: scaleLocked, toggleLock, clearReading } =
-    useWeighingSocket();
+  const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket();
 
   const [cameraTargetRow, setCameraTargetRow] = useState<number | null>(null);
   const [keyboardTargetRow, setKeyboardTargetRow] = useState<number | null>(null);
@@ -125,6 +123,32 @@ export default function BladeEntryGrid() {
     onConfirmRow: (rowIndex) => scheduleSave(rowIndex, true),
     onOpenRussianKeyboard: (rowIndex) => setKeyboardTargetRow(rowIndex),
   });
+
+  // ── Lock weight: finalize the row's reading, then advance and open the
+  //    camera for the next row (manual capture — no autoCapture) ────────────
+  const handleLockWeight = useCallback(
+    (rowIndex: number) => {
+      lockRowWeight(rowIndex);
+      scheduleSave(rowIndex, true);
+      clearReading();
+      const nextRow = Math.min(rowIndex + 1, rows.length - 1);
+      focusCell(nextRow, "melt_number");
+      nav.focusCell(nextRow, "melt_number");
+      setCameraTargetRow(nextRow);
+    },
+    [lockRowWeight, scheduleSave, clearReading, focusCell, rows.length, nav]
+  );
+
+  // ── Unlock: re-enable editing on a previously-locked row without
+  //    touching focus/camera behavior ─────────────────────────────────────────
+  const handleUnlockWeight = useCallback(
+    (rowIndex: number) => {
+      unlockRow(rowIndex);
+      focusCell(rowIndex, "weight");
+      nav.focusCell(rowIndex, "weight");
+    },
+    [unlockRow, focusCell, nav]
+  );
 
   // Focus the store's current cell on mount / when it changes externally (e.g. resume)
   useEffect(() => {
@@ -234,7 +258,6 @@ export default function BladeEntryGrid() {
       <CameraModal
         open={cameraTargetRow != null}
         fieldLabel={cameraTargetRow != null ? `Melt Number — Row ${cameraTargetRow + 1}` : "Melt Number"}
-        autoCapture
         onCapture={(file) => void handleOcrCapture(file)}
         onClose={() => {
           setCameraTargetRow(null);
@@ -284,19 +307,6 @@ export default function BladeEntryGrid() {
               {scaleStatus === "connecting" ? "Connecting…" : "Scale offline"}
             </span>
           )}
-          <button
-            type="button"
-            title={scaleLocked ? "Unlock: resume live weight" : "Lock: freeze current reading"}
-            onClick={toggleLock}
-            className={cn(
-              "inline-flex items-center gap-1 text-xs font-medium rounded-full px-2 py-0.5 border",
-              scaleLocked
-                ? "border-amber-300 text-amber-600 bg-amber-50 dark:bg-amber-900/20"
-                : "border-slate-300 text-slate-500 dark:border-slate-600"
-            )}
-          >
-            {scaleLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-          </button>
         </div>
 
         {errorCount > 0 && (
@@ -342,6 +352,8 @@ export default function BladeEntryGrid() {
               focusCell(rowIndex, "melt_number");
               setKeyboardTargetRow(rowIndex);
             }}
+            onLockWeight={handleLockWeight}
+            onUnlockWeight={handleUnlockWeight}
           />
         ))}
       </div>

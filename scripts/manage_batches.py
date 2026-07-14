@@ -99,11 +99,6 @@ def _weight(blade_type: BladeType) -> float:
     return round(random.uniform(86.0, 94.0), 4)
 
 
-def _height_data() -> dict:
-    base = random.uniform(142.5, 144.5)
-    return {f"H{i}": round(base + random.uniform(-0.4, 0.4), 3) for i in range(1, 6)}
-
-
 # ── Delete batch ──────────────────────────────────────────────────────────────
 
 async def delete_batch(session: AsyncSession, batch_num: str) -> None:
@@ -184,7 +179,6 @@ async def create_batch(
             rocking_value=Decimal(str(round(random.uniform(0.008, 0.025), 6))),
             creep_value=Decimal(str(round(random.uniform(0.004, 0.012), 6)))
                         if blade_type == BladeType.LPTR else None,
-            height_data=_height_data(),
             measured_by_id=admin_id,
             station_id=station_id,
             is_approved=True,

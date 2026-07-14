@@ -201,7 +201,6 @@ class BladeListItem(BaseSchema):
     # Latest INITIAL measurement values (populated by list endpoint)
     weight_grams: float | None = None
     static_moment_gcm: float | None = None
-    height_data: dict[str, float] | None = None
 
 
 class BladeResponse(BaseSchema):

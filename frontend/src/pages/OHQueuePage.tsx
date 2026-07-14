@@ -555,14 +555,25 @@ export default function OHQueuePage() {
                         </Button>
                       )}
                       {!isRejected && !isFull && (
-                        <Button
-                          size="sm"
-                          className="w-full text-xs h-8 bg-orange-500 hover:bg-orange-400 text-white"
-                          onClick={() => navigate(`/blades/${batch.work_order_number}/entry`)}
-                        >
-                          <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                          Continue Blade Entry
-                        </Button>
+                        <div className="flex flex-col gap-1.5">
+                          <Button
+                            size="sm"
+                            className="w-full text-xs h-8 bg-orange-500 hover:bg-orange-400 text-white"
+                            onClick={() => navigate(`/blades/${batch.work_order_number}/entry`)}
+                          >
+                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                            Continue Blade Entry
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full text-xs h-8 border-amber-300 dark:border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
+                            onClick={() => setSendBatchTarget(batch.work_order_number)}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />
+                            Send to Assembly Anyway
+                          </Button>
+                        </div>
                       )}
                     </div>
                   );

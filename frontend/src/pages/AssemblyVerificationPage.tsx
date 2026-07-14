@@ -9,12 +9,10 @@ import {
   Wifi,
   WifiOff,
   Scale,
-  Ruler,
   QrCode,
   ScanLine,
   Loader2,
   ChevronRight,
-  RotateCcw,
   Zap,
   ClipboardCheck,
   Hash,
@@ -37,7 +35,6 @@ import { bladeService } from "@/services/bladeService";
 import { assemblyService } from "@/services/assemblyService";
 import { batchService } from "@/services/batchService";
 import { useWeighingSocket } from "@/hooks/useWeighingSocket";
-import { useDTISocket } from "@/hooks/useDTISocket";
 import type { BladeListItem } from "@/types";
 import type {
   BladeVerifyResponse,
@@ -238,9 +235,6 @@ export default function AssemblyVerificationPage() {
   // ── Measurement fields ──────────────────────────────────────────────────
   const [weight, setWeight] = useState<string>("");
   const [weightLocked, setWeightLocked] = useState(false);
-  const [dtiValues, setDtiValues] = useState<string[]>(["", "", "", ""]);
-  const [activeDtiIdx, setActiveDtiIdx] = useState<number | null>(0);
-  const [lockedDti, setLockedDti] = useState<boolean[]>([false, false, false, false]);
 
   // ── Result / decision state ─────────────────────────────────────────────
   const [verifyResult, setVerifyResult] = useState<BladeVerifyResponse | null>(null);
@@ -259,14 +253,8 @@ export default function AssemblyVerificationPage() {
     static_moment_gcm: "",
   });
 
-  // ── DTI station (persisted per-browser so each rig remembers its own) ──
-  const [dtiStation] = useState<string>(
-    () => localStorage.getItem("dti_station") ?? "1"
-  );
-
   // ── Hardware WebSockets ─────────────────────────────────────────────────
   const { currentReading: weightReading, connected: weightConn } = useWeighingSocket();
-  const { lastReading: dtiReading, connected: dtiConn } = useDTISocket(dtiStation);
 
   // Continuously track the live scale reading, mirroring the LiveValue badge above
   useEffect(() => {
@@ -274,18 +262,6 @@ export default function AssemblyVerificationPage() {
       setWeight(weightReading.value.toFixed(2));
     }
   }, [weightReading, weightLocked]);
-
-  // Stream live DTI value into active (unlocked) row
-  useEffect(() => {
-    if (!dtiReading || activeDtiIdx === null) return;
-    if (lockedDti[activeDtiIdx]) return;
-    setDtiValues(prev => {
-      const next = [...prev];
-      next[activeDtiIdx] = dtiReading.value.toFixed(3);
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dtiReading]);
 
   // Reset form when a new blade is selected
   const handleSelectBlade = useCallback((blade: BladeListItem) => {
@@ -295,9 +271,6 @@ export default function AssemblyVerificationPage() {
     setMeltScan("");
     setWeight("");
     setWeightLocked(false);
-    setDtiValues(["", "", "", ""]);
-    setActiveDtiIdx(0);
-    setLockedDti([false, false, false, false]);
     setVerifyResult(null);
     setDecision("idle");
     setRejectReason("");
@@ -358,10 +331,6 @@ export default function AssemblyVerificationPage() {
         ? measurements[measurements.length - 1]
         : null;
   const ohWeight = latestMeasurement?.weight_grams != null ? Number(latestMeasurement.weight_grams) : null;
-  const ohH1 = latestMeasurement?.height_data?.["H1"] ?? null;
-  const ohH2 = latestMeasurement?.height_data?.["H2"] ?? null;
-  const ohH3 = latestMeasurement?.height_data?.["H3"] ?? null;
-  const ohH4 = latestMeasurement?.height_data?.["H4"] ?? null;
 
   // ── Mutations ───────────────────────────────────────────────────────────
 
@@ -480,10 +449,6 @@ export default function AssemblyVerificationPage() {
       qr_scan_result: qrScan || undefined,
       ocr_blade_number: ocrNumber || undefined,
       assembly_weight: weight !== "" ? parseFloat(weight) : undefined,
-      assembly_dti_h1: dtiValues[0] ? parseFloat(dtiValues[0]) : undefined,
-      assembly_dti_h2: dtiValues[1] ? parseFloat(dtiValues[1]) : undefined,
-      assembly_dti_h3: dtiValues[2] ? parseFloat(dtiValues[2]) : undefined,
-      assembly_dti_h4: dtiValues[3] ? parseFloat(dtiValues[3]) : undefined,
     });
   };
 
@@ -546,7 +511,6 @@ export default function AssemblyVerificationPage() {
               </div>
               <div className="flex flex-wrap gap-2 items-center">
                 <HardwareIndicator label="Scale" connected={weightConn} />
-                <HardwareIndicator label={`DTI·S${dtiStation}`} connected={dtiConn} />
               </div>
               {setMakingReady && (
                 <Button
@@ -690,15 +654,10 @@ export default function AssemblyVerificationPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <OhValueCell label="Weight" value={ohWeight} unit="g" />
-                      <OhValueCell label="H1" value={ohH1} unit="mm" />
-                      <OhValueCell label="H2" value={ohH2} unit="mm" />
-                      <OhValueCell label="H3" value={ohH3} unit="mm" />
-                      <OhValueCell label="H4" value={ohH4} unit="mm" />
                       {latestMeasurement && (
                         <div className="flex flex-col justify-end ml-auto text-right">
                           <span className="text-[10px] text-slate-400 dark:text-slate-500">Tolerance</span>
                           <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">Weight ±0.5 g</span>
-                          <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">DTI ±0.010 mm</span>
                         </div>
                       )}
                     </div>
@@ -893,127 +852,6 @@ export default function AssemblyVerificationPage() {
                             {Math.abs(parseFloat(weight) - ohWeight) <= 0.5 ? " ✓ within tolerance" : " ✗ out of tolerance"}
                           </p>
                         )}
-                      </CardContent>
-                    </Card>
-
-                    {/* ── DTI readings ── */}
-                    <Card className="lg:col-span-2 bg-white/80 dark:bg-background backdrop-blur-md border border-white/60 dark:border-white/10 rounded-2xl shadow-lg shadow-slate-200/50 dark:shadow-black/20">
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between mb-4">
-                          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
-                            <Ruler className="w-3 h-3" /> DTI Height Readings
-                          </p>
-                          <div className="flex gap-2 items-center text-xs text-slate-500 dark:text-slate-400">
-                            Tolerance ±0.010 mm
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 px-2 text-xs text-slate-400 hover:text-slate-600"
-                              onClick={() => { setDtiValues(["", "", "", ""]); setLockedDti([false, false, false, false]); setActiveDtiIdx(0); }}
-                            >
-                              <RotateCcw className="w-3 h-3 mr-1" />
-                              Clear
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                          {(["H1", "H2", "H3", "H4"] as const).map((pos, idx) => {
-                            const ohMap = { H1: ohH1, H2: ohH2, H3: ohH3, H4: ohH4 };
-                            const oh = ohMap[pos];
-                            const val = dtiValues[idx] ?? "";
-                            const isActive = dtiConn && activeDtiIdx === idx && !lockedDti[idx];
-                            const isLocked = lockedDti[idx];
-                            const parsedVal = val !== "" ? parseFloat(val) : null;
-                            const delta = parsedVal != null && oh != null ? parsedVal - oh : null;
-                            const withinTol = delta != null ? Math.abs(delta) <= 0.010 : null;
-                            return (
-                              <div
-                                key={pos}
-                                onClick={() => { if (!isLocked) setActiveDtiIdx(idx); }}
-                                className={cn(
-                                  "rounded-lg border p-3 space-y-2 cursor-pointer transition-colors",
-                                  isActive
-                                    ? "border-emerald-400 bg-emerald-50/50 dark:bg-emerald-900/10 ring-2 ring-emerald-400/40"
-                                    : isLocked
-                                      ? "border-amber-400 bg-amber-50/50 dark:bg-amber-900/10"
-                                      : "border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600"
-                                )}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{pos}</span>
-                                  {isActive && dtiReading && (
-                                    <LiveValue value={dtiReading.value} unit="mm" />
-                                  )}
-                                  {isLocked && (
-                                    <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
-                                      <Lock className="w-3 h-3" /> Locked
-                                    </span>
-                                  )}
-                                </div>
-                                {/* OH reference value */}
-                                <div className="rounded bg-orange-50 dark:bg-orange-900/10 border border-orange-200/60 dark:border-orange-800/30 px-2 py-1 flex items-center justify-between">
-                                  <span className="text-[10px] text-slate-400 dark:text-slate-500">OH</span>
-                                  <span className="text-xs font-mono font-semibold text-slate-600 dark:text-slate-300">
-                                    {oh != null ? oh.toFixed(3) : "—"} mm
-                                  </span>
-                                </div>
-                                <div className="flex gap-1">
-                                  <Input
-                                    type="number"
-                                    step="0.001"
-                                    value={val}
-                                    readOnly={isLocked}
-                                    onChange={(e) => {
-                                      if (isLocked) return;
-                                      setDtiValues(prev => { const n = [...prev]; n[idx] = e.target.value; return n; });
-                                    }}
-                                    placeholder="0.000"
-                                    className={cn(
-                                      "font-mono text-sm bg-white dark:bg-background border-slate-300 dark:border-slate-600 h-8",
-                                      withinTol === true && "border-emerald-400 dark:border-emerald-500",
-                                      withinTol === false && "border-red-400 dark:border-red-500"
-                                    )}
-                                  />
-                                  {dtiConn && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      title={isLocked ? "Unlock" : "Lock"}
-                                      className={cn(
-                                        "shrink-0 h-8 px-2",
-                                        isLocked
-                                          ? "border-amber-400 text-amber-600 dark:text-amber-400"
-                                          : "border-emerald-400 text-emerald-600 dark:text-emerald-400"
-                                      )}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (isLocked) {
-                                          setLockedDti(prev => { const n = [...prev]; n[idx] = false; return n; });
-                                          setActiveDtiIdx(idx);
-                                        } else {
-                                          setLockedDti(prev => { const n = [...prev]; n[idx] = true; return n; });
-                                          const nextIdx = [0, 1, 2, 3].find(i => i > idx && !lockedDti[i]);
-                                          setActiveDtiIdx(nextIdx !== undefined ? nextIdx : null);
-                                        }
-                                      }}
-                                    >
-                                      {isLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                                    </Button>
-                                  )}
-                                </div>
-                                {delta != null && (
-                                  <p className={cn(
-                                    "text-[10px] font-mono",
-                                    withinTol ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-                                  )}>
-                                    Δ {delta >= 0 ? "+" : ""}{delta.toFixed(3)} {withinTol ? "✓" : "✗"}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
                       </CardContent>
                     </Card>
 

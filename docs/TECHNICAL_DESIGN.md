@@ -327,7 +327,6 @@ User ◄──► Role (user_roles junction)                         ◄┘
 | `static_moment_gcm` | NUMERIC(12,4) | Auto-calculated: weight × 1.57 × 20 |
 | `rocking_value` | NUMERIC(12,6) | Required for all blade types |
 | `creep_value` | NUMERIC(12,6) | LPTR blades only; must be null for HPTR |
-| `height_data` | JSONB | `{"H1": 12.3, "H2": 11.9, ...}` |
 | `station_id` | UUID FK → stations | Station where measured |
 | `is_approved` | BOOLEAN | QA sign-off |
 | `approved_by_id` | UUID FK → users | |
@@ -364,9 +363,7 @@ Tracks per-blade verification state during the Assembly receipt process. Created
 | `qr_scan_result` | VARCHAR(64) | Serial number scanned by QR gun |
 | `ocr_blade_number` | VARCHAR(64) | Blade number from OCR |
 | `assembly_weight` | NUMERIC | Weight measured at Assembly |
-| `assembly_dti_h1`–`h4` | NUMERIC | Height positions measured at Assembly |
 | `oh_weight` | NUMERIC | OH FINAL weight (copied at receipt time) |
-| `oh_dti_h1`–`h4` | NUMERIC | OH FINAL DTI values (copied at receipt time) |
 | `weight_delta` | NUMERIC | `assembly_weight - oh_weight` |
 | `verification_notes` | TEXT | Operator notes on discrepancies |
 | `verified_by_id` | UUID FK → users | |
@@ -569,16 +566,15 @@ The operator QR-scans each blade, enters Assembly-side measurements, and calls v
 
 ```
 POST /assembly/blades/{blade_id}/verify?batch_number=BXXX
-body: { assembly_weight, assembly_dti_h1..h4, qr_scan_result, ocr_blade_number }
+body: { assembly_weight, qr_scan_result, ocr_blade_number }
 
 AssemblyService.verify_blade():
-  1. Load AssemblyBladeRecord (contains oh_weight, oh_dti_h1..h4 copied at receipt)
+  1. Load AssemblyBladeRecord (contains oh_weight copied at receipt)
   2. Compare assembly_weight vs oh_weight: tolerance ±0.5 g
-  3. Compare each assembly_dti_Hn vs oh_dti_Hn: tolerance ±0.010 mm
-  4. Check qr_scan_result matches blade.serial_number
-  5. Check ocr_blade_number matches blade.serial_number
-  6. Compute weight_delta; set verification_notes for any out-of-tolerance field
-  7. Return suggested_action:
+  3. Check qr_scan_result matches blade.serial_number
+  4. Check ocr_blade_number matches blade.serial_number
+  5. Compute weight_delta; set verification_notes for any out-of-tolerance field
+  6. Return suggested_action:
        "REJECT"  — identity mismatch (QR or OCR serial doesn't match)
        "ACCEPT"  — all values within tolerance
        "REVIEW"  — within tolerance but discrepancies warrant human sign-off
@@ -589,7 +585,7 @@ AssemblyService.verify_blade():
 
 ```
 POST /assembly/blades/{blade_id}/accept?batch_number=BXXX
-  → body: optional field overrides { assembly_weight, assembly_dti_h1..h4 }
+  → body: optional field overrides { assembly_weight }
   → AssemblyBladeRecord.status → ACCEPTED (or MODIFIED if overrides differ from OH)
   → blade.status: ASSEMBLY_RECEIVED → ASSEMBLY_VERIFIED
   → Note: station_id is NOT recorded on this workflow log entry (known limitation)
@@ -809,7 +805,7 @@ The `/sync` router exposes read-only endpoints on the OH PC that the Assembly st
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/sync/status` | Station identity: `{ station_type, station_name, api_version, synced_at, status }` |
-| GET | `/sync/blades` | Blade snapshot. Filters: `?batch_number=`, `?status=`. Response: `OHSyncResponse` with flat fields `weight`, `dti_h1`–`h4` (not `weight_grams` / `height_data`) |
+| GET | `/sync/blades` | Blade snapshot. Filters: `?batch_number=`, `?status=`. Response: `OHSyncResponse` with flat field `weight` (not `weight_grams`) |
 | GET | `/sync/batches/{batch_number}` | Single batch snapshot |
 
 `station_type` and `station_name` in `/sync/status` fall back to hardcoded strings if `STATION_TYPE` / `STATION_NAME` env vars are not set.
@@ -1010,7 +1006,7 @@ DTI Gauge → RS-232 → dti_bridge.py
   → POST /api/v1/dti/push  {"station": "1", "position": "H1", "value": 12.345}
   → response: {"ok": true, "next_position": "H2", "position_count": 4, ...}
   → backend broadcasts to all WS /dti/ws?station=1 subscribers
-  → browser auto-fills height_data.H1 in measurement form
+  → browser auto-fills the active Rocking/Creep cell in RockingCreepPage
 ```
 
 **WebSocket messages sent to browser:**
@@ -1309,20 +1305,7 @@ Example: IRS-45786-SN010001-20260618
 Static Moment (g·cm) = weight_grams × 1.57 × 20
 ```
 
-#### Section D — DTI (Dial Test Indicator) Readings
-
-| Field | Source |
-|-------|--------|
-| H1 reading | `measurement.height_data["H1"]` (mm) |
-| H2 reading | `measurement.height_data["H2"]` (mm) |
-| H3 reading | `measurement.height_data["H3"]` (mm) |
-| H4 reading | `measurement.height_data["H4"]` (mm) |
-| … Hn | Additional positions as configured |
-| DTI Gauge Calibration Ref. | Free-text remarks field |
-
-Height data is stored as JSONB `{"H1": 12.34, "H2": 11.95, …}`. Position keys must match pattern `H<n>`. The number of positions is configured via `POST /dti/positions` and fetched dynamically by `dti_bridge.py`.
-
-#### Section E — Rocking & Creep Values
+#### Section D — Rocking & Creep Values
 
 | Field | Source | Notes |
 |-------|--------|-------|
@@ -1334,7 +1317,7 @@ Rules enforced at the API layer:
 - **LPTR**: both `rocking_value` AND `creep_value` are mandatory.
 - **HPTR**: only `rocking_value` is mandatory; `creep_value` must be null.
 
-#### Section F — Inspection Results & QA Sign-off
+#### Section E — Inspection Results & QA Sign-off
 
 | Field | Source |
 |-------|--------|
@@ -1346,7 +1329,7 @@ Rules enforced at the API layer:
 | Approval Date | `measurement.approved_at` |
 | Approval Status | `measurement.is_approved` |
 
-#### Section G — Workflow Timeline
+#### Section F — Workflow Timeline
 
 Sourced from `WorkflowLog` entries for the blade, ordered by timestamp:
 

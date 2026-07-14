@@ -51,19 +51,11 @@ export interface BladeVerifyRequest {
   qr_scan_result?: string | null;
   ocr_blade_number?: string | null;
   assembly_weight?: number | null;
-  assembly_dti_h1?: number | null;
-  assembly_dti_h2?: number | null;
-  assembly_dti_h3?: number | null;
-  assembly_dti_h4?: number | null;
 }
 
 export interface BladeAcceptRequest {
   notes?: string | null;
   assembly_weight?: number | null;
-  assembly_dti_h1?: number | null;
-  assembly_dti_h2?: number | null;
-  assembly_dti_h3?: number | null;
-  assembly_dti_h4?: number | null;
 }
 
 export interface BladeRejectRequest {
@@ -77,15 +69,7 @@ export interface AssemblyBladeRecord {
   qr_scan_result: string | null;
   ocr_blade_number: string | null;
   assembly_weight: number | null;
-  assembly_dti_h1: number | null;
-  assembly_dti_h2: number | null;
-  assembly_dti_h3: number | null;
-  assembly_dti_h4: number | null;
   oh_weight: number | null;
-  oh_dti_h1: number | null;
-  oh_dti_h2: number | null;
-  oh_dti_h3: number | null;
-  oh_dti_h4: number | null;
   weight_delta: number | null;
   status: AssemblyVerificationStatus;
   verification_notes: string | null;

@@ -85,19 +85,11 @@ class AssemblyRepository:
         blade_id: uuid.UUID,
         batch_receipt_id: uuid.UUID,
         oh_weight: float | None,
-        oh_dti_h1: float | None,
-        oh_dti_h2: float | None,
-        oh_dti_h3: float | None,
-        oh_dti_h4: float | None,
     ) -> AssemblyBladeRecord:
         record = AssemblyBladeRecord(
             blade_id=blade_id,
             batch_receipt_id=batch_receipt_id,
             oh_weight=oh_weight,
-            oh_dti_h1=oh_dti_h1,
-            oh_dti_h2=oh_dti_h2,
-            oh_dti_h3=oh_dti_h3,
-            oh_dti_h4=oh_dti_h4,
             status=AssemblyVerificationStatus.PENDING,
         )
         self.db.add(record)

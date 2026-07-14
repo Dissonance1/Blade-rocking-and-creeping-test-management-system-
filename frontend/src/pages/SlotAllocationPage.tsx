@@ -204,7 +204,7 @@ function PreviewTable({
           <table className="w-full text-sm whitespace-nowrap">
             <thead>
               <tr className="bg-slate-800 dark:bg-background">
-                {["Slot", "Blade Serial", "Melt No.", "Static Moment (g·cm)", "Weight (g)", "H1 (mm)", "H2 (mm)", "H3 (mm)", "H4 (mm)"].map((h) => (
+                {["Slot", "Blade Serial", "Melt No.", "Static Moment (g·cm)", "Weight (g)"].map((h) => (
                   <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
                     {h}
                   </th>
@@ -213,7 +213,6 @@ function PreviewTable({
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
               {rows.map(({ blade, slot }, idx) => {
-                const hd = blade.height_data ?? {};
                 return (
                   <tr
                     key={blade.id}
@@ -237,11 +236,6 @@ function PreviewTable({
                     <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
                       {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
                     </td>
-                    {(["H1", "H2", "H3", "H4"] as const).map((pos) => (
-                      <td key={pos} className="px-3 py-2.5 tabular-nums text-slate-600 dark:text-slate-300 text-xs">
-                        {hd[pos] != null ? Number(hd[pos]).toFixed(3) : "—"}
-                      </td>
-                    ))}
                   </tr>
                 );
               })}
@@ -328,7 +322,7 @@ function SavedSlotsTable({
             <table className="w-full text-sm whitespace-nowrap">
               <thead>
                 <tr className="bg-slate-800 dark:bg-background">
-                  {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "H1 (mm)", "H2 (mm)", "H3 (mm)", "H4 (mm)", "Balance", "Remarks", "Action"].map((h) => (
+                  {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Balance", "Remarks", "Action"].map((h) => (
                     <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
                       {h}
                     </th>
@@ -337,7 +331,6 @@ function SavedSlotsTable({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
                 {rows.map(({ slot, blade }, idx) => {
-                  const hd = blade?.height_data ?? {};
                   return (
                     <tr
                       key={slot.id}
@@ -360,11 +353,6 @@ function SavedSlotsTable({
                       <td className="px-3 py-2.5 tabular-nums text-xs">
                         {blade?.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
                       </td>
-                      {(["H1", "H2", "H3", "H4"] as const).map((pos) => (
-                        <td key={pos} className="px-3 py-2.5 tabular-nums text-slate-600 dark:text-slate-300 text-xs">
-                          {hd[pos] != null ? Number(hd[pos]).toFixed(3) : "—"}
-                        </td>
-                      ))}
                       <td className="px-3 py-2.5">
                         {slot.is_balanced ? (
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">

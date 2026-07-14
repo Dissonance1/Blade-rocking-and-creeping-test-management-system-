@@ -273,20 +273,26 @@ class WorkOrderService:
 
         station_id = user.station_id
         for blade in blades:
-            blade, _ = await self._workflow_engine.transition(
-                blade=blade,
-                to_status=BladeStatus.OH_INSPECTION,
-                user=user,
-                station_id=station_id,
-                remarks="Blade entry: grid row completed.",
-            )
-            blade, _ = await self._workflow_engine.transition(
-                blade=blade,
-                to_status=BladeStatus.MEASUREMENTS_RECORDED,
-                user=user,
-                station_id=station_id,
-                remarks="Blade entry: Work Order completed.",
-            )
+            # Blades normally start at CREATED (fresh scaffold row), but may
+            # already be at OH_INSPECTION or MEASUREMENTS_RECORDED (e.g. a
+            # dev-seeded row, or a row re-entered after ON_HOLD/REOPENED) —
+            # only fire the transitions this blade actually still needs.
+            if blade.status == BladeStatus.CREATED:
+                blade, _ = await self._workflow_engine.transition(
+                    blade=blade,
+                    to_status=BladeStatus.OH_INSPECTION,
+                    user=user,
+                    station_id=station_id,
+                    remarks="Blade entry: grid row completed.",
+                )
+            if blade.status == BladeStatus.OH_INSPECTION:
+                blade, _ = await self._workflow_engine.transition(
+                    blade=blade,
+                    to_status=BladeStatus.MEASUREMENTS_RECORDED,
+                    user=user,
+                    station_id=station_id,
+                    remarks="Blade entry: Work Order completed.",
+                )
 
         await self._wo_repo.mark_complete(work_order, completed_by_id=user.id)
         await self.db.commit()

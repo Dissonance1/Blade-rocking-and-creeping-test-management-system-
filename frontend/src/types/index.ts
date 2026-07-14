@@ -139,7 +139,6 @@ export interface BladeListItem {
   /** Latest INITIAL measurement values (populated by list endpoint) */
   weight_grams?: number | null;
   static_moment_gcm?: number | null;
-  height_data?: Record<string, number> | null;
 }
 
 export interface BladeCreateRequest {
@@ -174,8 +173,6 @@ export interface BladeRejectRequest {
 
 // ─── Measurements ─────────────────────────────────────────────────────────────
 
-export type HeightData = Record<string, number>;
-
 export interface MeasurementApprover {
   id: string;
   username: string;
@@ -191,7 +188,6 @@ export interface Measurement {
   static_moment_gcm?: number | null;
   rocking_value?: number | null;
   creep_value?: number | null;
-  height_data?: HeightData | null;
   measured_by: MeasurementApprover;
   station_id?: string | null;
   measured_at: string;
@@ -207,7 +203,6 @@ export interface MeasurementCreate {
   static_moment_gcm?: number;
   rocking_value?: number;
   creep_value?: number;
-  height_data?: HeightData;
   station_id?: string;
   notes?: string;
 }

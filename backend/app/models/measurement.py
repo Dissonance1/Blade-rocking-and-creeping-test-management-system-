@@ -3,8 +3,8 @@ Measurement model.
 
 Table: measurements
 
-Stores weight, static moment, rocking value, creep value, and
-height-position data (JSONB) for each measurement session on a blade.
+Stores weight, static moment, rocking value, and creep value for each
+measurement session on a blade.
 """
 
 import uuid
@@ -21,7 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDPrimaryKeyMixin
@@ -29,15 +29,7 @@ from app.models.enums import MeasurementType
 
 
 class Measurement(UUIDPrimaryKeyMixin, Base):
-    """
-    A single measurement session for a blade.
-
-    ``height_data`` is stored as JSONB with the shape::
-
-        {"H1": 12.3, "H2": 11.9, "H3": 12.1, ...}
-
-    Keys are height-position labels; values are floating-point readings.
-    """
+    """A single measurement session for a blade."""
 
     __tablename__ = "measurements"
 
@@ -60,11 +52,6 @@ class Measurement(UUIDPrimaryKeyMixin, Base):
     static_moment_gcm: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
     rocking_value: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
     creep_value: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
-
-    # -----------------------------------------------------------------------
-    # Height-position data  {"H1": 12.3, "H2": 11.9, ...}
-    # -----------------------------------------------------------------------
-    height_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
 
     # -----------------------------------------------------------------------
     # Provenance

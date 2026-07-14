@@ -270,7 +270,6 @@ async def list_blades(
                 Measurement.blade_id,
                 Measurement.weight_grams,
                 Measurement.static_moment_gcm,
-                Measurement.height_data,
             )
             .join(
                 subq,
@@ -282,7 +281,6 @@ async def list_blades(
             meas_by_blade[str(row.blade_id)] = {
                 "weight_grams": float(row.weight_grams) if row.weight_grams else None,
                 "static_moment_gcm": float(row.static_moment_gcm) if row.static_moment_gcm else None,
-                "height_data": row.height_data or {},
             }
 
     # Build list items enriched with measurement data
@@ -307,7 +305,6 @@ async def list_blades(
             "updated_at": b.updated_at,
             "weight_grams": m.get("weight_grams"),
             "static_moment_gcm": m.get("static_moment_gcm"),
-            "height_data": m.get("height_data", {}),
         }
         items.append(item)
 
@@ -934,11 +931,13 @@ async def delete_blade(
     (CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, REOPENED, ON_HOLD).
     SUPER_ADMIN may delete any blade regardless of status.
     """
+    from app.models.blade import Blade
     from app.models.measurement import Measurement
     from app.models.slot_allocation import SlotAllocation
     from app.models.workflow import WorkflowLog
     from app.models.notification import Notification
     from app.models.attachment import Attachment
+    from app.models.work_order import WorkOrder
 
     OH_DELETABLE = {
         BladeStatus.CREATED,
@@ -958,15 +957,59 @@ async def delete_blade(
                    "Only blades at OH stage can be deleted by OH operators.",
         )
 
+    work_order_id = blade.work_order_id
+    serial_number = blade.serial_number
+    replacement_fields = dict(
+        work_order_number=blade.work_order_number,
+        shop_order_number=blade.shop_order_number,
+        part_number=blade.part_number,
+        nomenclature=blade.nomenclature,
+        engine_number=blade.engine_number,
+        engine_hours=blade.engine_hours,
+        component_hours=blade.component_hours,
+        blade_type=blade.blade_type,
+        current_station_id=blade.current_station_id,
+    )
+
     # Hard-delete all child records first, then the blade itself
     for Model in (WorkflowLog, Measurement, SlotAllocation, Notification, Attachment):
         await db.execute(delete(Model).where(Model.blade_id == blade_id))
 
     await db.delete(blade)
+    await db.flush()
+
+    # Work Orders are a fixed 90-slot scaffold (S.No "01".."90") — deleting a
+    # blade must never leave a gap in that set. Immediately re-scaffold a
+    # blank row at the same S.No so the grid always shows all 90 rows, ready
+    # for re-entry. The replacement is blank, so a previously "complete"
+    # Work Order is no longer complete.
+    if work_order_id is not None:
+        db.add(
+            Blade(
+                serial_number=serial_number,
+                work_order_id=work_order_id,
+                status=BladeStatus.CREATED,
+                created_by_id=current_user.id,
+                ocr_mismatch_flag=False,
+                **replacement_fields,
+            )
+        )
+        work_order = await db.get(WorkOrder, work_order_id)
+        if work_order is not None and work_order.is_entry_complete:
+            work_order.is_entry_complete = False
+            work_order.entry_completed_at = None
+            work_order.entry_completed_by_id = None
+
     await db.commit()
 
-    logger.info("blade_hard_deleted", blade_id=str(blade_id), by=str(current_user.id))
-    return {"success": True, "message": f"Blade {blade.serial_number} permanently deleted"}
+    logger.info(
+        "blade_hard_deleted",
+        blade_id=str(blade_id),
+        serial_number=serial_number,
+        work_order_id=str(work_order_id) if work_order_id else None,
+        by=str(current_user.id),
+    )
+    return {"success": True, "message": f"Blade {serial_number} deleted and row reset for re-entry"}
 
 
 # ---------------------------------------------------------------------------

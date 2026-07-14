@@ -18,6 +18,8 @@ interface GridRowProps {
   onRetrySave: (rowIndex: number) => void;
   onScanClick: (rowIndex: number) => void;
   onKeyboardClick: (rowIndex: number) => void;
+  onLockWeight: (rowIndex: number) => void;
+  onUnlockWeight: (rowIndex: number) => void;
 }
 
 function statusIndicator(row: GridRowState, onRetry: () => void) {
@@ -53,6 +55,8 @@ function GridRow({
   onRetrySave,
   onScanClick,
   onKeyboardClick,
+  onLockWeight,
+  onUnlockWeight,
 }: GridRowProps) {
   const isFocusedRow = rowIndex === focusedRowIndex;
   const meltFocused = isFocusedRow && focusedColumn === "melt_number";
@@ -89,6 +93,8 @@ function GridRow({
         onChange={(v) => onCellChange(rowIndex, "weight", v)}
         onKeyDown={(e) => nav.handleKeyDown(e, rowIndex, "weight")}
         onFocus={() => onFocusCell(rowIndex, "weight")}
+        onLockWeight={() => onLockWeight(rowIndex)}
+        onUnlockWeight={() => onUnlockWeight(rowIndex)}
       />
 
       <ReadOnlyCell value={row.weight_grams != null ? row.weight_grams.toFixed(2) : "—"} className="justify-end font-mono" />

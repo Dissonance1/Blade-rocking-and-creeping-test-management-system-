@@ -56,7 +56,6 @@ from app.schemas.work_order import (
 
 # Measurement
 from app.schemas.measurement import (
-    HeightData,
     MeasurementCreate,
     MeasurementResponse,
     MeasurementUpdate,
@@ -129,7 +128,6 @@ __all__ = [
     "WorkOrderRowResponse",
     "WorkOrderRowUpdate",
     # measurement
-    "HeightData",
     "MeasurementCreate",
     "MeasurementResponse",
     "MeasurementUpdate",

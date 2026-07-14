@@ -77,21 +77,13 @@ class BladeVerifyRequest(BaseSchema):
         default=None, ge=0,
         description="Weight read from iScale at Assembly (grams)"
     )
-    assembly_dti_h1: float | None = Field(default=None)
-    assembly_dti_h2: float | None = Field(default=None)
-    assembly_dti_h3: float | None = Field(default=None)
-    assembly_dti_h4: float | None = Field(default=None)
 
 
 class BladeAcceptRequest(BaseSchema):
     """Accept a blade, optionally overriding readings with corrected values."""
     notes: str | None = Field(default=None, max_length=512)
-    # Override fields — only provided when operator corrects a reading
+    # Override field — only provided when operator corrects a reading
     assembly_weight: float | None = Field(default=None, ge=0)
-    assembly_dti_h1: float | None = Field(default=None)
-    assembly_dti_h2: float | None = Field(default=None)
-    assembly_dti_h3: float | None = Field(default=None)
-    assembly_dti_h4: float | None = Field(default=None)
 
 
 class BladeRejectRequest(BaseSchema):
@@ -108,16 +100,8 @@ class AssemblyBladeRecordResponse(BaseSchema):
     ocr_blade_number: str | None
     # Assembly measurements
     assembly_weight: float | None
-    assembly_dti_h1: float | None
-    assembly_dti_h2: float | None
-    assembly_dti_h3: float | None
-    assembly_dti_h4: float | None
     # OH snapshot
     oh_weight: float | None
-    oh_dti_h1: float | None
-    oh_dti_h2: float | None
-    oh_dti_h3: float | None
-    oh_dti_h4: float | None
     # delta
     weight_delta: float | None
     # decision
@@ -179,10 +163,6 @@ class OHBladeSnapshot(BaseSchema):
     blade_type: BladeType
     status: BladeStatus
     weight: float | None       # latest measurement weight
-    dti_h1: float | None
-    dti_h2: float | None
-    dti_h3: float | None
-    dti_h4: float | None
     part_number: str | None
     work_order_number: str | None
     created_at: datetime

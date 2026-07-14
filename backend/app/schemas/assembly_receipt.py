@@ -38,10 +38,6 @@ class BladeVerifyBody(BaseModel):
     weight_at_assembly: float | None = Field(
         default=None, ge=0, description="Weight in grams from iScale i-04"
     )
-    dti_readings: dict[str, float] | None = Field(
-        default=None,
-        description='DTI readings per position e.g. {"H1": 1.234, "H2": 1.235}',
-    )
 
 
 class BladeAcceptBody(BaseModel):
@@ -55,7 +51,6 @@ class BladeModifyBody(BaseModel):
     station_id: uuid.UUID
     modification_notes: str = Field(..., min_length=1)
     adjusted_weight: float | None = Field(default=None, ge=0)
-    adjusted_dti_readings: dict[str, float] | None = None
 
 
 class BladeRejectBody(BaseModel):
@@ -75,16 +70,12 @@ class AssemblyReceiptResponse(BaseModel):
     scanned_serial_number: str
     ocr_blade_number: str | None
     weight_at_assembly: float | None
-    dti_readings: dict[str, float] | None
     oh_weight: float | None
-    oh_dti_readings: dict[str, float] | None
     weight_variance_pct: float | None
-    dti_max_variance_mm: float | None
     verification_status: AssemblyVerificationStatus
     rejection_reason: str | None
     modification_notes: str | None
     adjusted_weight: float | None
-    adjusted_dti_readings: dict[str, float] | None
     verified_at: datetime | None
     created_at: datetime
 

@@ -119,9 +119,6 @@ async def add_measurement(
             detail=f"Cannot record measurements for a blade with status '{blade.status}'",
         )
 
-    # height_data is now a plain dict (e.g. {"H1": 12.3}) — no conversion needed
-    height_jsonb = body.height_data if body.height_data else None
-
     measurement = Measurement(
         blade_id=blade_id,
         measurement_type=body.measurement_type,
@@ -129,7 +126,6 @@ async def add_measurement(
         static_moment_gcm=body.static_moment_gcm,
         rocking_value=body.rocking_value,
         creep_value=body.creep_value,
-        height_data=height_jsonb,
         station_id=body.station_id or current_user.station_id,
         notes=body.notes,
         measured_by_id=current_user.id,
@@ -282,12 +278,6 @@ async def update_measurement(
 
     update_data = body.model_dump(exclude_unset=True, exclude={"is_approved"})
     for field, value in update_data.items():
-        if field == "height_data" and value is not None:
-            # HeightData object → raw JSONB dict
-            from app.schemas.measurement import HeightData
-
-            if isinstance(value, HeightData):
-                value = value.to_jsonb()
         setattr(measurement, field, value)
 
     await db.commit()

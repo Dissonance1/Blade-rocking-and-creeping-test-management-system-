@@ -88,6 +88,18 @@ export default function RockingCreepPage() {
   const { lastReading, connected: dtiConnected } = useDTISocket(DTI_STATION);
   const lastAppliedAtRef = useRef<number>(0);
 
+  // ── Input DOM refs, keyed "bladeId:field" — lets us move real keyboard
+  //    focus (not just the visual highlight) when activeTarget advances ──────
+  const inputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const registerInputRef = useCallback(
+    (bladeId: string, field: ActiveField, el: HTMLInputElement | null) => {
+      const key = `${bladeId}:${field}`;
+      if (el) inputRefs.current.set(key, el);
+      else inputRefs.current.delete(key);
+    },
+    []
+  );
+
   // ── Only work orders where Assembly has assigned at least one slot ──────────
   const { data: batches = [] } = useQuery({
     queryKey: ["batches", "with-slots"],
@@ -237,6 +249,52 @@ export default function RockingCreepPage() {
     advanceTarget(entry, field);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastReading]);
+
+  // ── Move real keyboard focus whenever the active target advances (DTI
+  //    capture or Enter-to-confirm below) — activeTarget only drove the
+  //    visual highlight before, the cursor never actually followed it ───────
+  useEffect(() => {
+    if (!activeTarget) return;
+    const el = inputRefs.current.get(`${activeTarget.bladeId}:${activeTarget.field}`);
+    el?.focus();
+    el?.select?.();
+  }, [activeTarget]);
+
+  // Save a row only once it actually has everything its blade type needs —
+  // never toasts, since manual column-fill entry deliberately leaves LPTR
+  // rows half-filled (Rocking only) until a second pass fills Creep.
+  const trySaveIfReady = useCallback(
+    (entry: BladeRockingCreepEntry) => {
+      const row = rowState[entry.blade_id];
+      if (!row) return;
+      const rocking = row.rocking !== "" ? parseFloat(row.rocking) : null;
+      const creep = row.creep !== "" ? parseFloat(row.creep) : null;
+      const ready = entry.blade_type === "LPTR" ? rocking !== null && creep !== null : rocking !== null;
+      if (ready) saveMutation.mutate({ bladeId: entry.blade_id, rocking, creep });
+    },
+    [rowState, saveMutation]
+  );
+
+  // ── Enter-to-confirm for manual typing: stays in the SAME column, next
+  //    row — operators fill one whole column (Rocking, then Creep) down the
+  //    grid rather than row-by-row. HPTR has no Creep column, so a Creep
+  //    Enter only ever lands on the next LPTR row. ─────────────────────────
+  const handleFieldEnter = useCallback(
+    (entry: BladeRockingCreepEntry, field: ActiveField) => {
+      const row = rowState[entry.blade_id] ?? EMPTY_ROW;
+      const value = field === "rocking" ? row.rocking : row.creep;
+      if (value.trim() === "") return;
+
+      trySaveIfReady(entry);
+
+      const idx = entries.findIndex((e) => e.blade_id === entry.blade_id);
+      const next = entries
+        .slice(idx + 1)
+        .find((e) => !!e.slot_number && (field === "rocking" || e.blade_type === "LPTR"));
+      setActiveTarget(next ? { bladeId: next.blade_id, field } : null);
+    },
+    [rowState, entries, trySaveIfReady]
+  );
 
   // ── Stats derived from entries ───────────────────────────────────────────────
   const totalCount     = entries.length;
@@ -463,6 +521,7 @@ export default function RockingCreepPage() {
                         <td className="px-4 py-3">
                           {entry.slot_number ? (
                             <Input
+                              ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
                               type="number"
                               step="0.0001"
                               min={0}
@@ -474,6 +533,12 @@ export default function RockingCreepPage() {
                                 )
                               }
                               onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleFieldEnter(entry, "rocking");
+                                }
+                              }}
                               className={cn(
                                 "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
                                 activeTarget?.bladeId === entry.blade_id &&
@@ -492,6 +557,7 @@ export default function RockingCreepPage() {
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           ) : isLPTR ? (
                             <Input
+                              ref={(el) => registerInputRef(entry.blade_id, "creep", el)}
                               type="number"
                               step="0.0001"
                               min={0}
@@ -503,6 +569,12 @@ export default function RockingCreepPage() {
                                 )
                               }
                               onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "creep" })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleFieldEnter(entry, "creep");
+                                }
+                              }}
                               className={cn(
                                 "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
                                 activeTarget?.bladeId === entry.blade_id &&

@@ -141,6 +141,54 @@ function SavedHptrSlotsTable({
 
 // ─── Slot Allocation tab ───────────────────────────────────────────────────────
 
+function SlotAssignmentTable({ title, entries }: { title: string; entries: HptrAllocationEntry[] }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="px-3 py-2 bg-slate-100 dark:bg-background rounded-t-lg border border-b-0 border-slate-200 dark:border-slate-700/60">
+        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{title}</span>
+      </div>
+      <div className="border border-slate-200 dark:border-slate-700/60 rounded-b-lg overflow-x-auto max-h-[32rem] overflow-y-auto">
+        <table className="w-full text-sm whitespace-nowrap">
+          <thead className="sticky top-0">
+            <tr className="bg-slate-800 dark:bg-background">
+              {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
+                <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {entries.map(({ blade, slot }, idx) => (
+              <tr
+                key={blade.id}
+                className={cn(
+                  "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
+                  idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
+                )}
+              >
+                <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{slot}</td>
+                <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">
+                  {blade.serial_number}
+                </td>
+                <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">
+                  {blade.melt_number ?? "—"}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                  {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                  {blade.static_moment_gcm != null ? Number(blade.static_moment_gcm).toFixed(2) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function SlotAllocationTab({
   eligibleCount,
   totalHptr,
@@ -205,9 +253,11 @@ function SlotAllocationTab({
             <div className="space-y-1">
               <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">
                 Rotor Unbalance (g) <span className="text-xs font-normal text-slate-400">(used in Set Making target)</span>
+                <span className="text-red-500"> *</span>
               </Label>
               <Input
                 type="number"
+                min={0}
                 step="0.1"
                 value={unbalanceValue}
                 onChange={(e) => setUnbalanceValue(e.target.value)}
@@ -227,59 +277,29 @@ function SlotAllocationTab({
         </CardContent>
       </Card>
 
-      {allocation && (
-        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-              <SlotAllocationIcon className="w-4 h-4 text-orange-500 shrink-0" />
-              Computed Slot Assignments
-              <span className="text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">
-                Preview — switch to Set Making to balance and save
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm whitespace-nowrap">
-                <thead>
-                  <tr className="bg-slate-800 dark:bg-background">
-                    {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
-                      <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                  {[...allocation].sort((a, b) => a.slot - b.slot).map(({ blade, slot }, idx) => (
-                    <tr
-                      key={blade.id}
-                      className={cn(
-                        "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                        idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
-                      )}
-                    >
-                      <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{slot}</td>
-                      <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">
-                        {blade.serial_number}
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">
-                        {blade.melt_number ?? "—"}
-                      </td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                        {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                        {blade.static_moment_gcm != null ? Number(blade.static_moment_gcm).toFixed(2) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {allocation && (() => {
+        const half = N / 2;
+        const { w1, w2 } = groupByHalf(allocation, N);
+        return (
+          <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                <SlotAllocationIcon className="w-4 h-4 text-orange-500 shrink-0" />
+                Computed Slot Assignments
+                <span className="text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">
+                  Preview — switch to Set Making to balance and save
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col lg:flex-row gap-4">
+                <SlotAssignmentTable title={`W1 — Slots 1–${half}`} entries={w1} />
+                <SlotAssignmentTable title={`W2 — Slots ${half + 1}–${N}`} entries={w2} />
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
     </div>
   );
 }
@@ -645,7 +665,8 @@ export default function OHSlotAllocationPage() {
   const N = Math.max(2, parseInt(totalSlots, 10) || HPTR_TOTAL_SLOTS);
   const K = parseInt(startSlot, 10);
   const startSlotValid = K >= 1 && K <= N;
-  const unbalanceNum = Number(unbalanceValue) || 0;
+  const unbalanceProvided = unbalanceValue.trim() !== "" && !isNaN(Number(unbalanceValue)) && Number(unbalanceValue) >= 0;
+  const unbalanceNum = unbalanceProvided ? Number(unbalanceValue) : 0;
 
   const halves = allocation ? computeHalves(allocation, K, N) : null;
   const setMakingValid = halves ? isSetMakingValid(halves, unbalanceNum) : false;
@@ -660,6 +681,10 @@ export default function OHSlotAllocationPage() {
   function handleRunAllocation() {
     if (!startSlotValid) {
       toast.error(`Enter a valid start slot (1-${N})`);
+      return;
+    }
+    if (!unbalanceProvided) {
+      toast.error("Enter the Rotor Unbalance (g) value before running allocation");
       return;
     }
     if (eligibleBlades.length === 0) {

@@ -107,15 +107,6 @@ def _blade_sm(spec: dict, weight: float) -> float:
     return round(weight * cg, 2)
 
 
-def _blade_heights(spec: dict) -> dict[str, float]:
-    return {
-        "H1": round(spec["h1_nom"] + _f(-spec["h_tol"], spec["h_tol"], 4), 3),
-        "H2": round(spec["h2_nom"] + _f(-spec["h_tol"], spec["h_tol"], 4), 3),
-        "H3": round(spec["h3_nom"] + _f(-spec["h_tol"], spec["h_tol"], 4), 3),
-        "H4": round(spec["h4_nom"] + _f(-spec["h_tol"], spec["h_tol"], 4), 3),
-    }
-
-
 # ─── Reset helpers ───────────────────────────────────────────────────────────
 
 TABLES_TO_WIPE = [
@@ -199,7 +190,6 @@ async def _seed_batch(
 
         weight = _blade_weight(spec)
         sm     = _blade_sm(spec, weight)
-        hdata  = _blade_heights(spec)
 
         meas = Measurement(
             id=uuid.uuid4(),
@@ -207,7 +197,6 @@ async def _seed_batch(
             measurement_type=MeasurementType.INITIAL,
             weight_grams=weight,
             static_moment_gcm=sm,
-            height_data=hdata,
             measured_by_id=oh_user.id,
             station_id=oh_station.id,
             measured_at=now,

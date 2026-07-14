@@ -43,9 +43,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.core.constants import STATIC_MOMENT_FACTOR
 from app.core.security import hash_password
 from app.models.blade import Blade
-from app.models.enums import BladeStatus, BladeType, RoleName, StationType
+from app.models.enums import BladeStatus, BladeType, MeasurementType, RoleName, StationType
+from app.models.measurement import Measurement
 from app.models.user import Role, User, UserRole
 from app.models.work_order import WorkOrder
 from app.models.workflow import RejectionReason, Station
@@ -280,13 +282,18 @@ async def _create_sample_blades(
     NOMENCLATURE = "HP Turbine Blade Stage 1"
     BLADES_PER_WORK_ORDER = 90
 
-    # (date_suffix_DDMMYY, blade_type)
+    # (date_suffix_DDMMYY, blade_type) — 5 LPTR + 5 HPTR work orders
     WORK_ORDER_SPECS = [
         ("180626", BladeType.LPTR),
         ("190626", BladeType.HPTR),
         ("200626", BladeType.LPTR),
         ("210626", BladeType.HPTR),
         ("220626", BladeType.LPTR),
+        ("230626", BladeType.HPTR),
+        ("240626", BladeType.LPTR),
+        ("250626", BladeType.HPTR),
+        ("260626", BladeType.LPTR),
+        ("270626", BladeType.HPTR),
     ]
 
     total_blades = 0
@@ -323,7 +330,7 @@ async def _create_sample_blades(
         created_in_wo = 0
         for s_no in range(1, BLADES_PER_WORK_ORDER + 1):
             serial = f"{s_no:02d}"
-            existing = (
+            blade = (
                 await db.execute(
                     select(Blade).where(
                         Blade.work_order_id == work_order.id,
@@ -331,32 +338,65 @@ async def _create_sample_blades(
                     )
                 )
             ).scalar_one_or_none()
-            if existing:
-                continue
 
-            blade = Blade(
-                id=uuid.uuid4(),
-                serial_number=serial,
-                melt_number=f"MLT{wo_idx:02d}{s_no:04d}",
-                work_order_id=work_order.id,
-                work_order_number=wo_number,
-                shop_order_number=work_order.shop_order_number,
-                part_number=PART_NUMBER,
-                nomenclature=NOMENCLATURE,
-                engine_number=ENGINE_NO,
-                engine_hours=work_order.engine_hours,
-                component_hours=work_order.component_hours,
-                blade_type=blade_type,
-                status=BladeStatus.OH_INSPECTION,
-                current_station_id=oh_station.id,
-                created_by_id=oh_user.id,
-                ocr_mismatch_flag=False,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            db.add(blade)
-            created_in_wo += 1
-            total_blades += 1
+            if blade is None:
+                blade = Blade(
+                    id=uuid.uuid4(),
+                    serial_number=serial,
+                    melt_number=f"MLT{wo_idx:02d}{s_no:04d}",
+                    work_order_id=work_order.id,
+                    work_order_number=wo_number,
+                    shop_order_number=work_order.shop_order_number,
+                    part_number=PART_NUMBER,
+                    nomenclature=NOMENCLATURE,
+                    engine_number=ENGINE_NO,
+                    engine_hours=work_order.engine_hours,
+                    component_hours=work_order.component_hours,
+                    blade_type=blade_type,
+                    status=BladeStatus.OH_INSPECTION,
+                    current_station_id=oh_station.id,
+                    created_by_id=oh_user.id,
+                    ocr_mismatch_flag=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                db.add(blade)
+                await db.flush()
+                created_in_wo += 1
+                total_blades += 1
+
+            existing_measurement = (
+                await db.execute(
+                    select(Measurement).where(
+                        Measurement.blade_id == blade.id,
+                        Measurement.measurement_type == MeasurementType.INITIAL,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if existing_measurement is None:
+                # Mirrors the entry-grid weight capture (weight_grams ->
+                # static_moment_gcm) plus the post-slot-allocation rocking/creep
+                # entry — LPTR requires both rocking and creep, HPTR rocking only.
+                weight_grams = round(random.uniform(150.0, 260.0), 4)
+                db.add(
+                    Measurement(
+                        id=uuid.uuid4(),
+                        blade_id=blade.id,
+                        measurement_type=MeasurementType.INITIAL,
+                        weight_grams=weight_grams,
+                        static_moment_gcm=round(weight_grams * STATIC_MOMENT_FACTOR, 4),
+                        rocking_value=round(random.uniform(0.015, 0.045), 6),
+                        creep_value=(
+                            round(random.uniform(0.05, 0.25), 6)
+                            if blade_type == BladeType.LPTR
+                            else None
+                        ),
+                        measured_by_id=oh_user.id,
+                        station_id=oh_station.id,
+                        measured_at=datetime.now(timezone.utc),
+                    )
+                )
 
             # Flush every 50 blades to avoid huge in-memory batches
             if total_blades % 50 == 0:
@@ -364,6 +404,15 @@ async def _create_sample_blades(
 
         if created_in_wo:
             _log_created(f"  {created_in_wo} blade(s) created")
+
+        # All BLADES_PER_WORK_ORDER rows now have melt_number + weight —
+        # mark entry complete so the OH Queue offers "Send to Assembly"
+        # instead of "Continue Blade Entry".
+        if not work_order.is_entry_complete:
+            work_order.is_entry_complete = True
+            work_order.entry_completed_by_id = oh_user.id
+            work_order.entry_completed_at = datetime.now(timezone.utc)
+            db.add(work_order)
 
     await db.flush()
     print(

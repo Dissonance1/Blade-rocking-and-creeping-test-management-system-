@@ -10,7 +10,6 @@ Responsibilities:
 
 Tolerances used for automatic validation:
   Weight:  ±0.5 g   (iScale resolution 0.1 g)
-  DTI:     ±0.010 mm (Sylvac BT resolution 0.001 mm)
 """
 
 from __future__ import annotations
@@ -49,7 +48,6 @@ log = structlog.get_logger(__name__)
 
 # Validation tolerances
 _WEIGHT_TOLERANCE = 0.5    # grams
-_DTI_TOLERANCE    = 0.010  # mm
 
 
 def _to_float(v: Any) -> float | None:
@@ -88,15 +86,7 @@ def _record_to_response(r: AssemblyBladeRecord) -> AssemblyBladeRecordResponse:
         qr_scan_result=r.qr_scan_result,
         ocr_blade_number=r.ocr_blade_number,
         assembly_weight=_to_float(r.assembly_weight),
-        assembly_dti_h1=_to_float(r.assembly_dti_h1),
-        assembly_dti_h2=_to_float(r.assembly_dti_h2),
-        assembly_dti_h3=_to_float(r.assembly_dti_h3),
-        assembly_dti_h4=_to_float(r.assembly_dti_h4),
         oh_weight=_to_float(r.oh_weight),
-        oh_dti_h1=_to_float(r.oh_dti_h1),
-        oh_dti_h2=_to_float(r.oh_dti_h2),
-        oh_dti_h3=_to_float(r.oh_dti_h3),
-        oh_dti_h4=_to_float(r.oh_dti_h4),
         weight_delta=_to_float(r.weight_delta),
         status=r.status,
         verification_notes=r.verification_notes,
@@ -200,15 +190,8 @@ class AssemblyService:
         )
         m = res.scalar_one_or_none()
         if m is None:
-            return {k: None for k in ("weight", "dti_h1", "dti_h2", "dti_h3", "dti_h4")}
-        hd = m.height_data or {}
-        return {
-            "weight": _to_float(m.weight_grams),
-            "dti_h1": _to_float(hd.get("H1")),
-            "dti_h2": _to_float(hd.get("H2")),
-            "dti_h3": _to_float(hd.get("H3")),
-            "dti_h4": _to_float(hd.get("H4")),
-        }
+            return {"weight": None}
+        return {"weight": _to_float(m.weight_grams)}
 
     async def verify_blade(
         self,
@@ -240,10 +223,6 @@ class AssemblyService:
                 blade_id=blade.id,
                 batch_receipt_id=receipt.id,
                 oh_weight=oh["weight"],
-                oh_dti_h1=oh["dti_h1"],
-                oh_dti_h2=oh["dti_h2"],
-                oh_dti_h3=oh["dti_h3"],
-                oh_dti_h4=oh["dti_h4"],
             )
 
         # Update with submitted readings
@@ -253,10 +232,6 @@ class AssemblyService:
             qr_scan_result=payload.qr_scan_result,
             ocr_blade_number=payload.ocr_blade_number,
             assembly_weight=payload.assembly_weight,
-            assembly_dti_h1=payload.assembly_dti_h1,
-            assembly_dti_h2=payload.assembly_dti_h2,
-            assembly_dti_h3=payload.assembly_dti_h3,
-            assembly_dti_h4=payload.assembly_dti_h4,
             weight_delta=w_delta,
         )
 
@@ -271,10 +246,6 @@ class AssemblyService:
         # Field validations
         validations = [
             _validate_field("weight", oh["weight"], payload.assembly_weight, _WEIGHT_TOLERANCE),
-            _validate_field("dti_h1", oh["dti_h1"], payload.assembly_dti_h1, _DTI_TOLERANCE),
-            _validate_field("dti_h2", oh["dti_h2"], payload.assembly_dti_h2, _DTI_TOLERANCE),
-            _validate_field("dti_h3", oh["dti_h3"], payload.assembly_dti_h3, _DTI_TOLERANCE),
-            _validate_field("dti_h4", oh["dti_h4"], payload.assembly_dti_h4, _DTI_TOLERANCE),
         ]
         all_ok = all(v.within_tolerance for v in validations)
         if not serial_match or not ocr_match:
@@ -323,10 +294,6 @@ class AssemblyService:
         overrides = {
             k: v for k, v in {
                 "assembly_weight": payload.assembly_weight,
-                "assembly_dti_h1": payload.assembly_dti_h1,
-                "assembly_dti_h2": payload.assembly_dti_h2,
-                "assembly_dti_h3": payload.assembly_dti_h3,
-                "assembly_dti_h4": payload.assembly_dti_h4,
             }.items() if v is not None
         }
         is_modified = bool(overrides)

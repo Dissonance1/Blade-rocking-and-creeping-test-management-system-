@@ -58,20 +58,12 @@ class AssemblyBladeRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Numeric(12, 4), nullable=True,
         comment="Weight captured at Assembly iScale (grams)"
     )
-    assembly_dti_h1: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    assembly_dti_h2: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    assembly_dti_h3: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    assembly_dti_h4: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     # ── OH snapshot (captured at receipt time) ────────────────────────────────
     oh_weight: Mapped[float | None] = mapped_column(
         Numeric(12, 4), nullable=True,
         comment="Weight recorded at OH (snapshot)"
     )
-    oh_dti_h1: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    oh_dti_h2: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    oh_dti_h3: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
-    oh_dti_h4: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     # ── deltas (computed and stored for quick filtering) ─────────────────────
     weight_delta: Mapped[float | None] = mapped_column(
