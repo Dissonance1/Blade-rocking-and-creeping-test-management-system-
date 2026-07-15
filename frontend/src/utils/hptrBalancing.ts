@@ -9,9 +9,12 @@ import type { BladeListItem } from "@/types";
  *
  * 1. Sort the batch's HPTR blades by weight descending.
  * 2. Pair the heaviest with the Assembly-provided `startSlot`, and the
- *    lightest with its opposite slot (45 slots away on the 90-slot rotor),
- *    then alternate inward (2nd heaviest -> startSlot+1, 2nd lightest ->
- *    opposite(startSlot+1), ...).
+ *    lightest with its opposite slot (45 slots away on the 90-slot rotor) —
+ *    this anchor pair is the only one that spans the two extremes. Every
+ *    following pair (startSlot+1/opposite, startSlot+2/opposite, ...) takes
+ *    the next two ranks in sequence from the heavy end (2nd & 3rd heaviest,
+ *    then 4th & 5th, ...) rather than continuing to alternate against the
+ *    light end.
  * 3. Split the rotor into W1 (slots 1..45) and W2 (slots 46..90) and sum
  *    each half's weight.
  * 4. The half containing `startSlot` must be heavier than the other half by
@@ -35,8 +38,10 @@ export function oppositeSlot(slot: number, totalSlots: number = HPTR_TOTAL_SLOTS
 }
 
 /**
- * Steps 1-2: sort by weight descending, then pair heaviest/lightest
- * alternating inward from `startSlot` and its opposite.
+ * Steps 1-2: sort by weight descending. The anchor pair (i = 0) takes the
+ * true heaviest + true lightest. Every pair after that takes the next two
+ * ranks in sequence from the heavy end (rank 2 & 3, then 4 & 5, ...) —
+ * they're no longer paired against the light end.
  */
 export function computeInitialHptrSlots(
   blades: BladeListItem[],
@@ -46,21 +51,47 @@ export function computeInitialHptrSlots(
   const sorted = [...blades].sort((a, b) => (b.weight_grams ?? 0) - (a.weight_grams ?? 0));
   const n = sorted.length;
   const pairCount = Math.floor(n / 2);
+  const half = totalSlots / 2;
+  const startHalfIsW1 = startSlot <= half;
   const entries: HptrAllocationEntry[] = [];
 
+  // Pointer into `sorted` for the ranks consumed sequentially by every
+  // pair after the anchor — starts at rank 2 (index 1).
+  let nextRankIdx = 1;
+
   for (let i = 0; i < pairCount; i++) {
-    const heavyBlade = sorted[i];
-    const lightBlade = sorted[n - 1 - i];
+    const slotA = ((startSlot - 1 + i) % totalSlots) + 1;
+    const slotB = oppositeSlot(slotA, totalSlots);
+    // Whichever of this pair's two (opposite) slots sits on the same half
+    // as `startSlot` gets the heavier blade — not just whichever is `slotA`.
+    // The sequential startSlot+i run crosses the W1/W2 midpoint partway
+    // through (e.g. startSlot=10 runs 10..54, crossing 45->46), and without
+    // this check the heavier blade would start landing in the wrong half
+    // right at that crossover, undermining the half that's supposed to stay
+    // heavier for the overall W1/W2 balance target.
+    const slotAInStartHalf = startHalfIsW1 ? slotA <= half : slotA > half;
+    const heavySlot = slotAInStartHalf ? slotA : slotB;
+    const lightSlot = slotAInStartHalf ? slotB : slotA;
+
+    let heavyBlade: BladeListItem | undefined;
+    let lightBlade: BladeListItem | undefined;
+    if (i === 0) {
+      // Anchor pair: true heaviest + true lightest, correcting the
+      // Assembly-flagged unbalanced slot as strongly as possible.
+      heavyBlade = sorted[0];
+      lightBlade = sorted[n - 1];
+    } else {
+      heavyBlade = sorted[nextRankIdx++];
+      lightBlade = sorted[nextRankIdx++];
+    }
     if (!heavyBlade || !lightBlade) continue;
-    const heavySlot = ((startSlot - 1 + i) % totalSlots) + 1;
-    const lightSlot = oppositeSlot(heavySlot, totalSlots);
     entries.push({ blade: heavyBlade, slot: heavySlot });
     entries.push({ blade: lightBlade, slot: lightSlot });
   }
-  // Odd blade count (partial batch): middle blade takes the next slot in
-  // sequence — it has no opposite pairing partner.
+  // Odd blade count (partial batch): one blade left with no pairing
+  // partner — takes the next slot in sequence.
   if (n % 2 === 1) {
-    const midBlade = sorted[pairCount];
+    const midBlade = sorted[nextRankIdx];
     if (midBlade) {
       const midSlot = ((startSlot - 1 + pairCount) % totalSlots) + 1;
       entries.push({ blade: midBlade, slot: midSlot });
@@ -196,21 +227,23 @@ export interface SwapSuggestion {
 }
 
 /**
- * Suggest the fewest possible pair-flips that bring the set closest to the
- * 1.5-2.0 g target — an assistive hint only. The operator still applies it
- * (or ignores it) via "Apply Suggestion"; this does not replace the manual,
- * live-recalculating workflow.
+ * Step 1 ("line-swap"): suggest the fewest possible pair-flips that bring
+ * the set closest to the 1.5-2.0 g target — an assistive hint only. The
+ * operator still applies it (or ignores it) via "Apply Suggestion"; this
+ * does not replace the manual, live-recalculating workflow.
  *
  * Every blade was originally placed as part of a heavy/light pair: the
  * pair's heavy blade at slot `startSlot + i` and its light counterpart at
  * that slot's exact opposite (see `computeInitialHptrSlots`). A "flip"
  * exchanges which of the pair's two (already-opposite) slots each blade
  * occupies — it never proposes swapping blades that weren't already paired
- * together, and it never touches:
- *   - pair 0 (the anchor: heaviest blade at `startSlot`, lightest at its
- *     opposite) — this pair is never touched, under any circumstance.
- *   - pairs 1..NEAR_PAIR_COUNT (the next-most-extreme pairs) — only used as
- *     a fallback if no combination of the remaining pairs reaches the target.
+ * together, and it never touches pair 0 (the anchor).
+ *
+ * `allowNearPairsFallback` controls whether pairs 1..NEAR_PAIR_COUNT (the
+ * next-most-extreme pairs) may be used as a fallback when no combination of
+ * the remaining ("far") pairs reaches the target — Step 1 proper allows
+ * this fallback; Step 2's fine-tune pass (below) does not, since Step 2
+ * fully protects the anchor + near pairs throughout.
  *
  * Finds the true minimum number of flips needed (scattered/non-adjacent
  * pairs are fine — a subset-sum DP considers every combination without
@@ -220,11 +253,12 @@ export interface SwapSuggestion {
  * `unbalanceValue` (`y`) is the rotor's own pre-existing unbalance — the
  * target band applies to `|x - y|` (`x` = |W1 - W2|), not `x` alone.
  */
-export function suggestBalancingSwap(
+function computeLineSwapSuggestion(
   entries: HptrAllocationEntry[],
   startSlot: number,
-  unbalanceValue: number = 0,
-  totalSlots: number = HPTR_TOTAL_SLOTS
+  unbalanceValue: number,
+  totalSlots: number,
+  allowNearPairsFallback: boolean
 ): SwapSuggestion | null {
   const half = totalSlots / 2;
   const halves = computeHalves(entries, startSlot, totalSlots);
@@ -356,5 +390,166 @@ export function suggestBalancingSwap(
 
   const allPairIndices = [...pairSlots.keys()];
   const farPairs = allPairIndices.filter((i) => i > NEAR_PAIR_COUNT);
-  return search(farPairs, false) ?? search(allPairIndices.filter((i) => i > 0), true);
+  const farResult = search(farPairs, false);
+  if (farResult || !allowNearPairsFallback) return farResult;
+  return search(allPairIndices.filter((i) => i > 0), true);
+}
+
+/** The anchor pair + the NEAR_PAIR_COUNT nearest pairs — 14 slots (7 pairs) fully protected during Step 2, never just a fallback tier. */
+function protectedSlotsForCrossSwap(startSlot: number, totalSlots: number): Set<number> {
+  const protectedSet = new Set<number>();
+  for (let i = 0; i <= NEAR_PAIR_COUNT; i++) {
+    const slotA = ((startSlot - 1 + i) % totalSlots) + 1;
+    protectedSet.add(slotA);
+    protectedSet.add(oppositeSlot(slotA, totalSlots));
+  }
+  return protectedSet;
+}
+
+interface CrossSwapResult {
+  entries: HptrAllocationEntry[];
+  flips: PairFlip[];
+  adjustedDiff: number;
+  meetsTarget: boolean;
+}
+
+/**
+ * Step 2 ("cross-swap"): only attempted when Step 1 (line-swap) cannot
+ * reach the target band on its own. Exchanges a block of consecutive slots
+ * in one half with a block of consecutive slots in the other half — unlike
+ * a line-swap flip, the two blocks are NOT required to be each other's
+ * exact opposite, which is what lets this reach diffs a line-swap
+ * structurally cannot (every non-anchor line-swap pair holds two
+ * adjacent-ranked, near-identical-weight blades, so flipping them barely
+ * moves the W1/W2 gap).
+ *
+ * Searches block sizes starting at 1 (fewest blades touched) and, for each
+ * size, every valid (still-consecutive-in-slot-number, fully unprotected)
+ * window in each half, picking whichever reaches the target band closest
+ * to its middle. Stops at the first size with any valid candidate — the
+ * smallest possible disruption that works. Never touches the anchor pair
+ * or the 6 nearest pairs (14 blades total).
+ */
+function attemptCrossSwap(
+  entries: HptrAllocationEntry[],
+  startSlot: number,
+  unbalanceValue: number,
+  totalSlots: number
+): CrossSwapResult | null {
+  const half = totalSlots / 2;
+  const halves = computeHalves(entries, startSlot, totalSlots);
+  const sign = halves.startSlotHalf === "W1" ? 1 : -1;
+  const currentSignedDiff = halves.w1Total - halves.w2Total;
+  const targetMid = (HPTR_TARGET_DIFF_MIN + HPTR_TARGET_DIFF_MAX) / 2;
+
+  const protectedSet = protectedSlotsForCrossSwap(startSlot, totalSlots);
+  const bySlot = new Map(entries.map((e) => [e.slot, e]));
+
+  const w1Slots: number[] = [];
+  const w2Slots: number[] = [];
+  for (let s = 1; s <= totalSlots; s++) {
+    if (protectedSet.has(s)) continue;
+    if (s <= half) w1Slots.push(s);
+    else w2Slots.push(s);
+  }
+
+  function evaluateSum(deltaSum: number) {
+    const signedDiff = currentSignedDiff + deltaSum;
+    const startHalfIsHeavier = sign === 1 ? signedDiff > 0 : signedDiff < 0;
+    const adjustedDiff = Math.abs(Math.abs(signedDiff) - unbalanceValue);
+    const meets = startHalfIsHeavier && adjustedDiff >= HPTR_TARGET_DIFF_MIN && adjustedDiff <= HPTR_TARGET_DIFF_MAX;
+    return { adjustedDiff, meets };
+  }
+
+  /** Every contiguous run of `size` consecutive slot numbers drawn entirely from `pool` (sorted, unprotected) — skips any run that jumps over a protected/other-half gap. */
+  function windows(pool: number[], size: number): number[][] {
+    const result: number[][] = [];
+    for (let start = 0; start + size <= pool.length; start++) {
+      const w = pool.slice(start, start + size);
+      if (w[w.length - 1]! - w[0]! === size - 1) result.push(w);
+    }
+    return result;
+  }
+
+  const maxBlockSize = Math.min(20, w1Slots.length, w2Slots.length);
+
+  for (let size = 1; size <= maxBlockSize; size++) {
+    const w1Windows = windows(w1Slots, size);
+    const w2Windows = windows(w2Slots, size);
+    let best: { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean } | null = null;
+    let bestScore = Infinity;
+
+    for (const w1w of w1Windows) {
+      const sumW1 = w1w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+      for (const w2w of w2Windows) {
+        const sumW2 = w2w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+        // Swapping the two blocks moves the whole W2 block's weight into W1
+        // and vice versa — the W1-W2 delta is twice the sum difference.
+        const deltaSum = 2 * (sumW2 - sumW1);
+        const { adjustedDiff, meets } = evaluateSum(deltaSum);
+        if (!meets) continue;
+        const score = Math.abs(adjustedDiff - targetMid);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { w1w, w2w, adjustedDiff, meets };
+        }
+      }
+    }
+
+    if (best) {
+      const flips: PairFlip[] = best.w1w.map((slotW1, idx) => {
+        const slotW2 = best!.w2w[idx]!;
+        return {
+          // Synthetic index range, distinct from computeLineSwapSuggestion's
+          // real pair indices (0..44) — only used as a React list key.
+          pairIndex: -1000 - idx,
+          slotA: slotW1,
+          slotB: slotW2,
+          bladeASerial: bySlot.get(slotW1)!.blade.serial_number,
+          bladeBSerial: bySlot.get(slotW2)!.blade.serial_number,
+        };
+      });
+      let newEntries = entries;
+      for (const f of flips) {
+        newEntries = swapBladesBetweenSlots(newEntries, f.slotA, f.slotB);
+      }
+      return { entries: newEntries, flips, adjustedDiff: best.adjustedDiff, meetsTarget: best.meets };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Full suggestion pipeline: Step 1 (line-swap) first; only if that finds
+ * nothing does Step 2 (cross-swap, then a line-swap fine-tune on top of it)
+ * run. Returns null if neither step reaches the target — the caller shows
+ * a generic "couldn't find a swap" message either way, without surfacing
+ * which internal strategy was tried.
+ */
+export function suggestBalancingSwap(
+  entries: HptrAllocationEntry[],
+  startSlot: number,
+  unbalanceValue: number = 0,
+  totalSlots: number = HPTR_TOTAL_SLOTS
+): SwapSuggestion | null {
+  const step1 = computeLineSwapSuggestion(entries, startSlot, unbalanceValue, totalSlots, true);
+  if (step1) return step1;
+
+  const cross = attemptCrossSwap(entries, startSlot, unbalanceValue, totalSlots);
+  if (!cross) return null;
+
+  if (cross.meetsTarget) {
+    return { flips: cross.flips, resultingDiff: cross.adjustedDiff, meetsTarget: true, usedNearPairs: false };
+  }
+
+  const fineTune = computeLineSwapSuggestion(cross.entries, startSlot, unbalanceValue, totalSlots, false);
+  if (!fineTune) return null;
+
+  return {
+    flips: [...cross.flips, ...fineTune.flips],
+    resultingDiff: fineTune.resultingDiff,
+    meetsTarget: fineTune.meetsTarget,
+    usedNearPairs: false,
+  };
 }

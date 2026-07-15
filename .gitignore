@@ -94,3 +94,6 @@ Blade_validation_PPv4OCR/
 
 # ─── Downloaded OCR model weights (fetched at runtime, not source) ──────────
 backend/app/ocr/models/
+
+# ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
+scripts/.cache/
