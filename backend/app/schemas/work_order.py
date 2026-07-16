@@ -59,13 +59,13 @@ class WorkOrderRowUpdate(BaseSchema):
 
     Only supplied fields are applied. ``weight_grams``/``static_moment_gcm``
     are always recomputed server-side from ``raw_weight`` and are never
-    accepted from the client.
+    accepted from the client. ``ocr_mismatch_flag``/``ocr_mismatch_notes``
+    are likewise never accepted from the client — they're derived
+    server-side from ``melt_number`` vs. ``ocr_melt_number`` on every save.
     """
 
     melt_number: str | None = Field(default=None, max_length=64)
     ocr_melt_number: str | None = Field(default=None, max_length=64)
-    ocr_mismatch_flag: bool | None = None
-    ocr_mismatch_notes: str | None = None
     raw_weight: float | None = Field(
         default=None, ge=0, description="Raw scale reading in kg"
     )

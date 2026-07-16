@@ -5,21 +5,25 @@ POST /ocr/scan/blade-serial  — extract blade serial number from image, save sc
 POST /ocr/scan/melt-number   — extract melt number from image, save scan
 POST /ocr/scan/qr            — decode QR code from image or raw data
 GET  /ocr/scan/{scan_id}     — serve a previously saved OCR scan image
+GET  /ocr/training-dataset   — export saved scans as an image+label ZIP for OCR training
 """
 
 from __future__ import annotations
 
 import uuid as uuid_lib
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
 
 import aiofiles
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user
+from app.db.session import get_db
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -281,4 +285,118 @@ async def get_scan_image(
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"Scan image '{scan_id}' not found",
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /training-dataset — export scans as an image+label dataset ZIP
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/training-dataset",
+    status_code=status.HTTP_200_OK,
+    summary="Export saved OCR scans (image + detection + ground truth) as a training dataset ZIP",
+)
+async def export_training_dataset(
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    field_name: str = Query(
+        default="melt_number",
+        description="Which OCR field to export: 'melt_number' pairs each image with the blade's confirmed melt number as ground truth",
+    ),
+    work_order_number: str | None = Query(default=None, description="Only scans on blades in this work order"),
+    date_from: date | None = Query(default=None, description="Only scans captured on/after this date"),
+    date_to: date | None = Query(default=None, description="Only scans captured on/before this date"),
+) -> StreamingResponse:
+    """
+    Bundle every saved OCR scan of *field_name* into a ZIP: the raw images
+    under ``images/`` plus a ``manifest.jsonl`` with one JSON object per
+    image — ``detected_text``/``confidence`` (what the OCR read at scan
+    time) alongside ``ground_truth`` (the blade's current confirmed value)
+    — ready to feed into OCR fine-tuning or accuracy evaluation.
+
+    Only scans that were linked to a blade via ``POST
+    /blades/{blade_id}/attach-ocr-scan`` are included; orphaned scan files
+    with no blade link are skipped since there's no ground truth to pair
+    them with.
+    """
+    import io
+    import json
+    import zipfile
+    from datetime import datetime, time, timezone
+
+    from sqlalchemy import select
+
+    from app.models.attachment import Attachment
+    from app.models.blade import Blade
+    from app.models.enums import AttachmentType
+
+    conditions = [
+        Attachment.attachment_type == AttachmentType.OCR_SCAN,
+        Attachment.ocr_field_name == field_name,
+    ]
+    if date_from:
+        conditions.append(
+            Attachment.uploaded_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        )
+    if date_to:
+        conditions.append(
+            Attachment.uploaded_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+        )
+    if work_order_number:
+        conditions.append(Blade.work_order_number == work_order_number)
+
+    stmt = (
+        select(Attachment, Blade)
+        .join(Blade, Blade.id == Attachment.blade_id)
+        .where(*conditions)
+        .order_by(Attachment.uploaded_at)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    upload_root = Path(settings.UPLOAD_DIR)
+    buf = io.BytesIO()
+    included = 0
+    skipped = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        manifest_lines: list[str] = []
+        for attachment, blade in rows:
+            image_path = upload_root / attachment.file_path
+            if not image_path.exists():
+                skipped += 1
+                continue
+            arcname = f"images/{attachment.filename}"
+            zf.write(image_path, arcname)
+            ground_truth = blade.melt_number if field_name == "melt_number" else None
+            manifest_lines.append(json.dumps({
+                "image": arcname,
+                "detected_text": attachment.ocr_detected_text,
+                "confidence": attachment.ocr_confidence,
+                "ground_truth": ground_truth,
+                "field_name": field_name,
+                "blade_id": str(blade.id),
+                "work_order_number": blade.work_order_number,
+                "s_no": blade.serial_number,
+                "scanned_at": attachment.uploaded_at.isoformat(),
+            }))
+            included += 1
+        zf.writestr("manifest.jsonl", "\n".join(manifest_lines))
+
+    buf.seek(0)
+    logger.info(
+        "ocr_training_dataset_exported",
+        user_id=str(current_user.id),
+        field_name=field_name,
+        work_order_number=work_order_number,
+        included=included,
+        skipped=skipped,
+    )
+
+    return StreamingResponse(
+        content=iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="ocr_training_dataset_{field_name}.zip"',
+        },
     )

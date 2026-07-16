@@ -179,10 +179,25 @@ class WorkOrderService:
             blade.melt_number = data.melt_number
         if data.ocr_melt_number is not None:
             blade.ocr_melt_number = data.ocr_melt_number
-        if data.ocr_mismatch_flag is not None:
-            blade.ocr_mismatch_flag = data.ocr_mismatch_flag
-        if data.ocr_mismatch_notes is not None:
-            blade.ocr_mismatch_notes = data.ocr_mismatch_notes
+
+        # Mismatch flag/notes are derived server-side from the current
+        # ground truth (melt_number) vs. OCR detection (ocr_melt_number) on
+        # every save, rather than trusted from the client — this is what
+        # drives the QA "OCR mismatch" queue, so it must always reflect the
+        # actual stored values.
+        detected = (blade.ocr_melt_number or "").strip().upper()
+        entered = (blade.melt_number or "").strip().upper()
+        if detected:
+            mismatch = detected != entered
+            blade.ocr_mismatch_flag = mismatch
+            blade.ocr_mismatch_notes = (
+                f"OCR detected '{blade.ocr_melt_number}', operator entered '{blade.melt_number}'"
+                if mismatch else None
+            )
+        else:
+            blade.ocr_mismatch_flag = False
+            blade.ocr_mismatch_notes = None
+
         self.db.add(blade)
         await self.db.flush()
 

@@ -15,6 +15,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     Enum as SAEnum,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -69,6 +70,14 @@ class Attachment(UUIDPrimaryKeyMixin, Base):
         nullable=False,
         index=True,
     )
+
+    # OCR provenance — populated only for attachment_type=OCR_SCAN, captured
+    # at scan time so the image, the OCR's raw detection, and (via blade_id)
+    # the operator-confirmed ground truth can later be exported as a
+    # matched training/eval dataset.
+    ocr_field_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ocr_detected_text: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Relationships
     blade: Mapped["Blade"] = relationship(  # type: ignore[name-defined]

@@ -86,6 +86,7 @@ interface BladeEntryState {
   loadFromServer: (detail: WorkOrderDetail) => void;
   applyServerRow: (row: import("@/services/workOrderService").WorkOrderRow) => void;
   setCellValue: (rowIndex: number, column: GridColumn, value: string) => boolean;
+  applyOcrResult: (rowIndex: number, ocrValue: string) => boolean;
   lockRowWeight: (rowIndex: number) => void;
   unlockRow: (rowIndex: number) => void;
   markRowSaving: (rowIndex: number) => void;
@@ -180,6 +181,8 @@ export const useBladeEntryStore = create<BladeEntryState>((set, get) => ({
           ? {
               ...r,
               blade_id: row.blade_id,
+              ocr_melt_number: row.ocr_melt_number ?? r.ocr_melt_number,
+              ocr_mismatch_flag: row.ocr_mismatch_flag,
               weight_grams: row.weight_grams,
               static_moment_gcm: row.static_moment_gcm,
             }
@@ -204,6 +207,25 @@ export const useBladeEntryStore = create<BladeEntryState>((set, get) => ({
         row.weight_grams = derived.weight_grams;
         row.static_moment_gcm = derived.static_moment_gcm;
       }
+      row.status = isRowReadyToSave(row) ? "dirty" : "empty";
+      readyToSave = row.status === "dirty";
+      rows[rowIndex] = row;
+      return { rows };
+    });
+    return readyToSave;
+  },
+
+  // Applies a fresh OCR reading: seeds melt_number with the OCR suggestion
+  // (still freely editable by the operator) while keeping ocr_melt_number
+  // as the immutable raw detection, so the two can be compared later.
+  applyOcrResult: (rowIndex, ocrValue) => {
+    let readyToSave = false;
+    set((s) => {
+      const existing = s.rows[rowIndex];
+      if (!existing) return s;
+      const rows = s.rows.slice();
+      const row = { ...existing, melt_number: ocrValue, ocr_melt_number: ocrValue };
+      if (row.locked) row.locked = false;
       row.status = isRowReadyToSave(row) ? "dirty" : "empty";
       readyToSave = row.status === "dirty";
       rows[rowIndex] = row;

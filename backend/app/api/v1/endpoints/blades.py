@@ -1073,7 +1073,13 @@ async def attach_ocr_scan(
 
     Request body:
     - ``scan_id``: UUID string returned by the OCR scan endpoint.
-    - ``label``: "serial_number" or "melt_number" (used as the display filename).
+    - ``label``: "serial_number" or "melt_number" (used as the display filename
+      and stored as ``ocr_field_name`` for later dataset export).
+    - ``detected_text`` (optional): the OCR's raw detection for this scan
+      (the scan endpoint's ``value``), so it's preserved even if the operator
+      later edits the field. Not re-derived server-side — the caller already
+      has it from the scan response.
+    - ``confidence`` (optional): the scan endpoint's ``confidence`` (0-1).
 
     Raises:
         HTTP 404 — blade or scan file not found.
@@ -1084,6 +1090,8 @@ async def attach_ocr_scan(
 
     scan_id = body.get("scan_id", "")
     label = body.get("label", "ocr_scan")
+    detected_text = body.get("detected_text")
+    confidence = body.get("confidence")
 
     if not scan_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scan_id is required")
@@ -1117,6 +1125,9 @@ async def attach_ocr_scan(
         mime_type=mime_map.get(found_ext, "image/jpeg"),
         uploaded_by_id=current_user.id,
         attachment_type=AttachmentType.OCR_SCAN,
+        ocr_field_name=label,
+        ocr_detected_text=str(detected_text) if detected_text is not None else None,
+        ocr_confidence=float(confidence) if confidence is not None else None,
     )
     db.add(attachment)
     await db.commit()

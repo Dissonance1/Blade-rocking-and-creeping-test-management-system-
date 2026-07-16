@@ -34,6 +34,7 @@ export default function BladeEntryGrid() {
     completeDialogOpen,
     completeErrors,
     setCellValue,
+    applyOcrResult,
     lockRowWeight,
     unlockRow,
     markRowSaving,
@@ -69,6 +70,7 @@ export default function BladeEntryGrid() {
       try {
         const result = await workOrderService.saveRow(workOrderNumber, row.s_no, {
           melt_number: row.melt_number,
+          ocr_melt_number: row.ocr_melt_number || null,
           raw_weight: row.raw_weight ? parseFloat(row.raw_weight) : null,
         });
         applyServerRow(result);
@@ -184,20 +186,32 @@ export default function BladeEntryGrid() {
   }, []);
 
   // ── OCR capture ──────────────────────────────────────────────────────────────
+  // Keeps the raw OCR detection (ocr_melt_number) separate from the editable
+  // ground-truth cell (melt_number) so the two can be compared later, and
+  // links the scanned image to this blade so it isn't an orphaned file.
   const handleOcrCapture = useCallback(
     async (file: File) => {
       const rowIndex = cameraTargetRow;
       if (rowIndex == null) return;
       try {
         const result = await ocrService.scanMelt(file);
-        const readyToSave = setCellValue(rowIndex, "melt_number", result.value);
+        const readyToSave = applyOcrResult(rowIndex, result.value);
+        const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
+        if (bladeId) {
+          ocrService
+            .attachScan(bladeId, result.scan_id, "melt_number", result.value, result.confidence)
+            .catch(() => {
+              // Non-fatal — the scanned value is already in the grid; losing the
+              // image link shouldn't block data entry.
+            });
+        }
         if (readyToSave) scheduleSave(rowIndex);
       } finally {
         setCameraTargetRow(null);
         nav.focusCell(rowIndex, "melt_number");
       }
     },
-    [cameraTargetRow, setCellValue, scheduleSave, nav]
+    [cameraTargetRow, applyOcrResult, scheduleSave, nav]
   );
 
   // ── Russian keyboard ─────────────────────────────────────────────────────────

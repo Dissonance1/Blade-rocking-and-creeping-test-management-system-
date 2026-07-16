@@ -15,8 +15,6 @@ export interface WorkOrderCreatePayload {
 export interface WorkOrderRowUpdatePayload {
   melt_number?: string | null;
   ocr_melt_number?: string | null;
-  ocr_mismatch_flag?: boolean | null;
-  ocr_mismatch_notes?: string | null;
   raw_weight?: number | null;
 }
 
