@@ -49,6 +49,32 @@ export const reportService = {
     window.URL.revokeObjectURL(url);
   },
 
+  /**
+   * Batch report export: one row per blade (slot, serial, melt, weight,
+   * static moment, rocking, and creep for LPTR work orders) — triggers
+   * the browser download directly, no Report DB row created.
+   */
+  exportBatchReport: async (workOrderNumber: string, fileFormat: "excel" | "pdf"): Promise<void> => {
+    const { data } = await api.get(
+      "/reports/export/batch",
+      { params: { work_order_number: workOrderNumber, format: fileFormat }, responseType: "blob" }
+    );
+    const mime =
+      fileFormat === "pdf"
+        ? "application/pdf"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const ext = fileFormat === "pdf" ? "pdf" : "xlsx";
+    const blob = new Blob([data as BlobPart], { type: mime });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `batch_report_${workOrderNumber}.${ext}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(url);
+  },
+
   /** Excel export of a batch's saved HPTR slot assignments (W1/W2 sheets) — triggers the browser download directly. */
   exportHptrSlots: async (batchNumber: string): Promise<void> => {
     const { data } = await api.post(

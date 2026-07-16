@@ -634,6 +634,390 @@ class ReportGenerator:
         return buf.getvalue()
 
     # ==================================================================
+    # Batch (work order) report — slot/serial/melt/weight/static moment/
+    # rocking/creep, one sheet or table, columns adapted to blade_type.
+    # ==================================================================
+
+    async def generate_batch_report_excel(
+        self,
+        work_order_number: str,
+        db: AsyncSession,
+    ) -> bytes:
+        """
+        Build a single-sheet Excel batch report for *work_order_number*.
+
+        Columns: Slot No., Serial No., Melt No., Weight (g),
+        Static Moment (g.cm), Rocking — plus Creep for LPTR work orders
+        only (HPTR blades never undergo creep testing).
+
+        Raises
+        ------
+        ValueError
+            If the work order doesn't exist or has no blades.
+        RuntimeError
+            If openpyxl isn't installed.
+        """
+        try:
+            import openpyxl  # type: ignore[import]
+            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+            from openpyxl.utils import get_column_letter
+        except ImportError as exc:
+            raise RuntimeError("openpyxl is required for Excel reports.") from exc
+
+        work_order, rows = await self._fetch_batch_report_rows(work_order_number, db)
+        blade_type = _ev(work_order.blade_type)
+        is_lptr = blade_type == "LPTR"
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"{blade_type} Batch Report"
+
+        headers = ["Slot No.", "Serial No.", "Melt No.", "Weight (g)", "Static Moment (g.cm)", "Rocking"]
+        if is_lptr:
+            headers.append("Creep")
+
+        ws.cell(row=1, column=1, value=f"Work Order {work_order_number} — {blade_type} Batch Report").font = Font(
+            bold=True, size=13
+        )
+        generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        ws.cell(row=2, column=1, value=f"Generated: {generated_at}  •  {len(rows)} blade(s)").font = Font(
+            italic=True, size=9, color="666666"
+        )
+
+        info_fields = [
+            ("Work Order Number", work_order.work_order_number),
+            ("Shop Order Number", work_order.shop_order_number),
+            ("Part Number", work_order.part_number),
+            ("Engine Number", work_order.engine_number or "—"),
+            ("Engine Hours", work_order.engine_hours),
+            ("Component Hours", work_order.component_hours or "—"),
+            ("Blade Type", blade_type),
+        ]
+        info_start_row = 4
+        for i, (label, value) in enumerate(info_fields):
+            r = info_start_row + i
+            ws.cell(row=r, column=1, value=label).font = Font(bold=True, size=10)
+            ws.cell(row=r, column=2, value=value)
+
+        header_row = info_start_row + len(info_fields) + 1
+        header_fill = PatternFill("solid", fgColor=_XL_HEADER_FILL)
+        header_font = Font(bold=True, color="FFFFFF")
+        thin = Side(style="thin", color="CCCCCC")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for col, h in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+
+        for row_idx, row in enumerate(rows, start=header_row + 1):
+            slot = row["slot_number"]
+            w = row["weight_grams"]
+            sm = row["static_moment_gcm"]
+            rv = row["rocking_value"]
+            cv = row["creep_value"]
+            values = [
+                int(slot) if slot is not None and str(slot).isdigit() else (slot or "—"),
+                row["serial_number"],
+                row["melt_number"],
+                round(float(w), 2) if w is not None else "—",
+                round(float(sm), 2) if sm is not None else "—",
+                round(float(rv), 4) if rv is not None else "—",
+            ]
+            if is_lptr:
+                values.append(round(float(cv), 4) if cv is not None else "—")
+            for col, value in enumerate(values, start=1):
+                cell = ws.cell(row=row_idx, column=col, value=value)
+                cell.border = border
+                if (row_idx - header_row) % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor=_XL_ALT_ROW_FILL)
+
+        for col in ws.columns:
+            max_len = max((len(str(c.value)) if c.value else 0 for c in col), default=0)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
+        ws.freeze_panes = f"A{header_row + 1}"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        logger.info(
+            "batch_report_excel_generated",
+            work_order_number=work_order_number,
+            blade_type=blade_type,
+            row_count=len(rows),
+        )
+        return buf.getvalue()
+
+    async def generate_batch_report_pdf(
+        self,
+        work_order_number: str,
+        db: AsyncSession,
+    ) -> bytes:
+        """
+        Build a single-table PDF batch report for *work_order_number*, with
+        the same columns as :meth:`generate_batch_report_excel`.
+        """
+        try:
+            from reportlab.lib import colors  # type: ignore[import]
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT  # type: ignore[import]
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore[import]
+            from reportlab.lib.units import cm
+            from reportlab.platypus import (
+                HRFlowable,
+                Paragraph,
+                SimpleDocTemplate,
+                Spacer,
+                Table,
+                TableStyle,
+            )
+        except ImportError as exc:
+            raise RuntimeError("reportlab is required for PDF reports.") from exc
+
+        work_order, rows = await self._fetch_batch_report_rows(work_order_number, db)
+        blade_type = _ev(work_order.blade_type)
+        is_lptr = blade_type == "LPTR"
+        generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        buf = io.BytesIO()
+        LEFT_M = RIGHT_M = 1.5 * cm
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=A4,
+            leftMargin=LEFT_M,
+            rightMargin=RIGHT_M,
+            topMargin=2.0 * cm,
+            bottomMargin=2.0 * cm,
+            title=f"Work Order {work_order_number} Batch Report",
+            author="Blade Management System",
+        )
+
+        base = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "BatchTitle", parent=base["Normal"], fontSize=16, leading=20,
+            fontName="Helvetica-Bold", textColor=colors.HexColor("#1F4E79"), spaceAfter=4,
+        )
+        subtitle_style = ParagraphStyle(
+            "BatchSubtitle", parent=base["Normal"], fontSize=9, leading=13,
+            textColor=colors.HexColor("#444444"), spaceAfter=8,
+        )
+        cell_style = ParagraphStyle(
+            "BatchCell", parent=base["Normal"], fontName="Helvetica", fontSize=8,
+            leading=12, splitLongWords=1, allowWidows=0,
+        )
+        cell_hdr = ParagraphStyle(
+            "BatchCellHdr", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=8,
+            leading=12, textColor=colors.white, alignment=TA_CENTER, splitLongWords=1,
+        )
+
+        def P(text: Any, center: bool = False) -> Paragraph:
+            s = str(text) if text not in (None, "", "None") else "—"
+            st = ParagraphStyle("BC", parent=cell_style, alignment=TA_CENTER if center else TA_LEFT)
+            return Paragraph(s, st)
+
+        def H(text: str) -> Paragraph:
+            return Paragraph(str(text), cell_hdr)
+
+        DARK_BLUE = colors.HexColor("#1F4E79")
+        ALT_ROW = colors.HexColor("#EEF4FA")
+        BORDER = colors.HexColor("#BBBBBB")
+
+        story: list[Any] = []
+        story.append(Paragraph("Blade Rocking &amp; Creep Test Management System", title_style))
+        story.append(Paragraph(
+            f"Work Order {work_order_number} &mdash; {blade_type} Batch Report &nbsp;&nbsp;&bull;&nbsp;&nbsp; "
+            f"Generated: <b>{generated_at}</b> &nbsp;&nbsp;&bull;&nbsp;&nbsp; Total blades: <b>{len(rows)}</b>",
+            subtitle_style,
+        ))
+        story.append(HRFlowable(width="100%", thickness=1.5, color=DARK_BLUE, spaceAfter=8))
+
+        info_fields = [
+            ("Work Order Number", work_order.work_order_number),
+            ("Shop Order Number", work_order.shop_order_number),
+            ("Part Number", work_order.part_number),
+            ("Engine Number", work_order.engine_number or "—"),
+            ("Engine Hours", work_order.engine_hours),
+            ("Component Hours", work_order.component_hours or "—"),
+            ("Blade Type", blade_type),
+        ]
+        info_rows = [[Paragraph(f"<b>{label}</b>", cell_style), P(value)] for label, value in info_fields]
+        info_tbl = Table(info_rows, colWidths=[4.5 * cm, 6.5 * cm])
+        info_tbl.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, ALT_ROW]),
+        ]))
+        story.append(info_tbl)
+        story.append(Spacer(1, 0.5 * cm))
+
+        headers = [H("Slot No."), H("Serial No."), H("Melt No."), H("Weight (g)"), H("Static Moment (g.cm)"), H("Rocking")]
+        col_widths = [2.0 * cm, 3.5 * cm, 3.0 * cm, 3.0 * cm, 3.5 * cm, 3.0 * cm]
+        if is_lptr:
+            headers.append(H("Creep"))
+            col_widths = [1.8 * cm, 3.0 * cm, 2.5 * cm, 2.5 * cm, 3.0 * cm, 2.6 * cm, 2.6 * cm]
+
+        table_rows: list[list[Any]] = [headers]
+        for row in rows:
+            slot = row["slot_number"]
+            w = row["weight_grams"]
+            sm = row["static_moment_gcm"]
+            rv = row["rocking_value"]
+            cv = row["creep_value"]
+            line = [
+                P(slot if slot is not None else "—", center=True),
+                P(row["serial_number"]),
+                P(row["melt_number"]),
+                P(f"{float(w):.2f}" if w is not None else "—", center=True),
+                P(f"{float(sm):.2f}" if sm is not None else "—", center=True),
+                P(f"{float(rv):.4f}" if rv is not None else "—", center=True),
+            ]
+            if is_lptr:
+                line.append(P(f"{float(cv):.4f}" if cv is not None else "—", center=True))
+            table_rows.append(line)
+
+        tbl = Table(table_rows, colWidths=col_widths, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.0, DARK_BLUE),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ALT_ROW]),
+            ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(tbl)
+
+        def _page_footer(canvas: Any, doc: Any) -> None:
+            canvas.saveState()
+            canvas.setFont("Helvetica", 7)
+            canvas.setFillColor(colors.HexColor("#888888"))
+            y = 1.2 * cm
+            canvas.drawString(LEFT_M, y, "Blade Rocking & Creep Test Management System")
+            canvas.drawCentredString(A4[0] / 2, y, "Confidential — Internal Use Only")
+            canvas.drawRightString(A4[0] - RIGHT_M, y, f"Page {canvas.getPageNumber()}  |  {generated_at}")
+            canvas.setStrokeColor(colors.HexColor("#CCCCCC"))
+            canvas.setLineWidth(0.5)
+            canvas.line(LEFT_M, y + 0.4 * cm, A4[0] - RIGHT_M, y + 0.4 * cm)
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
+        logger.info(
+            "batch_report_pdf_generated",
+            work_order_number=work_order_number,
+            blade_type=blade_type,
+            row_count=len(rows),
+        )
+        return buf.getvalue()
+
+    async def _fetch_batch_report_rows(
+        self,
+        work_order_number: str,
+        db: AsyncSession,
+    ) -> tuple[Any, list[dict]]:
+        """
+        Fetch one row per blade in *work_order_number*: active slot number,
+        serial number, melt number, and weight/static moment/rocking/creep
+        from each blade's most recent measurement.
+
+        Rows are sorted by numeric slot number where assigned, falling back
+        to serial number for unassigned blades.
+
+        Returns
+        -------
+        tuple[WorkOrder, list[dict]]
+
+        Raises
+        ------
+        ValueError
+            If the work order doesn't exist or has no blades.
+        """
+        from app.models.blade import Blade
+        from app.models.measurement import Measurement
+        from app.models.slot_allocation import SlotAllocation
+        from app.models.work_order import WorkOrder
+
+        work_order = (
+            await db.execute(select(WorkOrder).where(WorkOrder.work_order_number == work_order_number))
+        ).scalar_one_or_none()
+        if work_order is None:
+            raise ValueError(f"Work Order '{work_order_number}' not found")
+
+        blades = list(
+            (
+                await db.execute(
+                    select(Blade)
+                    .where(Blade.work_order_number == work_order_number, Blade.deleted_at.is_(None))
+                    .order_by(Blade.serial_number)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not blades:
+            raise ValueError(f"Work Order '{work_order_number}' has no blades")
+
+        blade_ids = [b.id for b in blades]
+
+        slot_rows = (
+            await db.execute(
+                select(SlotAllocation.blade_id, SlotAllocation.slot_number).where(
+                    SlotAllocation.blade_id.in_(blade_ids), SlotAllocation.is_active.is_(True)
+                )
+            )
+        ).all()
+        slot_map = {r.blade_id: r.slot_number for r in slot_rows}
+
+        subq = (
+            select(Measurement.blade_id, func.max(Measurement.measured_at).label("latest_at"))
+            .where(Measurement.blade_id.in_(blade_ids))
+            .group_by(Measurement.blade_id)
+            .subquery()
+        )
+        meas_rows = (
+            await db.execute(
+                select(
+                    Measurement.blade_id,
+                    Measurement.weight_grams,
+                    Measurement.static_moment_gcm,
+                    Measurement.rocking_value,
+                    Measurement.creep_value,
+                ).join(
+                    subq,
+                    (Measurement.blade_id == subq.c.blade_id) & (Measurement.measured_at == subq.c.latest_at),
+                )
+            )
+        ).all()
+        meas_map = {r.blade_id: r for r in meas_rows}
+
+        def _slot_sort_key(blade: Any) -> tuple:
+            slot = slot_map.get(blade.id)
+            if slot is not None and str(slot).isdigit():
+                return (0, int(slot))
+            return (1, blade.serial_number)
+
+        rows: list[dict] = []
+        for blade in sorted(blades, key=_slot_sort_key):
+            meas = meas_map.get(blade.id)
+            rows.append({
+                "slot_number": slot_map.get(blade.id),
+                "serial_number": blade.serial_number,
+                "melt_number": blade.melt_number,
+                "weight_grams": meas.weight_grams if meas else None,
+                "static_moment_gcm": meas.static_moment_gcm if meas else None,
+                "rocking_value": meas.rocking_value if meas else None,
+                "creep_value": meas.creep_value if meas else None,
+            })
+
+        return work_order, rows
+
+    # ==================================================================
     # Dashboard summary
     # ==================================================================
 

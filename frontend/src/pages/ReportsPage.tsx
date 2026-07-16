@@ -1,8 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useForm, Controller } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import {
   FileText,
   FileSpreadsheet,
@@ -15,49 +12,23 @@ import {
   Clock,
   AlertCircle,
   BarChart3,
+  Search,
+  Package,
 } from "lucide-react";
 import { NotepadIcon } from "@/components/common/CustomIcons";
-import { format, parseISO, subDays } from "date-fns";
+import { format, parseISO } from "date-fns";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 import { reportService } from "@/services/reportService";
+import { batchService, type BatchSummary } from "@/services/batchService";
 import { extractApiError } from "@/services/api";
-import type { BladeStatus, Report, ReportStatus } from "@/types";
+import type { Report, ReportStatus } from "@/types";
 import { cn } from "@/utils/cn";
-
-// ─── Schema ───────────────────────────────────────────────────────────────────
-
-const reportSchema = z.object({
-  report_type: z.enum(["PDF", "EXCEL"]),
-  date_from: z.string().min(1, "Start date required"),
-  date_to: z.string().min(1, "End date required"),
-  statuses: z.array(z.string()).default([]),
-  include_rejected: z.boolean().default(false),
-});
-
-type ReportFormValues = z.infer<typeof reportSchema>;
-
-// ─── Status options ───────────────────────────────────────────────────────────
-
-const ALL_STATUSES: { value: BladeStatus; label: string }[] = [
-  { value: "CREATED", label: "Created" },
-  { value: "OH_INSPECTION", label: "OH Inspection" },
-  { value: "MEASUREMENTS_RECORDED", label: "Measurements Recorded" },
-  { value: "SENT_TO_ASSEMBLY", label: "Sent to Assembly" },
-  { value: "SLOT_ASSIGNED", label: "Slot Assigned" },
-  { value: "BALANCING_IN_PROGRESS", label: "Balancing In Progress" },
-  { value: "BALANCING_COMPLETED", label: "Balancing Completed" },
-  { value: "COMPLETED", label: "Completed" },
-  { value: "REJECTED", label: "Rejected" },
-];
 
 // ─── Report status badge ──────────────────────────────────────────────────────
 
@@ -97,6 +68,22 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function BladeTypeBadge({ bladeType }: { bladeType: "LPTR" | "HPTR" | null }) {
+  if (!bladeType) return null;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+        bladeType === "HPTR"
+          ? "bg-blue-500/15 text-blue-600 dark:text-blue-300"
+          : "bg-purple-500/15 text-purple-600 dark:text-purple-300"
+      )}
+    >
+      {bladeType}
+    </span>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
@@ -116,60 +103,41 @@ export default function ReportsPage() {
   });
   const reports: Report[] = reportsData?.items ?? [];
 
-  const {
-    register,
-    handleSubmit,
-    control,
-    watch,
-    formState: { errors },
-  } = useForm<ReportFormValues>({
-    resolver: zodResolver(reportSchema),
-    defaultValues: {
-      report_type: "PDF",
-      date_from: format(subDays(new Date(), 30), "yyyy-MM-dd"),
-      date_to: format(new Date(), "yyyy-MM-dd"),
-      statuses: [],
-      include_rejected: false,
-    },
-  });
-
-  const selectedStatuses = watch("statuses");
-  const reportType = watch("report_type");
-
-  const generateMutation = useMutation({
-    mutationFn: (values: ReportFormValues) =>
-      reportService.generate({
-        name: `${values.report_type} Report`,
-        report_type: values.report_type,
-        filter_params: {
-          date_from: values.date_from,
-          date_to: values.date_to,
-          status: values.statuses as BladeStatus[],
-          include_rejected: values.include_rejected,
-        },
-      }),
-    onSuccess: (_report) => {
-      queryClient.invalidateQueries({ queryKey: ["reports"] });
-      setActiveTab("my-reports");
-    },
-  });
-
   const deleteMutation = useMutation({
     mutationFn: (id: string) => reportService.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reports"] }),
   });
 
-  const toggleStatus = (
-    status: BladeStatus,
-    currentValues: string[],
-    onChange: (v: string[]) => void
-  ) => {
-    if (currentValues.includes(status)) {
-      onChange(currentValues.filter((s) => s !== status));
-    } else {
-      onChange([...currentValues, status]);
-    }
-  };
+  // ─── Batch report state ────────────────────────────────────────────────────
+
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<"excel" | "pdf">("excel");
+
+  const { data: batches = [], isLoading: batchesLoading } = useQuery({
+    queryKey: ["batches-for-report"],
+    queryFn: () => batchService.list(),
+  });
+
+  const filteredBatches = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return batches;
+    return batches.filter(
+      (b: BatchSummary) =>
+        b.work_order_number.toLowerCase().includes(term) ||
+        (b.part_number ?? "").toLowerCase().includes(term) ||
+        (b.nomenclature ?? "").toLowerCase().includes(term)
+    );
+  }, [batches, searchTerm]);
+
+  const selectedBatch = batches.find((b) => b.work_order_number === selectedWorkOrder) ?? null;
+
+  const exportMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedWorkOrder) throw new Error("Select a batch first");
+      return reportService.exportBatchReport(selectedWorkOrder, exportFormat);
+    },
+  });
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -194,7 +162,7 @@ export default function ReportsPage() {
                 value="generate"
                 className="shrink-0 rounded-lg data-[state=active]:bg-orange-500 data-[state=active]:text-white text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700"
               >
-                Generate Report
+                Batch Report
               </TabsTrigger>
               <TabsTrigger
                 value="my-reports"
@@ -210,200 +178,170 @@ export default function ReportsPage() {
             </TabsList>
           </div>
 
-          {/* Generate tab */}
+          {/* Batch Report tab */}
           <TabsContent value="generate">
-            <form onSubmit={handleSubmit((v) => generateMutation.mutate(v))}>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left: form */}
-                <div className="lg:col-span-2 space-y-5">
-                  {/* Report type */}
-                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3 px-4 sm:px-6">
-                      <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Report Format</CardTitle>
-                    </CardHeader>
-                    <CardContent className="px-4 sm:px-6">
-                      <Controller
-                        control={control}
-                        name="report_type"
-                        render={({ field }) => (
-                          <div className="flex flex-col sm:flex-row gap-3">
-                            {(["PDF", "EXCEL"] as const).map((type) => (
-                              <button
-                                key={type}
-                                type="button"
-                                onClick={() => field.onChange(type)}
-                                className={cn(
-                                  "flex flex-1 items-center gap-3 rounded-xl border-2 px-4 py-3 transition-colors",
-                                  field.value === type
-                                    ? "border-orange-500 bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300"
-                                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
-                                )}
-                              >
-                                {type === "PDF" ? (
-                                  <FileText className="w-5 h-5" />
-                                ) : (
-                                  <FileSpreadsheet className="w-5 h-5" />
-                                )}
-                                <div className="text-left">
-                                  <p className="font-semibold text-sm">{type}</p>
-                                  <p className="text-xs opacity-70">
-                                    {type === "PDF" ? "Printable report" : "Excel spreadsheet"}
-                                  </p>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left: search + batch list */}
+              <div className="lg:col-span-2 space-y-5">
+                <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <CardHeader className="pb-3 px-4 sm:px-6">
+                    <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">
+                      Select Batch (Work Order)
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 sm:px-6 space-y-3">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Input
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Search by work order, part number, or nomenclature…"
+                        className="pl-9 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                       />
-                    </CardContent>
-                  </Card>
+                    </div>
 
-                  {/* Date range */}
-                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3 px-4 sm:px-6">
-                      <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Date Range</CardTitle>
-                    </CardHeader>
-                    <CardContent className="px-4 sm:px-6">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-1.5">
-                          <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">From</Label>
-                          <Input
-                            type="date"
-                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
-                            {...register("date_from")}
-                          />
-                          {errors.date_from && (
-                            <p className="text-red-500 dark:text-red-400 text-xs">{errors.date_from.message}</p>
-                          )}
+                    <div className="max-h-[26rem] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700/60 divide-y divide-slate-200 dark:divide-slate-700/50">
+                      {batchesLoading ? (
+                        <div className="flex items-center justify-center py-12 text-slate-400 dark:text-slate-500">
+                          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                          Loading batches…
                         </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-slate-600 dark:text-slate-300 text-sm font-medium">To</Label>
-                          <Input
-                            type="date"
-                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
-                            {...register("date_to")}
-                          />
-                          {errors.date_to && (
-                            <p className="text-red-500 dark:text-red-400 text-xs">{errors.date_to.message}</p>
-                          )}
+                      ) : filteredBatches.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-slate-500">
+                          <Package className="w-10 h-10 mb-2 opacity-20" />
+                          <p className="text-sm font-medium">No batches match your search</p>
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      ) : (
+                        filteredBatches.map((batch) => (
+                          <button
+                            key={batch.work_order_number}
+                            type="button"
+                            onClick={() => setSelectedWorkOrder(batch.work_order_number)}
+                            className={cn(
+                              "w-full text-left px-4 py-3 flex items-center justify-between gap-3 transition-colors",
+                              selectedWorkOrder === batch.work_order_number
+                                ? "bg-orange-50 dark:bg-orange-500/10"
+                                : "hover:bg-slate-50 dark:hover:bg-slate-700/30"
+                            )}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-900 dark:text-white truncate">
+                                  {batch.work_order_number}
+                                </span>
+                                <BladeTypeBadge bladeType={batch.blade_type} />
+                              </div>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                {batch.part_number ?? "—"}
+                                {batch.nomenclature ? ` · ${batch.nomenclature}` : ""}
+                              </p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                {batch.rows_complete_count}/{batch.blade_count} entered
+                              </p>
+                              <p className="text-xs text-slate-400 dark:text-slate-500">
+                                {batch.current_status_label}
+                              </p>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
 
-                  {/* Status filter */}
-                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3 px-4 sm:px-6">
-                      <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">
-                        Status Filter{" "}
-                        <span className="text-slate-400 dark:text-slate-500 font-normal text-xs ml-1">
-                          (leave empty for all)
-                        </span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="px-4 sm:px-6">
-                      <Controller
-                        control={control}
-                        name="statuses"
-                        render={({ field }) => (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {ALL_STATUSES.map((s) => (
-                              <label
-                                key={s.value}
-                                className="flex items-center gap-2.5 cursor-pointer rounded-xl border border-slate-200 dark:border-slate-700/50 px-3 py-2 hover:border-slate-300 dark:hover:border-slate-600 transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30"
-                              >
-                                <Checkbox
-                                  checked={field.value.includes(s.value)}
-                                  onCheckedChange={() =>
-                                    toggleStatus(s.value, field.value, field.onChange)
-                                  }
-                                />
-                                <span className="text-slate-700 dark:text-slate-300 text-sm">{s.label}</span>
-                              </label>
-                            ))}
+              {/* Right: format + preview + submit */}
+              <div className="space-y-5">
+                <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
+                  <CardHeader className="pb-3 px-4 sm:px-6">
+                    <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Report Format</CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 sm:px-6">
+                    <div className="flex flex-col gap-3">
+                      {(["excel", "pdf"] as const).map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => setExportFormat(type)}
+                          className={cn(
+                            "flex items-center gap-3 rounded-xl border-2 px-4 py-3 transition-colors",
+                            exportFormat === type
+                              ? "border-orange-500 bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300"
+                              : "border-slate-200 dark:border-slate-700 bg-white dark:bg-background text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600"
+                          )}
+                        >
+                          {type === "pdf" ? (
+                            <FileText className="w-5 h-5" />
+                          ) : (
+                            <FileSpreadsheet className="w-5 h-5" />
+                          )}
+                          <div className="text-left">
+                            <p className="font-semibold text-sm">{type === "pdf" ? "PDF" : "Excel"}</p>
+                            <p className="text-xs opacity-70">
+                              {type === "pdf" ? "Printable report" : "Excel spreadsheet"}
+                            </p>
                           </div>
-                        )}
-                      />
-                    </CardContent>
-                  </Card>
-                </div>
+                        </button>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
 
-                {/* Right: options + submit */}
-                <div className="space-y-5">
-                  <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 rounded-xl shadow-sm">
-                    <CardHeader className="pb-3 px-4 sm:px-6">
-                      <CardTitle className="text-slate-900 dark:text-white text-sm font-semibold">Options</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 px-4 sm:px-6">
-                      <Controller
-                        control={control}
-                        name="include_rejected"
-                        render={({ field }) => (
-                          <div className="flex items-center justify-between gap-3">
-                            <Label className="text-slate-600 dark:text-slate-300 text-sm cursor-pointer">
-                              Include Rejected Blades
-                            </Label>
-                            <Switch
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </div>
-                        )}
-                      />
-                    </CardContent>
-                  </Card>
-
-                  {/* Summary preview */}
-                  <Card className="bg-slate-800 dark:bg-background border border-slate-700 dark:border-slate-700/60 rounded-xl">
-                    <CardContent className="p-4 space-y-2 text-sm">
-                      <p className="text-slate-400 text-xs font-medium uppercase tracking-wide">
-                        Report Preview
-                      </p>
-                      <div className="flex items-center gap-2">
-                        {reportType === "PDF" ? (
-                          <FileText className="w-4 h-4 text-red-400" />
-                        ) : (
-                          <FileSpreadsheet className="w-4 h-4 text-green-400" />
-                        )}
-                        <span className="text-white font-medium">{reportType} Report</span>
-                      </div>
-                      <p className="text-slate-400 text-xs">
-                        {selectedStatuses.length === 0
-                          ? "All statuses"
-                          : `${selectedStatuses.length} status(es) selected`}
-                      </p>
-                    </CardContent>
-                  </Card>
-
-                  {generateMutation.isError && (
-                    <Alert variant="destructive" className="border-red-500/50 bg-red-50 dark:bg-red-500/10">
-                      <AlertCircle className="h-4 w-4 text-red-500" />
-                      <AlertDescription className="text-red-700 dark:text-red-300">
-                        {extractApiError(generateMutation.error)}
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  <Button
-                    type="submit"
-                    disabled={generateMutation.isPending}
-                    className="w-full bg-orange-500 hover:bg-orange-600 text-white shadow-md shadow-orange-200 dark:shadow-orange-900/30"
-                  >
-                    {generateMutation.isPending ? (
+                {/* Selected batch preview */}
+                <Card className="bg-slate-800 dark:bg-background border border-slate-700 dark:border-slate-700/60 rounded-xl">
+                  <CardContent className="p-4 space-y-2 text-sm">
+                    <p className="text-slate-400 text-xs font-medium uppercase tracking-wide">
+                      Report Preview
+                    </p>
+                    {selectedBatch ? (
                       <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Generating…
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-medium">{selectedBatch.work_order_number}</span>
+                          <BladeTypeBadge bladeType={selectedBatch.blade_type} />
+                        </div>
+                        <p className="text-slate-400 text-xs">
+                          {selectedBatch.blade_count} blade(s) · Slot No., Serial No., Melt No., Weight,
+                          Static Moment, Rocking
+                          {selectedBatch.blade_type === "LPTR" ? ", Creep" : ""}
+                        </p>
                       </>
                     ) : (
-                      <>
-                        <BarChart3 className="w-4 h-4" />
-                        Generate Report
-                      </>
+                      <p className="text-slate-400 text-xs">Select a batch on the left to preview.</p>
                     )}
-                  </Button>
-                </div>
+                  </CardContent>
+                </Card>
+
+                {exportMutation.isError && (
+                  <Alert variant="destructive" className="border-red-500/50 bg-red-50 dark:bg-red-500/10">
+                    <AlertCircle className="h-4 w-4 text-red-500" />
+                    <AlertDescription className="text-red-700 dark:text-red-300">
+                      {extractApiError(exportMutation.error)}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <Button
+                  type="button"
+                  disabled={!selectedWorkOrder || exportMutation.isPending}
+                  onClick={() => exportMutation.mutate()}
+                  className="w-full bg-orange-500 hover:bg-orange-600 text-white shadow-md shadow-orange-200 dark:shadow-orange-900/30"
+                >
+                  {exportMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <BarChart3 className="w-4 h-4" />
+                      Generate &amp; Download
+                    </>
+                  )}
+                </Button>
               </div>
-            </form>
+            </div>
           </TabsContent>
 
           {/* My reports tab */}
@@ -430,7 +368,7 @@ export default function ReportsPage() {
                   <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
                     <BarChart3 className="w-12 h-12 mb-3 opacity-20" />
                     <p className="font-medium">No reports yet</p>
-                    <p className="text-sm mt-1">Generate your first report above</p>
+                    <p className="text-sm mt-1">Generate a batch report above</p>
                   </div>
                 ) : (
                   <div className="overflow-x-auto">

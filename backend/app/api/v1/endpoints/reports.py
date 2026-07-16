@@ -6,6 +6,7 @@ GET  /reports/                     — list user's generated reports
 GET  /reports/{report_id}          — get report status/metadata
 GET  /reports/{report_id}/download — stream report file download
 POST /reports/export/blades        — synchronous Excel export for small blade sets
+GET  /reports/export/batch         — synchronous Excel/PDF export of one work order (batch)
 """
 
 from __future__ import annotations
@@ -520,6 +521,75 @@ async def export_blades_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": 'attachment; filename="blade_export.xlsx"',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /export/batch
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/export/batch",
+    status_code=status.HTTP_200_OK,
+    summary="Synchronous batch (work order) export: slot, serial, melt, weight, static moment, rocking/creep",
+    responses={
+        200: {
+            "content": {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                "application/pdf": {},
+            },
+            "description": "Excel or PDF file with one row per blade in the work order",
+        }
+    },
+)
+async def export_batch_report(
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    work_order_number: str = Query(..., description="Work order (batch) number to export"),
+    export_format: str = Query(
+        "excel", alias="format", pattern="^(excel|pdf)$", description="Output format: excel or pdf"
+    ),
+) -> StreamingResponse:
+    """
+    Generate and immediately return a batch report for *work_order_number*:
+    one row per blade with Slot No., Serial No., Melt No., Weight, Static
+    Moment, Rocking, and (for LPTR work orders only) Creep.
+
+    Raises:
+        HTTP 400 — openpyxl/reportlab not available.
+        HTTP 404 — work order not found or has no blades.
+    """
+    from app.reports.generator import ReportGenerator
+
+    generator = ReportGenerator()
+    try:
+        if export_format == "pdf":
+            content = await generator.generate_batch_report_pdf(work_order_number, db)
+            media_type = "application/pdf"
+            ext = "pdf"
+        else:
+            content = await generator.generate_batch_report_excel(work_order_number, db)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ext = "xlsx"
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    logger.info(
+        "batch_report_exported",
+        user_id=str(current_user.id),
+        work_order_number=work_order_number,
+        format=export_format,
+    )
+
+    return StreamingResponse(
+        content=iter([content]),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="batch_report_{work_order_number}.{ext}"',
         },
     )
 
