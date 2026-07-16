@@ -308,6 +308,10 @@ async def export_training_dataset(
     work_order_number: str | None = Query(default=None, description="Only scans on blades in this work order"),
     date_from: date | None = Query(default=None, description="Only scans captured on/after this date"),
     date_to: date | None = Query(default=None, description="Only scans captured on/before this date"),
+    mismatches_only: bool = Query(
+        default=False,
+        description="Only include scans where the OCR detection disagreed with what the operator confirmed — the highest-value cases for retraining",
+    ),
 ) -> StreamingResponse:
     """
     Bundle every saved OCR scan of *field_name* into a ZIP: the raw images
@@ -315,6 +319,11 @@ async def export_training_dataset(
     image — ``detected_text``/``confidence`` (what the OCR read at scan
     time) alongside ``ground_truth`` (the blade's current confirmed value)
     — ready to feed into OCR fine-tuning or accuracy evaluation.
+
+    ``mismatches_only=true`` narrows this to exactly the cases where the
+    model got it wrong (``Blade.ocr_mismatch_flag``) — the operator's
+    correction is the ground truth, so these are the examples worth
+    retraining on to stop the model repeating the same mistake.
 
     Only scans that were linked to a blade via ``POST
     /blades/{blade_id}/attach-ocr-scan`` are included; orphaned scan files
@@ -346,6 +355,8 @@ async def export_training_dataset(
         )
     if work_order_number:
         conditions.append(Blade.work_order_number == work_order_number)
+    if mismatches_only:
+        conditions.append(Blade.ocr_mismatch_flag.is_(True))
 
     stmt = (
         select(Attachment, Blade)
@@ -374,6 +385,7 @@ async def export_training_dataset(
                 "detected_text": attachment.ocr_detected_text,
                 "confidence": attachment.ocr_confidence,
                 "ground_truth": ground_truth,
+                "was_mismatch": blade.ocr_mismatch_flag,
                 "field_name": field_name,
                 "blade_id": str(blade.id),
                 "work_order_number": blade.work_order_number,
@@ -389,14 +401,16 @@ async def export_training_dataset(
         user_id=str(current_user.id),
         field_name=field_name,
         work_order_number=work_order_number,
+        mismatches_only=mismatches_only,
         included=included,
         skipped=skipped,
     )
 
+    suffix = "_mismatches" if mismatches_only else ""
     return StreamingResponse(
         content=iter([buf.getvalue()]),
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="ocr_training_dataset_{field_name}.zip"',
+            "Content-Disposition": f'attachment; filename="ocr_training_dataset_{field_name}{suffix}.zip"',
         },
     )

@@ -14,6 +14,8 @@ import {
   Eye,
   EyeOff,
   Shield,
+  Download,
+  ScanLine,
 } from "lucide-react";
 import { SettingsIcon } from "@/components/common/CustomIcons";
 
@@ -28,6 +30,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 import { useAuthStore } from "@/store/authStore";
 import { authService } from "@/services/authService";
+import { ocrService } from "@/services/ocrService";
 
 import api, { extractApiError } from "@/services/api";
 import type { User } from "@/types";
@@ -109,6 +112,12 @@ export default function SettingsPage() {
     rejections: true,
     assignments: true,
     system: false,
+  });
+
+  // OCR training dataset download
+  const [mismatchesOnly, setMismatchesOnly] = useState(true);
+  const datasetMutation = useMutation({
+    mutationFn: () => ocrService.downloadTrainingDataset("melt_number", mismatchesOnly),
   });
 
   // Profile form
@@ -463,6 +472,61 @@ export default function SettingsPage() {
                   </p>
                 </div>
                 <Switch defaultChecked />
+              </div>
+            </div>
+          </Section>
+        )}
+
+        {/* OCR training dataset download — SUPER_ADMIN only */}
+        {hasRole("SUPER_ADMIN") && (
+          <Section
+            icon={<ScanLine className="w-3.5 h-3.5 text-white" />}
+            title="OCR Training Dataset"
+            description="Download captured melt-number scans (image + OCR detection + operator-confirmed ground truth) for retraining"
+            accentColor="bg-purple-500"
+          >
+            <div className="space-y-4">
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <p className="text-slate-900 dark:text-white text-sm font-medium">Mismatches only</p>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">
+                    Only include scans where the OCR detection disagreed with what the operator
+                    entered — the cases worth retraining on
+                  </p>
+                </div>
+                <Switch checked={mismatchesOnly} onCheckedChange={setMismatchesOnly} />
+              </div>
+
+              <Separator className="bg-slate-200 dark:bg-slate-700/50" />
+
+              {datasetMutation.isError && (
+                <Alert variant="destructive" className="border-red-500/50 bg-red-50 dark:bg-red-500/10">
+                  <AlertCircle className="h-4 w-4 text-red-500" />
+                  <AlertDescription className="text-red-700 dark:text-red-300">
+                    {extractApiError(datasetMutation.error)}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  onClick={() => datasetMutation.mutate()}
+                  disabled={datasetMutation.isPending}
+                  className="bg-purple-500 hover:bg-purple-600 text-white"
+                >
+                  {datasetMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  Download Dataset (.zip)
+                </Button>
+                {datasetMutation.isSuccess && (
+                  <span className="text-emerald-500 text-sm flex items-center gap-1">
+                    <Check className="w-4 h-4" /> Downloaded!
+                  </span>
+                )}
               </div>
             </div>
           </Section>

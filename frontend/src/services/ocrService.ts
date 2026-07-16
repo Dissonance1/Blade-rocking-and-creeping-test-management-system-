@@ -41,4 +41,32 @@ export const ocrService = {
       confidence,
     });
   },
+
+  /**
+   * Download the OCR training dataset ZIP (images + manifest.jsonl pairing
+   * detected_text/confidence with the operator-confirmed ground truth).
+   * Set mismatchesOnly to pull just the cases where the model got it wrong.
+   */
+  downloadTrainingDataset: async (
+    fieldName: string,
+    mismatchesOnly: boolean
+  ): Promise<void> => {
+    const { data, headers } = await api.get("/ocr/training-dataset", {
+      params: { field_name: fieldName, mismatches_only: mismatchesOnly },
+      responseType: "blob",
+    });
+    const contentDisp = (headers["content-disposition"] as string) ?? "";
+    const nameMatch = contentDisp.match(/filename="?([^";\n]+)"?/);
+    const downloadName = nameMatch?.[1] ?? `ocr_training_dataset_${fieldName}.zip`;
+
+    const blob = new Blob([data as BlobPart], { type: "application/zip" });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = downloadName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(url);
+  },
 };
