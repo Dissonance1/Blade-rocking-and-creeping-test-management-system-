@@ -38,6 +38,21 @@ export function oppositeSlot(slot: number, totalSlots: number = HPTR_TOTAL_SLOTS
 }
 
 /**
+ * `slot` shifted by `delta` positions, wrapping within that slot's own
+ * 45-slot half (W1 or W2) rather than the full rotor — e.g. shifting slot
+ * 46 (W2's first slot) by -1 wraps to slot 90 (W2's last), not into W1.
+ * Used by the cross-swap exact-opposite tier to generate the `±size`
+ * neighbor candidates around a block's base opposite.
+ */
+function shiftWithinHalf(slot: number, delta: number, totalSlots: number): number {
+  const half = totalSlots / 2;
+  const base = slot <= half ? 1 : half + 1;
+  const ord = slot - base;
+  const newOrd = ((ord + delta) % half + half) % half;
+  return base + newOrd;
+}
+
+/**
  * Steps 1-2: sort by weight descending. The anchor pair (i = 0) takes the
  * true heaviest + true lightest. Every pair after that takes the next two
  * ranks in sequence from the heavy end (rank 2 & 3, then 4 & 5, ...) —
@@ -224,6 +239,8 @@ export interface SwapSuggestion {
   meetsTarget: boolean;
   /** True if reaching the target required dipping into the protected near-anchor pairs. */
   usedNearPairs: boolean;
+  /** True if Step 1 (line-swap) was ineligible/insufficient and Step 2 (cross-swap) had to be used instead. */
+  usedCrossSwap: boolean;
 }
 
 /**
@@ -316,7 +333,7 @@ function computeLineSwapSuggestion(
         bladeBSerial: bySlot.get(lightSlot)!.blade.serial_number,
       };
     });
-    return { flips, resultingDiff: adjustedDiff, meetsTarget: meets, usedNearPairs };
+    return { flips, resultingDiff: adjustedDiff, meetsTarget: meets, usedNearPairs, usedCrossSwap: false };
   }
 
   /**
@@ -395,13 +412,26 @@ function computeLineSwapSuggestion(
   return search(allPairIndices.filter((i) => i > 0), true);
 }
 
-/** The anchor pair + the NEAR_PAIR_COUNT nearest pairs — 14 slots (7 pairs) fully protected during Step 2, never just a fallback tier. */
+/**
+ * The anchor pair (`startSlot` and its opposite) plus, for each of the
+ * NEAR_PAIR_COUNT physical slots immediately before and after `startSlot`,
+ * that slot's own opposite too — 26 slots total, forming two symmetric
+ * 13-slot clusters: one centered on `startSlot` itself, one centered on its
+ * opposite. E.g. for startSlot=10 (opposite 55, totalSlots=90) this
+ * protects {4..16} (13 slots centered on 10) and {49..61} (13 slots
+ * centered on 55).
+ */
 function protectedSlotsForCrossSwap(startSlot: number, totalSlots: number): Set<number> {
   const protectedSet = new Set<number>();
-  for (let i = 0; i <= NEAR_PAIR_COUNT; i++) {
-    const slotA = ((startSlot - 1 + i) % totalSlots) + 1;
-    protectedSet.add(slotA);
-    protectedSet.add(oppositeSlot(slotA, totalSlots));
+  protectedSet.add(startSlot);
+  protectedSet.add(oppositeSlot(startSlot, totalSlots));
+  for (let d = 1; d <= NEAR_PAIR_COUNT; d++) {
+    const before = ((startSlot - 1 - d + totalSlots) % totalSlots) + 1;
+    const after = ((startSlot - 1 + d) % totalSlots) + 1;
+    protectedSet.add(before);
+    protectedSet.add(oppositeSlot(before, totalSlots));
+    protectedSet.add(after);
+    protectedSet.add(oppositeSlot(after, totalSlots));
   }
   return protectedSet;
 }
@@ -414,21 +444,48 @@ interface CrossSwapResult {
 }
 
 /**
+ * A 1- or 2-blade swap that shifts the W1/W2 diff by more than this is
+ * physically unsound on the rotor even when the resulting number lands in
+ * the 1.5-2.0 g band — a small swap that big is rejected below in favor of
+ * a continuous 3+ block that reaches the same target more gently. Below
+ * this threshold a small 1- or 2-blade swap is fine on its own.
+ */
+const MAX_SMALL_BLOCK_SWAP_DELTA_G = 1.0;
+
+/**
  * Step 2 ("cross-swap"): only attempted when Step 1 (line-swap) cannot
  * reach the target band on its own. Exchanges a block of consecutive slots
- * in one half with a block of consecutive slots in the other half — unlike
- * a line-swap flip, the two blocks are NOT required to be each other's
- * exact opposite, which is what lets this reach diffs a line-swap
- * structurally cannot (every non-anchor line-swap pair holds two
- * adjacent-ranked, near-identical-weight blades, so flipping them barely
- * moves the W1/W2 gap).
+ * in one half with a block of consecutive slots in the other half — this is
+ * what lets it reach diffs a line-swap structurally cannot (every non-anchor
+ * line-swap pair holds two adjacent-ranked, near-identical-weight blades, so
+ * flipping them barely moves the W1/W2 gap).
  *
- * Searches block sizes starting at 1 (fewest blades touched) and, for each
- * size, every valid (still-consecutive-in-slot-number, fully unprotected)
- * window in each half, picking whichever reaches the target band closest
- * to its middle. Stops at the first size with any valid candidate — the
- * smallest possible disruption that works. Never touches the anchor pair
- * or the 6 nearest pairs (14 blades total).
+ * Two tiers, in priority order:
+ *   1. Exact-opposite: the block's own opposite (every slot's true opposite,
+ *      same as a line-swap flip but applied to several consecutive slots at
+ *      once), PLUS that same opposite shifted by ±(block size) — wrapped
+ *      within the other half's own 45-slot range, not the full rotor. E.g.
+ *      for block [1,2,3] (size 3), the opposite is [46,47,48]; the two
+ *      shifted neighbors are [49,50,51] (+3) and [88,89,90] (-3, wrapped).
+ *      All three still count as "exact-opposite," not fallback.
+ *   2. Fallback: only reached if no block size in tier 1 finds a candidate
+ *      reaching the target. Here the block may swap with a different
+ *      same-size block elsewhere in the other half, not necessarily its
+ *      opposite (or its ±size neighbors) — a last resort when the
+ *      opposite-family search comes up dry.
+ *
+ * Within each tier, block sizes are tried in this order: 3, 4, 5, ... up to
+ * the pool limit, THEN 2, THEN 1 — a continuous multi-blade (3+) swap is
+ * preferred over a 1- or 2-blade swap even if the smaller one would also
+ * reach the target, since disturbing just one or two blades for a large
+ * correction is physically disruptive. A 1- or 2-blade candidate is only
+ * ever accepted (whichever tier, whichever position in the size order) when
+ * it shifts the diff by `MAX_SMALL_BLOCK_SWAP_DELTA_G` or less — i.e. it's
+ * reached either because the correction needed really is that small, or as
+ * an absolute last resort after every 3+ size failed in both tiers. Among
+ * same-size candidates, whichever lands closest to the middle of the target
+ * band wins. Never touches the anchor pair or the 6 nearest pairs (14
+ * blades total).
  */
 function attemptCrossSwap(
   entries: HptrAllocationEntry[],
@@ -452,6 +509,7 @@ function attemptCrossSwap(
     if (s <= half) w1Slots.push(s);
     else w2Slots.push(s);
   }
+  const w2Set = new Set(w2Slots);
 
   function evaluateSum(deltaSum: number) {
     const signedDiff = currentSignedDiff + deltaSum;
@@ -472,60 +530,106 @@ function attemptCrossSwap(
   }
 
   const maxBlockSize = Math.min(20, w1Slots.length, w2Slots.length);
+  const w2WindowsBySize = new Map<number, number[][]>();
 
-  for (let size = 1; size <= maxBlockSize; size++) {
-    const w1Windows = windows(w1Slots, size);
-    const w2Windows = windows(w2Slots, size);
-    let best: { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean } | null = null;
-    let bestScore = Infinity;
+  /**
+   * Block sizes in the order they're tried: 3 up through the pool limit
+   * (ascending — smallest-of-the-preferred-range first), then 2, then 1.
+   * A continuous 3+ swap is preferred over a 1- or 2-blade one; the small
+   * sizes are tried last, as either the correction-is-small case or an
+   * absolute last resort (see `MAX_SMALL_BLOCK_SWAP_DELTA_G` below).
+   */
+  const sizeOrder: number[] = [];
+  for (let s = 3; s <= maxBlockSize; s++) sizeOrder.push(s);
+  if (maxBlockSize >= 2) sizeOrder.push(2);
+  if (maxBlockSize >= 1) sizeOrder.push(1);
 
-    for (const w1w of w1Windows) {
-      const sumW1 = w1w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
-      for (const w2w of w2Windows) {
-        const sumW2 = w2w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
-        // Swapping the two blocks moves the whole W2 block's weight into W1
-        // and vice versa — the W1-W2 delta is twice the sum difference.
-        const deltaSum = 2 * (sumW2 - sumW1);
-        const { adjustedDiff, meets } = evaluateSum(deltaSum);
-        if (!meets) continue;
-        const score = Math.abs(adjustedDiff - targetMid);
-        if (score < bestScore) {
-          bestScore = score;
-          best = { w1w, w2w, adjustedDiff, meets };
+  /**
+   * Shared search loop: `candidatesFor(w1w)` decides which W2 windows are
+   * eligible partners for a given W1 window — the two tiers differ only in
+   * this function (opposite-only vs. any same-size block).
+   */
+  function search(candidatesFor: (w1w: number[]) => number[][]): CrossSwapResult | null {
+    for (const size of sizeOrder) {
+      const w1Windows = windows(w1Slots, size);
+      let best: { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean } | null = null;
+      let bestScore = Infinity;
+
+      for (const w1w of w1Windows) {
+        const sumW1 = w1w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+        for (const w2w of candidatesFor(w1w)) {
+          const sumW2 = w2w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+          // Swapping the two blocks moves the whole W2 block's weight into W1
+          // and vice versa — the W1-W2 delta is twice the sum difference.
+          const deltaSum = 2 * (sumW2 - sumW1);
+          if (size <= 2 && Math.abs(deltaSum) > MAX_SMALL_BLOCK_SWAP_DELTA_G) continue;
+          const { adjustedDiff, meets } = evaluateSum(deltaSum);
+          if (!meets) continue;
+          const score = Math.abs(adjustedDiff - targetMid);
+          if (score < bestScore) {
+            bestScore = score;
+            best = { w1w, w2w, adjustedDiff, meets };
+          }
         }
       }
-    }
 
-    if (best) {
-      const flips: PairFlip[] = best.w1w.map((slotW1, idx) => {
-        const slotW2 = best!.w2w[idx]!;
-        return {
-          // Synthetic index range, distinct from computeLineSwapSuggestion's
-          // real pair indices (0..44) — only used as a React list key.
-          pairIndex: -1000 - idx,
-          slotA: slotW1,
-          slotB: slotW2,
-          bladeASerial: bySlot.get(slotW1)!.blade.serial_number,
-          bladeBSerial: bySlot.get(slotW2)!.blade.serial_number,
-        };
-      });
-      let newEntries = entries;
-      for (const f of flips) {
-        newEntries = swapBladesBetweenSlots(newEntries, f.slotA, f.slotB);
-      }
-      return { entries: newEntries, flips, adjustedDiff: best.adjustedDiff, meetsTarget: best.meets };
+      if (best) return buildResult(best);
     }
+    return null;
   }
 
-  return null;
+  function buildResult(best: { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean }): CrossSwapResult {
+    const flips: PairFlip[] = best.w1w.map((slotW1, idx) => {
+      const slotW2 = best.w2w[idx]!;
+      return {
+        // Synthetic index range, distinct from computeLineSwapSuggestion's
+        // real pair indices (0..44) — only used as a React list key.
+        pairIndex: -1000 - idx,
+        slotA: slotW1,
+        slotB: slotW2,
+        bladeASerial: bySlot.get(slotW1)!.blade.serial_number,
+        bladeBSerial: bySlot.get(slotW2)!.blade.serial_number,
+      };
+    });
+    let newEntries = entries;
+    for (const f of flips) {
+      newEntries = swapBladesBetweenSlots(newEntries, f.slotA, f.slotB);
+    }
+    return { entries: newEntries, flips, adjustedDiff: best.adjustedDiff, meetsTarget: best.meets };
+  }
+
+  // Tier 1: the block's own exact-opposite, plus that opposite shifted by
+  // ±size (wrapped within the other half's own range) — three candidates,
+  // all still "exact-opposite" rather than fallback.
+  const exactOpposite = search((w1w) => {
+    const size = w1w.length;
+    const baseOpp = w1w.map((s) => oppositeSlot(s, totalSlots));
+    const candidates = [
+      baseOpp,
+      baseOpp.map((s) => shiftWithinHalf(s, size, totalSlots)),
+      baseOpp.map((s) => shiftWithinHalf(s, -size, totalSlots)),
+    ];
+    return candidates.filter((c) => c.every((s) => w2Set.has(s)));
+  });
+  if (exactOpposite) return exactOpposite;
+
+  // Tier 2 (fallback): no opposite-block candidate at any size reached the
+  // target — allow swapping with a different same-size block elsewhere in
+  // the other half instead.
+  return search((w1w) => {
+    const size = w1w.length;
+    if (!w2WindowsBySize.has(size)) w2WindowsBySize.set(size, windows(w2Slots, size));
+    return w2WindowsBySize.get(size)!;
+  });
 }
 
 /**
  * Full suggestion pipeline: Step 1 (line-swap) first; only if that finds
  * nothing does Step 2 (cross-swap, then a line-swap fine-tune on top of it)
- * run. Returns null if neither step reaches the target — the caller shows
- * a generic "couldn't find a swap" message either way, without surfacing
- * which internal strategy was tried.
+ * run. Returns null if neither step reaches the target. `usedCrossSwap` on
+ * the result tells the caller whether Step 1 was ineligible/insufficient
+ * and Step 2 had to be used — the UI surfaces this so the operator knows
+ * why a multi-blade block swap (rather than a single pair flip) is shown.
  */
 export function suggestBalancingSwap(
   entries: HptrAllocationEntry[],
@@ -540,7 +644,13 @@ export function suggestBalancingSwap(
   if (!cross) return null;
 
   if (cross.meetsTarget) {
-    return { flips: cross.flips, resultingDiff: cross.adjustedDiff, meetsTarget: true, usedNearPairs: false };
+    return {
+      flips: cross.flips,
+      resultingDiff: cross.adjustedDiff,
+      meetsTarget: true,
+      usedNearPairs: false,
+      usedCrossSwap: true,
+    };
   }
 
   const fineTune = computeLineSwapSuggestion(cross.entries, startSlot, unbalanceValue, totalSlots, false);
@@ -551,5 +661,6 @@ export function suggestBalancingSwap(
     resultingDiff: fineTune.resultingDiff,
     meetsTarget: fineTune.meetsTarget,
     usedNearPairs: false,
+    usedCrossSwap: true,
   };
 }

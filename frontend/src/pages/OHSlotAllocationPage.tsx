@@ -446,6 +446,11 @@ function SetMakingTab({
                         : " — closest achievable; may need another swap after applying"}
                       {suggestion.usedNearPairs && " · used near-anchor pairs (fallback)"}
                     </p>
+                    {suggestion.usedCrossSwap && (
+                      <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mt-0.5">
+                        Ineligible for line swap
+                      </p>
+                    )}
                   </>
                 ) : (
                   <p className="text-sm text-slate-500 dark:text-slate-400">
