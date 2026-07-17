@@ -17,9 +17,12 @@ import type { BladeListItem } from "@/types";
  *    light end.
  * 3. Split the rotor into W1 (slots 1..45) and W2 (slots 46..90) and sum
  *    each half's weight.
- * 4. The half containing `startSlot` must be heavier than the other half by
- *    1.5-2.0 g. If not, the operator manually swaps which blade occupies
- *    which slot (slot numbers themselves never change) until it is.
+ * 4. The half containing `startSlot` must be heavier than the other half,
+ *    and that raw weight difference must exceed the rotor's own
+ *    pre-existing unbalance (`unbalanceValue`, supplied by Assembly) by
+ *    1.5-2.0 g — not merely sit within 1.5-2.0 g of it in either direction.
+ *    If not, the operator manually swaps which blade occupies which slot
+ *    (slot numbers themselves never change) until it is.
  */
 
 export const HPTR_TOTAL_SLOTS = 90;
@@ -149,18 +152,22 @@ export function computeHalves(
 
 /**
  * The rotor's own pre-existing unbalance (the Assembly-provided
- * `unbalanceValue`, `y`) and the W1/W2 weight difference computed here
- * (`halves.diff`, `x`) partially cancel out. What actually has to land in
- * the 1.5-2.0 g spec band is the net of the two — `|x - y|` — not `x` alone.
+ * `unbalanceValue`, `y`) must be exceeded — not merely approached from
+ * either side — by the W1/W2 weight difference computed here (`halves.diff`,
+ * `x`). What has to land in the 1.5-2.0 g spec band is the SIGNED `x - y`,
+ * not `|x - y|`: a raw diff smaller than `y` is not a valid set even though
+ * its absolute distance from `y` might also fall in that band.
  */
 export function computeAdjustedDiff(halves: HptrHalves, unbalanceValue: number): number {
-  return Math.abs(halves.diff - unbalanceValue);
+  return halves.diff - unbalanceValue;
 }
 
 /**
  * True when the half containing `startSlot` is heavier than the other half,
- * and the net of that difference (`x`) against the rotor's own pre-existing
- * unbalance (`y`) — `|x - y|` — falls within the 1.5-2.0 g target band.
+ * and that difference (`x`) exceeds the rotor's own pre-existing unbalance
+ * (`y`) by 1.5-2.0 g — i.e. `x - y` (not `|x - y|`) falls within the target
+ * band. `x` landing 1.5-2.0 g *below* `y` is not valid, even though it's the
+ * same absolute distance from `y`.
  */
 export function isSetMakingValid(halves: HptrHalves, unbalanceValue: number = 0): boolean {
   const startHalfIsHeavier =
@@ -233,7 +240,7 @@ export interface PairFlip {
 export interface SwapSuggestion {
   /** One or more pair-flips to apply together (fewest possible that reach the target). */
   flips: PairFlip[];
-  /** |x - y| after applying every flip (x = |W1 - W2|, y = unbalanceValue). */
+  /** x - y after applying every flip (x = |W1 - W2|, y = unbalanceValue). */
   resultingDiff: number;
   /** True if this combination of flips lands the set within the 1.5-2.0 g target. */
   meetsTarget: boolean;
@@ -268,7 +275,8 @@ export interface SwapSuggestion {
  * size, prefers the one landing closest to the middle of the target band.
  *
  * `unbalanceValue` (`y`) is the rotor's own pre-existing unbalance — the
- * target band applies to `|x - y|` (`x` = |W1 - W2|), not `x` alone.
+ * target band applies to the signed `x - y` (`x` = |W1 - W2|), not `x` alone
+ * and not `|x - y|`: `x` must exceed `y` by 1.5-2.0 g specifically.
  */
 function computeLineSwapSuggestion(
   entries: HptrAllocationEntry[],
@@ -308,11 +316,16 @@ function computeLineSwapSuggestion(
     return after - before;
   }
 
-  /** Same "does this land in the target band" check the brute-force version used — now fed a precomputed sum instead of re-deriving it. */
+  /**
+   * Same "does this land in the target band" check the brute-force version
+   * used — now fed a precomputed sum instead of re-deriving it. Uses the
+   * SIGNED `x - y`, not `|x - y|` — the raw diff must exceed `unbalanceValue`
+   * by 1.5-2.0 g, not merely sit within that absolute distance of it.
+   */
   function evaluateSum(deltaSum: number) {
     const signedDiff = currentSignedDiff + deltaSum;
     const startHalfIsHeavier = sign === 1 ? signedDiff > 0 : signedDiff < 0;
-    const adjustedDiff = Math.abs(Math.abs(signedDiff) - unbalanceValue);
+    const adjustedDiff = Math.abs(signedDiff) - unbalanceValue;
     const meets = startHalfIsHeavier && adjustedDiff >= HPTR_TARGET_DIFF_MIN && adjustedDiff <= HPTR_TARGET_DIFF_MAX;
     return { adjustedDiff, meets };
   }
@@ -511,10 +524,15 @@ function attemptCrossSwap(
   }
   const w2Set = new Set(w2Slots);
 
+  /**
+   * Uses the SIGNED `x - y`, not `|x - y|` — the raw diff must exceed
+   * `unbalanceValue` by 1.5-2.0 g, not merely sit within that absolute
+   * distance of it (see `computeAdjustedDiff`).
+   */
   function evaluateSum(deltaSum: number) {
     const signedDiff = currentSignedDiff + deltaSum;
     const startHalfIsHeavier = sign === 1 ? signedDiff > 0 : signedDiff < 0;
-    const adjustedDiff = Math.abs(Math.abs(signedDiff) - unbalanceValue);
+    const adjustedDiff = Math.abs(signedDiff) - unbalanceValue;
     const meets = startHalfIsHeavier && adjustedDiff >= HPTR_TARGET_DIFF_MIN && adjustedDiff <= HPTR_TARGET_DIFF_MAX;
     return { adjustedDiff, meets };
   }
