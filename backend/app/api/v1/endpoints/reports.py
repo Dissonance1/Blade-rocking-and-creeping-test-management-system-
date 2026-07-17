@@ -628,7 +628,7 @@ async def export_hptr_slots_excel(
     """
     try:
         import openpyxl  # type: ignore[import]
-        from openpyxl.styles import Font, PatternFill  # type: ignore[import]
+        from openpyxl.styles import Alignment, Border, Font, Side  # type: ignore[import]
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -639,6 +639,11 @@ async def export_hptr_slots_excel(
     from app.models.enums import BladeType
     from app.models.measurement import Measurement
     from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
+
+    work_order = (
+        await db.execute(select(WorkOrder).where(WorkOrder.work_order_number == work_order_number))
+    ).scalar_one_or_none()
 
     rows = (
         await db.execute(
@@ -698,104 +703,73 @@ async def export_hptr_slots_excel(
     w1_rows = sorted((r for r in rows if _slot_num(r) <= half), key=_slot_num)
     w2_rows = sorted((r for r in rows if _slot_num(r) > half), key=_slot_num)
 
-    w1_total = sum(_weight(r) for r in w1_rows)
-    w2_total = sum(_weight(r) for r in w2_rows)
-    x_diff = abs(w1_total - w2_total)
+    # ── Styling matched to the original HPTR_*.xls shop-floor sheets: a
+    # bold, merged, centered title row; bold header labels wrapped onto two
+    # lines with no fill color (plain, not the app's usual colored-header
+    # style); thin borders on every cell; centered data (matching the source
+    # file's own alignment, even for numeric columns). ──────────────────────
+    thin = Side(style="thin")
+    all_borders = Border(top=thin, bottom=thin, left=thin, right=thin)
+    title_font = Font(bold=True, size=16)
+    header_font = Font(bold=True, size=14)
+    data_font = Font(size=11)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    center_nowrap = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left", vertical="center")
 
-    # y (the rotor's own pre-existing unbalance, entered as "Rotor Unbalance
-    # (g)" when slots were saved) isn't persisted on SlotAllocation/WorkOrder
-    # — recover it from the WorkflowLog remark written at save time.
-    import re
-
-    from app.models.enums import BladeStatus as BS
-    from app.models.workflow import WorkflowLog
-
-    log_remarks = (
-        await db.execute(
-            select(WorkflowLog.remarks)
-            .join(Blade, Blade.id == WorkflowLog.blade_id)
-            .where(
-                Blade.work_order_number == work_order_number,
-                Blade.blade_type == BladeType.HPTR,
-                WorkflowLog.to_status == BS.SLOT_ASSIGNED,
-            )
-            .order_by(WorkflowLog.timestamp.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    start_slot_val: int | None = None
-    y_unbalance: float | None = None
-    if log_remarks:
-        m_start = re.search(r"start slot (\d+)", log_remarks)
-        if m_start:
-            start_slot_val = int(m_start.group(1))
-        m_unbal = re.search(r"unbalance ([\d.]+) g", log_remarks)
-        if m_unbal:
-            y_unbalance = float(m_unbal.group(1))
-
-    y_for_calc = y_unbalance if y_unbalance is not None else 0.0
-    adjusted_diff = abs(x_diff - y_for_calc)
-    target_min, target_max = 1.5, 2.0
-    is_balanced = target_min <= adjusted_diff <= target_max
-
-    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    header_font = Font(color="FFFFFF", bold=True)
-    label_font = Font(bold=True)
-    ok_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    warn_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+    table_headers = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"]
+    n_cols = len(table_headers)
+    w1_col_start, w2_col_start = 1, n_cols + 2  # one blank spacer column between the two blocks
+    total_cols = w2_col_start + n_cols - 1
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "HPTR Slot Assignments"
 
-    ws.cell(row=1, column=1, value=f"Work Order {work_order_number} — HPTR Set Making Summary").font = Font(bold=True, size=13)
+    engine_label = f"HPTR_{work_order.engine_number}" if work_order and work_order.engine_number else "HPTR"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+    title_cell = ws.cell(row=1, column=1, value=f"{engine_label}  WO NO. {work_order_number}")
+    title_cell.font = title_font
+    title_cell.alignment = center_nowrap
+    ws.row_dimensions[1].height = 24
 
-    summary = [
-        ("Start Slot", start_slot_val if start_slot_val is not None else "Not recorded"),
-        ("W1 Total (g)", round(w1_total, 2)),
-        ("W2 Total (g)", round(w2_total, 2)),
-        ("x = |W1 - W2| (g)", round(x_diff, 2)),
-        ("y = Rotor Unbalance (g)", round(y_unbalance, 2) if y_unbalance is not None else "Not recorded"),
-        ("|x - y| (g)", round(adjusted_diff, 2)),
-        ("Target band (g)", f"{target_min}-{target_max}"),
-        ("Status", "Balanced" if is_balanced else "Not balanced"),
-    ]
-    for i, (label, value) in enumerate(summary):
-        r = 3 + i
-        ws.cell(row=r, column=1, value=label).font = label_font
-        cell = ws.cell(row=r, column=2, value=value)
-        if label == "Status":
-            cell.fill = ok_fill if is_balanced else warn_fill
-            cell.font = Font(bold=True)
+    header_row = 2
+    ws.row_dimensions[header_row].height = 36
 
-    table_headers = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g-cm)"]
-    table_start_row = 3 + len(summary) + 2
-    w1_col_start, w2_col_start = 1, len(table_headers) + 2  # one blank column between the two blocks
-
-    def _write_table(col_start: int, title: str, table_rows: list) -> None:
-        ws.cell(row=table_start_row, column=col_start, value=title).font = Font(bold=True, size=12)
-        header_row = table_start_row + 1
+    def _write_table(col_start: int, table_rows: list) -> None:
         for i, header in enumerate(table_headers):
             cell = ws.cell(row=header_row, column=col_start + i, value=header)
-            cell.fill = header_fill
             cell.font = header_font
+            cell.alignment = center
+            cell.border = all_borders
         for row_offset, (blade, alloc) in enumerate(table_rows, start=1):
             meas = meas_map.get(blade.id)
             r = header_row + row_offset
-            ws.cell(row=r, column=col_start, value=int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number)
-            ws.cell(row=r, column=col_start + 1, value=blade.serial_number)
-            ws.cell(row=r, column=col_start + 2, value=blade.melt_number)
-            ws.cell(row=r, column=col_start + 3, value=float(meas.weight_grams) if meas and meas.weight_grams is not None else None)
-            ws.cell(row=r, column=col_start + 4, value=float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None)
+            values = [
+                int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number,
+                blade.serial_number,
+                blade.melt_number,
+                float(meas.weight_grams) if meas and meas.weight_grams is not None else None,
+                float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None,
+            ]
+            for i, value in enumerate(values):
+                cell = ws.cell(row=r, column=col_start + i, value=value)
+                cell.font = data_font
+                cell.border = all_borders
+                cell.alignment = left if i == 2 else center_nowrap
+                if i in (3, 4):  # Weight (g), Static Moment (g-cm)
+                    cell.number_format = "0.00"
 
-    _write_table(w1_col_start, f"W1 (Slots 1-{half})", w1_rows)
-    _write_table(w2_col_start, f"W2 (Slots {half + 1}-90)", w2_rows)
+    _write_table(w1_col_start, w1_rows)
+    _write_table(w2_col_start, w2_rows)
 
-    for col in ws.columns:
-        max_length = max((len(str(cell.value or "")) for cell in col), default=0)
-        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 50)
-    ws.freeze_panes = "A2"
+    # Column widths approximating the source sheet's proportions.
+    col_widths = [12, 14, 10, 13, 15]
+    for i, width in enumerate(col_widths):
+        ws.column_dimensions[ws.cell(row=header_row, column=w1_col_start + i).column_letter].width = width
+        ws.column_dimensions[ws.cell(row=header_row, column=w2_col_start + i).column_letter].width = width
+    ws.column_dimensions[ws.cell(row=header_row, column=w1_col_start + n_cols).column_letter].width = 3
+    ws.freeze_panes = "A3"
 
     buffer = io.BytesIO()
     wb.save(buffer)

@@ -659,7 +659,7 @@ class ReportGenerator:
         """
         try:
             import openpyxl  # type: ignore[import]
-            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+            from openpyxl.styles import Alignment, Border, Font, Side
             from openpyxl.utils import get_column_letter
         except ImportError as exc:
             raise RuntimeError("openpyxl is required for Excel reports.") from exc
@@ -672,72 +672,120 @@ class ReportGenerator:
         ws = wb.active
         ws.title = f"{blade_type} Batch Report"
 
-        headers = ["Slot No.", "Serial No.", "Melt No.", "Weight (g)", "Static Moment (g.cm)", "Rocking"]
+        headers = ["Slot No.", "Serial No.", "Melt No.", "Weight (g)", "Static Moment (g·cm)", "Rocking"]
         if is_lptr:
             headers.append("Creep")
+        n_cols = len(headers)
 
-        ws.cell(row=1, column=1, value=f"Work Order {work_order_number} — {blade_type} Batch Report").font = Font(
-            bold=True, size=13
-        )
+        # ── Styling matched to the original HPTR_*.xls shop-floor sheets,
+        # and structured the same way as the PDF version: a two-column-block
+        # layout (first half of the rows on the left, remainder on the right
+        # — a plain page-fitting split, not a physical W1/W2 split) so the
+        # whole sheet — not just the print scaling — reads as one page's
+        # worth of content instead of one long 90-row column. ──────────────
+        thin = Side(style="thin", color="000000")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        title_font = Font(bold=True, size=14)
+        header_font = Font(bold=True, size=10)
+        label_font = Font(bold=True, size=9)
+        data_font = Font(size=9)
+        center = Alignment(horizontal="center", vertical="center")
+        left = Alignment(horizontal="left", vertical="center")
+
+        left_col_start, right_col_start = 1, n_cols + 2  # one blank spacer column between blocks
+        total_cols = right_col_start + n_cols - 1
+
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+        title_cell = ws.cell(row=1, column=1, value=f"Work Order {work_order_number} — {blade_type} Batch Report")
+        title_cell.font = title_font
+        title_cell.alignment = center
+        ws.row_dimensions[1].height = 20
+
         generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        ws.cell(row=2, column=1, value=f"Generated: {generated_at}  •  {len(rows)} blade(s)").font = Font(
-            italic=True, size=9, color="666666"
-        )
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=total_cols)
+        subtitle_cell = ws.cell(row=2, column=1, value=f"Generated: {generated_at}  •  {len(rows)} blade(s)")
+        subtitle_cell.font = Font(italic=True, size=8, color="666666")
+        subtitle_cell.alignment = center
 
+        # Info fields condensed onto a single row (rather than 7 stacked
+        # rows) — the same vertical-space saving used in the PDF, so the
+        # two 45-row blocks below have room to sit on one printed page.
         info_fields = [
-            ("Work Order Number", work_order.work_order_number),
-            ("Shop Order Number", work_order.shop_order_number),
-            ("Part Number", work_order.part_number),
-            ("Engine Number", work_order.engine_number or "—"),
+            ("Shop Order No.", work_order.shop_order_number),
+            ("Part No.", work_order.part_number),
+            ("Engine No.", work_order.engine_number or "—"),
             ("Engine Hours", work_order.engine_hours),
             ("Component Hours", work_order.component_hours or "—"),
             ("Blade Type", blade_type),
         ]
-        info_start_row = 4
-        for i, (label, value) in enumerate(info_fields):
-            r = info_start_row + i
-            ws.cell(row=r, column=1, value=label).font = Font(bold=True, size=10)
-            ws.cell(row=r, column=2, value=value)
+        info_row = 3
+        ws.merge_cells(start_row=info_row, start_column=1, end_row=info_row, end_column=total_cols)
+        info_text = "   |   ".join(f"{label}: {value}" for label, value in info_fields)
+        info_cell = ws.cell(row=info_row, column=1, value=info_text)
+        info_cell.font = label_font
+        info_cell.alignment = center
 
-        header_row = info_start_row + len(info_fields) + 1
-        header_fill = PatternFill("solid", fgColor=_XL_HEADER_FILL)
-        header_font = Font(bold=True, color="FFFFFF")
-        thin = Side(style="thin", color="CCCCCC")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        header_row = info_row + 2
 
-        for col, h in enumerate(headers, start=1):
-            cell = ws.cell(row=header_row, column=col, value=h)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = border
-
-        for row_idx, row in enumerate(rows, start=header_row + 1):
-            slot = row["slot_number"]
-            w = row["weight_grams"]
-            sm = row["static_moment_gcm"]
-            rv = row["rocking_value"]
-            cv = row["creep_value"]
-            values = [
-                int(slot) if slot is not None and str(slot).isdigit() else (slot or "—"),
-                row["serial_number"],
-                row["melt_number"],
-                round(float(w), 2) if w is not None else "—",
-                round(float(sm), 2) if sm is not None else "—",
-                round(float(rv), 4) if rv is not None else "—",
-            ]
-            if is_lptr:
-                values.append(round(float(cv), 4) if cv is not None else "—")
-            for col, value in enumerate(values, start=1):
-                cell = ws.cell(row=row_idx, column=col, value=value)
+        def _write_block(col_start: int, block_rows: list[dict]) -> None:
+            for i, h in enumerate(headers):
+                cell = ws.cell(row=header_row, column=col_start + i, value=h)
+                cell.font = header_font
+                cell.alignment = center
                 cell.border = border
-                if (row_idx - header_row) % 2 == 0:
-                    cell.fill = PatternFill("solid", fgColor=_XL_ALT_ROW_FILL)
+            for row_offset, row in enumerate(block_rows, start=1):
+                slot = row["slot_number"]
+                w = row["weight_grams"]
+                sm = row["static_moment_gcm"]
+                rv = row["rocking_value"]
+                cv = row["creep_value"]
+                values = [
+                    int(slot) if slot is not None and str(slot).isdigit() else (slot or "—"),
+                    row["serial_number"],
+                    row["melt_number"],
+                    float(w) if w is not None else None,
+                    float(sm) if sm is not None else None,
+                    float(rv) if rv is not None else None,
+                ]
+                if is_lptr:
+                    values.append(float(cv) if cv is not None else None)
+                r = header_row + row_offset
+                for i, value in enumerate(values):
+                    cell = ws.cell(row=r, column=col_start + i, value=value)
+                    cell.font = data_font
+                    cell.border = border
+                    cell.alignment = left if i in (1, 2) else center
+                    if i in (3, 4):  # Weight (g), Static Moment (g·cm)
+                        cell.number_format = "0.00"
+                    elif i in (5, 6):  # Rocking, Creep
+                        cell.number_format = "0.0000"
 
-        for col in ws.columns:
-            max_len = max((len(str(c.value)) if c.value else 0 for c in col), default=0)
-            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
+        midpoint = (len(rows) + 1) // 2
+        _write_block(left_col_start, rows[:midpoint])
+        _write_block(right_col_start, rows[midpoint:])
+
+        col_widths = [7, 9, 11, 9, 12, 9]
+        if is_lptr:
+            col_widths.append(9)
+        for i, width in enumerate(col_widths):
+            ws.column_dimensions[ws.cell(row=header_row, column=left_col_start + i).column_letter].width = width
+            ws.column_dimensions[ws.cell(row=header_row, column=right_col_start + i).column_letter].width = width
+        ws.column_dimensions[ws.cell(row=header_row, column=left_col_start + n_cols).column_letter].width = 3
         ws.freeze_panes = f"A{header_row + 1}"
+
+        # Print setup: scale the whole sheet to one A4 page when printed —
+        # doesn't affect the on-screen/editing view, only the print output.
+        last_row = header_row + midpoint
+        last_col_letter = get_column_letter(total_cols)
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 1
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.page_margins.left = ws.page_margins.right = 0.3
+        ws.page_margins.top = ws.page_margins.bottom = 0.3
+        ws.page_margins.header = ws.page_margins.footer = 0.1
+        ws.print_area = f"A1:{last_col_letter}{last_row}"
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -761,11 +809,10 @@ class ReportGenerator:
         try:
             from reportlab.lib import colors  # type: ignore[import]
             from reportlab.lib.enums import TA_CENTER, TA_LEFT  # type: ignore[import]
-            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.pagesizes import A4, landscape
             from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore[import]
             from reportlab.lib.units import cm
             from reportlab.platypus import (
-                HRFlowable,
                 Paragraph,
                 SimpleDocTemplate,
                 Spacer,
@@ -780,35 +827,47 @@ class ReportGenerator:
         is_lptr = blade_type == "LPTR"
         generated_at = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
+        # Landscape + a two-column-block layout (first half of the rows on
+        # the left, remainder on the right — a plain split for page-fitting,
+        # not a physical W1/W2 balancing split) is what makes a fixed 90-row
+        # batch fit on a single printed A4 page at a still-legible font size;
+        # a single 90-row column would need ~30 pages at a readable row height.
+        PAGE_SIZE = landscape(A4)
         buf = io.BytesIO()
-        LEFT_M = RIGHT_M = 1.5 * cm
+        LEFT_M = RIGHT_M = 0.8 * cm
         doc = SimpleDocTemplate(
             buf,
-            pagesize=A4,
+            pagesize=PAGE_SIZE,
             leftMargin=LEFT_M,
             rightMargin=RIGHT_M,
-            topMargin=2.0 * cm,
-            bottomMargin=2.0 * cm,
+            topMargin=0.6 * cm,
+            bottomMargin=1.3 * cm,
             title=f"Work Order {work_order_number} Batch Report",
             author="Blade Management System",
         )
 
+        # ── Styling matched to the original HPTR_*.xls shop-floor sheets:
+        # bold centered title (plain black, no colour); plain bold headers
+        # with no fill, thin borders; bordered label/value info table with
+        # no alternating row shading. Font sizes and paddings are kept small
+        # throughout specifically so the two 45-row blocks fit in the space
+        # left after the title/info block on one page. ────────────────────
         base = getSampleStyleSheet()
         title_style = ParagraphStyle(
-            "BatchTitle", parent=base["Normal"], fontSize=16, leading=20,
-            fontName="Helvetica-Bold", textColor=colors.HexColor("#1F4E79"), spaceAfter=4,
+            "BatchTitle", parent=base["Normal"], fontSize=12, leading=14,
+            fontName="Helvetica-Bold", textColor=colors.black, alignment=TA_CENTER, spaceAfter=1,
         )
-        subtitle_style = ParagraphStyle(
-            "BatchSubtitle", parent=base["Normal"], fontSize=9, leading=13,
-            textColor=colors.HexColor("#444444"), spaceAfter=8,
+        info_style = ParagraphStyle(
+            "BatchInfo", parent=base["Normal"], fontSize=7.5, leading=10,
+            textColor=colors.black, alignment=TA_CENTER,
         )
         cell_style = ParagraphStyle(
-            "BatchCell", parent=base["Normal"], fontName="Helvetica", fontSize=8,
-            leading=12, splitLongWords=1, allowWidows=0,
+            "BatchCell", parent=base["Normal"], fontName="Helvetica", fontSize=6.2,
+            leading=7.5, splitLongWords=1, allowWidows=0,
         )
         cell_hdr = ParagraphStyle(
-            "BatchCellHdr", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=8,
-            leading=12, textColor=colors.white, alignment=TA_CENTER, splitLongWords=1,
+            "BatchCellHdr", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=6.8,
+            leading=8, textColor=colors.black, alignment=TA_CENTER, splitLongWords=1,
         )
 
         def P(text: Any, center: bool = False) -> Paragraph:
@@ -819,92 +878,98 @@ class ReportGenerator:
         def H(text: str) -> Paragraph:
             return Paragraph(str(text), cell_hdr)
 
-        DARK_BLUE = colors.HexColor("#1F4E79")
-        ALT_ROW = colors.HexColor("#EEF4FA")
-        BORDER = colors.HexColor("#BBBBBB")
+        BORDER = colors.black
 
         story: list[Any] = []
-        story.append(Paragraph("Blade Rocking &amp; Creep Test Management System", title_style))
-        story.append(Paragraph(
-            f"Work Order {work_order_number} &mdash; {blade_type} Batch Report &nbsp;&nbsp;&bull;&nbsp;&nbsp; "
-            f"Generated: <b>{generated_at}</b> &nbsp;&nbsp;&bull;&nbsp;&nbsp; Total blades: <b>{len(rows)}</b>",
-            subtitle_style,
-        ))
-        story.append(HRFlowable(width="100%", thickness=1.5, color=DARK_BLUE, spaceAfter=8))
+        story.append(Paragraph(f"Work Order {work_order_number} — {blade_type} Batch Report", title_style))
 
+        # Generated/total-blades and the info fields condensed onto a single
+        # line each (rather than a subtitle line plus 7 stacked info rows) —
+        # the biggest vertical-space saving that makes room for the
+        # two-block table below to fit on one page.
+        story.append(Paragraph(
+            f"Generated: <b>{generated_at}</b> &nbsp;&nbsp;&bull;&nbsp;&nbsp; Total blades: <b>{len(rows)}</b>",
+            info_style,
+        ))
         info_fields = [
-            ("Work Order Number", work_order.work_order_number),
-            ("Shop Order Number", work_order.shop_order_number),
-            ("Part Number", work_order.part_number),
-            ("Engine Number", work_order.engine_number or "—"),
+            ("Shop Order No.", work_order.shop_order_number),
+            ("Part No.", work_order.part_number),
+            ("Engine No.", work_order.engine_number or "—"),
             ("Engine Hours", work_order.engine_hours),
             ("Component Hours", work_order.component_hours or "—"),
             ("Blade Type", blade_type),
         ]
-        info_rows = [[Paragraph(f"<b>{label}</b>", cell_style), P(value)] for label, value in info_fields]
-        info_tbl = Table(info_rows, colWidths=[4.5 * cm, 6.5 * cm])
-        info_tbl.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, ALT_ROW]),
-        ]))
-        story.append(info_tbl)
-        story.append(Spacer(1, 0.5 * cm))
+        info_line = "&nbsp;&nbsp;|&nbsp;&nbsp;".join(
+            f"<b>{label}:</b> {value}" for label, value in info_fields
+        )
+        story.append(Paragraph(info_line, info_style))
+        story.append(Spacer(1, 0.15 * cm))
 
-        headers = [H("Slot No."), H("Serial No."), H("Melt No."), H("Weight (g)"), H("Static Moment (g.cm)"), H("Rocking")]
-        col_widths = [2.0 * cm, 3.5 * cm, 3.0 * cm, 3.0 * cm, 3.5 * cm, 3.0 * cm]
+        headers = [H("Slot"), H("Serial"), H("Melt No."), H("Wt (g)"), H("Static Mt (g·cm)"), H("Rocking")]
+        col_widths = [1.2 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.5 * cm, 2.0 * cm]
         if is_lptr:
             headers.append(H("Creep"))
-            col_widths = [1.8 * cm, 3.0 * cm, 2.5 * cm, 2.5 * cm, 3.0 * cm, 2.6 * cm, 2.6 * cm]
+            col_widths = [1.1 * cm, 1.8 * cm, 2.0 * cm, 1.8 * cm, 2.2 * cm, 1.8 * cm, 1.8 * cm]
 
-        table_rows: list[list[Any]] = [headers]
-        for row in rows:
-            slot = row["slot_number"]
-            w = row["weight_grams"]
-            sm = row["static_moment_gcm"]
-            rv = row["rocking_value"]
-            cv = row["creep_value"]
-            line = [
-                P(slot if slot is not None else "—", center=True),
-                P(row["serial_number"]),
-                P(row["melt_number"]),
-                P(f"{float(w):.2f}" if w is not None else "—", center=True),
-                P(f"{float(sm):.2f}" if sm is not None else "—", center=True),
-                P(f"{float(rv):.4f}" if rv is not None else "—", center=True),
-            ]
-            if is_lptr:
-                line.append(P(f"{float(cv):.4f}" if cv is not None else "—", center=True))
-            table_rows.append(line)
+        def _block_table(block_rows: list[dict]) -> Table:
+            block_data: list[list[Any]] = [headers]
+            for row in block_rows:
+                slot = row["slot_number"]
+                w = row["weight_grams"]
+                sm = row["static_moment_gcm"]
+                rv = row["rocking_value"]
+                cv = row["creep_value"]
+                line = [
+                    P(slot if slot is not None else "—", center=True),
+                    P(row["serial_number"], center=True),
+                    P(row["melt_number"], center=True),
+                    P(f"{float(w):.2f}" if w is not None else "—", center=True),
+                    P(f"{float(sm):.2f}" if sm is not None else "—", center=True),
+                    P(f"{float(rv):.4f}" if rv is not None else "—", center=True),
+                ]
+                if is_lptr:
+                    line.append(P(f"{float(cv):.4f}" if cv is not None else "—", center=True))
+                block_data.append(line)
 
-        tbl = Table(table_rows, colWidths=col_widths, repeatRows=1)
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
-            ("LINEBELOW", (0, 0), (-1, 0), 1.0, DARK_BLUE),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ALT_ROW]),
-            ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+            block_tbl = Table(block_data, colWidths=col_widths, repeatRows=1)
+            block_tbl.setStyle(TableStyle([
+                ("LINEBELOW", (0, 0), (-1, 0), 1.0, BORDER),
+                ("GRID", (0, 0), (-1, -1), 0.5, BORDER),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 1.0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1.0),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            return block_tbl
+
+        midpoint = (len(rows) + 1) // 2
+        left_rows, right_rows = rows[:midpoint], rows[midpoint:]
+
+        outer = Table(
+            [[_block_table(left_rows), "", _block_table(right_rows)]],
+            colWidths=[sum(col_widths), 0.6 * cm, sum(col_widths)],
+        )
+        outer.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
         ]))
-        story.append(tbl)
+        story.append(outer)
 
         def _page_footer(canvas: Any, doc: Any) -> None:
             canvas.saveState()
             canvas.setFont("Helvetica", 7)
             canvas.setFillColor(colors.HexColor("#888888"))
-            y = 1.2 * cm
+            y = 1.0 * cm
             canvas.drawString(LEFT_M, y, "Blade Rocking & Creep Test Management System")
-            canvas.drawCentredString(A4[0] / 2, y, "Confidential — Internal Use Only")
-            canvas.drawRightString(A4[0] - RIGHT_M, y, f"Page {canvas.getPageNumber()}  |  {generated_at}")
+            canvas.drawCentredString(PAGE_SIZE[0] / 2, y, "Confidential — Internal Use Only")
+            canvas.drawRightString(PAGE_SIZE[0] - RIGHT_M, y, f"Page {canvas.getPageNumber()}  |  {generated_at}")
             canvas.setStrokeColor(colors.HexColor("#CCCCCC"))
             canvas.setLineWidth(0.5)
-            canvas.line(LEFT_M, y + 0.4 * cm, A4[0] - RIGHT_M, y + 0.4 * cm)
+            canvas.line(LEFT_M, y + 0.35 * cm, PAGE_SIZE[0] - RIGHT_M, y + 0.35 * cm)
             canvas.restoreState()
 
         doc.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
