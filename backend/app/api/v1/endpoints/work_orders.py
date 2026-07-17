@@ -6,6 +6,7 @@ GET  /work-orders/{work_order_number}                          — work order de
 POST /work-orders/{work_order_number}/send-to-assembly         — OH bulk-sends all eligible LPTR blades to Assembly
 POST /work-orders/{work_order_number}/assign-slot               — bulk-assigns computed disc slots (LPTR algorithmic / HPTR explicit)
 POST /work-orders/{work_order_number}/complete-hptr-balancing   — mark a saved HPTR slot allocation balanced/complete
+POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
 POST /work-orders/{work_order_number}/accept                    — Assembly accepts work order
@@ -64,12 +65,15 @@ def _derive_status(latest_event_type: BatchEventType | None, blades_sent: int) -
 def _status_label(status_val: str) -> str:
     return {
         "CREATED": "Created",
+        "MEASUREMENTS_RECORDED": "Measurements Recorded",
         "SENT_TO_ASSEMBLY": "Sent to Assembly",
         "RECEIVED_BY_ASSEMBLY": "Received by Assembly",
         "ACCEPTED": "Accepted",
         "REJECTED": "Rejected",
         "MODIFIED": "Modified",
         "SLOTS_ALLOCATED": "Slots Allocated",
+        "SET_MAKING": "Set Making",
+        "BALANCED": "Balanced",
     }.get(status_val, status_val)
 
 
@@ -1065,12 +1069,15 @@ async def _assign_hptr_work_order_slot(
 
     Requires OH_OPERATOR/SUPER_ADMIN (checked by the caller). HPTR never
     leaves OH, so there is no Assembly-acceptance gate. Eligible blades are
-    those at MEASUREMENTS_RECORDED. No WorkOrderEvent is written (Assembly's
-    accept/modify/slots-allocated event trail is Assembly-only).
+    those at MEASUREMENTS_RECORDED. Logs both a SLOTS_ALLOCATED and a
+    SET_MAKING WorkOrderEvent — this single call is the only backend
+    touchpoint for both steps (Set Making's manual W1/W2 swaps happen
+    client-side and are only persisted once confirmed here).
     """
     from app.models.blade import Blade
     from app.models.measurement import Measurement
     from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order_event import WorkOrderEvent
     from app.workflows.state_machine import WorkflowEngine
 
     try:
@@ -1230,6 +1237,26 @@ async def _assign_hptr_work_order_slot(
     await db.commit()
 
     weight_diff = round(abs(w1_total - w2_total), 3)
+
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.SLOTS_ALLOCATED,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} HPTR blade(s) assigned to computed disc slots (start slot {start_slot}).",
+        changes={"blades_assigned": len(blades), "start_slot": start_slot},
+    ))
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.SET_MAKING,
+        action_by_id=current_user.id,
+        remarks=(
+            f"Set Making confirmed — W1 {round(w1_total, 3)} g, W2 {round(w2_total, 3)} g "
+            f"(diff {weight_diff} g)."
+        ),
+        changes={"w1_total": round(w1_total, 3), "w2_total": round(w2_total, 3), "weight_diff": weight_diff},
+    ))
+    await db.commit()
+
     logger.info(
         "work_order_hptr_slots_assigned",
         work_order=work_order_number,
@@ -1285,6 +1312,7 @@ async def complete_hptr_balancing(
     from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
     from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
     from app.workflows.state_machine import WorkflowEngine
 
     work_order = (
@@ -1359,6 +1387,15 @@ async def complete_hptr_balancing(
 
     await db.commit()
 
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.BALANCED,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} HPTR blade(s) confirmed balanced. {remarks}",
+        changes={"blades_balanced": len(blades)},
+    ))
+    await db.commit()
+
     actor_name = getattr(current_user, "username", str(current_user.id))
 
     async def _notify_hptr_balancing_complete(_work_order: str, _count: int, _actor: str) -> None:
@@ -1388,6 +1425,121 @@ async def complete_hptr_balancing(
         "work_order_number": work_order_number,
         "blades_completed": len(blades),
         "message": f"{len(blades)} HPTR blade(s) marked balanced — work order complete.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/reset-hptr-slots
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/reset-hptr-slots",
+    status_code=status.HTTP_200_OK,
+    summary="Reset a work order's HPTR slot allocation so Slot Allocation / Set Making can be redone",
+)
+async def reset_hptr_slots(
+    work_order_number: str,
+    body: dict,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Deactivates the work order's active HPTR slot allocations and transitions
+    every affected blade back to MEASUREMENTS_RECORDED — the same state they
+    were in before Slot Allocation ever ran — making the batch eligible for a
+    fresh Slot Allocation / Set Making pass in the OH Slot Allocation page.
+
+    Only applies to HPTR work orders, and only to blades still at
+    SLOT_ASSIGNED or BALANCING_IN_PROGRESS — i.e. before physical balancing
+    testing has been confirmed complete. A batch already marked
+    BALANCING_COMPLETED is not resettable through this endpoint (undoing a
+    physically-confirmed balance is a separate, more deliberate action).
+    """
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.blade_type != BladeType.HPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' is {work_order.blade_type.value} — "
+                "this endpoint only applies to HPTR work orders."
+            ),
+        )
+
+    remarks = (body or {}).get("remarks") or "Slot allocation reset — redoing Set Making from scratch"
+
+    _RESETTABLE_STATUSES = [BladeStatus.SLOT_ASSIGNED, BladeStatus.BALANCING_IN_PROGRESS]
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status.in_(_RESETTABLE_STATUSES),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No resettable HPTR blades found for Work Order '{work_order_number}' — "
+                "blades must be at Slot Assigned or Balancing In Progress (not yet Balancing Completed)."
+            ),
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        alloc = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if alloc:
+            alloc.is_active = False
+            alloc.previous_slot_number = alloc.slot_number
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.MEASUREMENTS_RECORDED,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.MEASUREMENTS_RECORDED,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} HPTR blade(s) reset — slot allocation redone from scratch. {remarks}",
+        changes={"blades_reset": len(blades)},
+    ))
+    await db.commit()
+
+    logger.info("work_order_hptr_slots_reset", work_order=work_order_number, blades=len(blades))
+    return {
+        "work_order_number": work_order_number,
+        "blades_reset": len(blades),
+        "message": f"{len(blades)} HPTR blade(s) reset to Measurements Recorded — ready for a fresh Slot Allocation.",
     }
 
 
@@ -1463,6 +1615,8 @@ async def get_work_order_rocking_creep(
             select(
                 Measurement.blade_id,
                 Measurement.id.label("measurement_id"),
+                Measurement.weight_grams,
+                Measurement.static_moment_gcm,
                 Measurement.rocking_value,
                 Measurement.creep_value,
             ).join(
@@ -1475,6 +1629,8 @@ async def get_work_order_rocking_creep(
     meas_map = {
         str(r.blade_id): {
             "measurement_id": str(r.measurement_id),
+            "weight_grams": float(r.weight_grams) if r.weight_grams is not None else None,
+            "static_moment_gcm": float(r.static_moment_gcm) if r.static_moment_gcm is not None else None,
             "rocking_value": float(r.rocking_value) if r.rocking_value is not None else None,
             "creep_value": float(r.creep_value) if r.creep_value is not None else None,
         }
@@ -1493,6 +1649,8 @@ async def get_work_order_rocking_creep(
             "status": blade.status.value if hasattr(blade.status, "value") else str(blade.status),
             "slot_number": slot_map.get(bid),
             "measurement_id": meas.get("measurement_id"),
+            "weight_grams": meas.get("weight_grams"),
+            "static_moment_gcm": meas.get("static_moment_gcm"),
             "rocking_value": meas.get("rocking_value"),
             "creep_value": meas.get("creep_value"),
         })

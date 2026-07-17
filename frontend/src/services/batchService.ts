@@ -4,12 +4,16 @@ export interface BatchEvent {
   id: string;
   work_order_number: string;
   event_type:
+    | "CREATED"
+    | "MEASUREMENTS_RECORDED"
     | "SENT_TO_ASSEMBLY"
     | "RECEIVED_BY_ASSEMBLY"
     | "ACCEPTED"
     | "REJECTED"
     | "MODIFIED"
-    | "SLOTS_ALLOCATED";
+    | "SLOTS_ALLOCATED"
+    | "SET_MAKING"
+    | "BALANCED";
   action_by: { id: string; username: string; full_name: string } | null;
   remarks: string | null;
   changes: Record<string, unknown> | null;
@@ -18,12 +22,15 @@ export interface BatchEvent {
 
 export type BatchStatus =
   | "CREATED"
+  | "MEASUREMENTS_RECORDED"
   | "SENT_TO_ASSEMBLY"
   | "RECEIVED_BY_ASSEMBLY"
   | "ACCEPTED"
   | "REJECTED"
   | "MODIFIED"
-  | "SLOTS_ALLOCATED";
+  | "SLOTS_ALLOCATED"
+  | "SET_MAKING"
+  | "BALANCED";
 
 export interface BatchSummary {
   work_order_number: string;
@@ -86,6 +93,8 @@ export interface BladeRockingCreepEntry {
   status: string;
   slot_number: string | null;
   measurement_id: string | null;
+  weight_grams: number | null;
+  static_moment_gcm: number | null;
   rocking_value: number | null;
   creep_value: number | null;
 }
@@ -208,6 +217,19 @@ export const batchService = {
     remarks?: string
   ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
     const { data } = await api.post(`/work-orders/${batchNumber}/complete-hptr-balancing`, { remarks });
+    return data;
+  },
+
+  /**
+   * Undoes a saved HPTR slot allocation (blades still at Slot Assigned or
+   * Balancing In Progress — not yet Balancing Completed) so the batch can
+   * go through Slot Allocation / Set Making again from scratch.
+   */
+  resetHptrSlots: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/reset-hptr-slots`, { remarks });
     return data;
   },
 };

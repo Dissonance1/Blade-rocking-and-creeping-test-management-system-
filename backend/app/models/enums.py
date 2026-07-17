@@ -81,12 +81,16 @@ class BladeType(str, enum.Enum):
 
 
 class BatchEventType(str, enum.Enum):
+    CREATED = "CREATED"
+    MEASUREMENTS_RECORDED = "MEASUREMENTS_RECORDED"
     SENT_TO_ASSEMBLY = "SENT_TO_ASSEMBLY"
     RECEIVED_BY_ASSEMBLY = "RECEIVED_BY_ASSEMBLY"
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
     MODIFIED = "MODIFIED"
     SLOTS_ALLOCATED = "SLOTS_ALLOCATED"
+    SET_MAKING = "SET_MAKING"
+    BALANCED = "BALANCED"
 
 
 class AssemblyVerificationStatus(str, enum.Enum):

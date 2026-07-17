@@ -473,7 +473,7 @@ export default function OHQueuePage() {
         {/* ── Batch Overview ──────────────────────────────────────────────── */}
         {/* LPTR only — HPTR blades never leave OH, so "Send to Assembly" never
             applies to them; they're handled entirely on the HPTR Slot Allocation page. */}
-        {batches.filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "REJECTED")).length > 0 && (
+        {batches.filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "MEASUREMENTS_RECORDED" || b.current_status === "REJECTED")).length > 0 && (
           <div className="mb-5">
             <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
               <Package className="w-3.5 h-3.5" />
@@ -481,7 +481,7 @@ export default function OHQueuePage() {
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {batches
-                .filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "REJECTED"))
+                .filter((b) => b.blade_type === "LPTR" && (b.current_status === "CREATED" || b.current_status === "MEASUREMENTS_RECORDED" || b.current_status === "REJECTED"))
                 .map((batch) => {
                   const isRejected = batch.current_status === "REJECTED";
                   const pct = Math.min((batch.rows_complete_count / BATCH_MAX) * 100, 100);

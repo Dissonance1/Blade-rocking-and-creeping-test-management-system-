@@ -19,7 +19,8 @@ from app.core.constants import (
     STATIC_MOMENT_FACTOR,
     WEIGHT_TO_GRAMS_FACTOR,
 )
-from app.models.enums import BladeStatus
+from app.models.enums import BatchEventType, BladeStatus
+from app.models.work_order_event import WorkOrderEvent
 from app.repositories.blade_repository import BladeRepository
 from app.repositories.measurement_repository import MeasurementRepository
 from app.repositories.work_order_repository import WorkOrderRepository
@@ -101,6 +102,17 @@ class WorkOrderService:
             station_id=user.station_id,
             count=BLADES_PER_WORK_ORDER,
         )
+        await self.db.commit()
+
+        self.db.add(WorkOrderEvent(
+            work_order_number=work_order.work_order_number,
+            event_type=BatchEventType.CREATED,
+            action_by_id=user.id,
+            remarks=(
+                f"Work Order created — {BLADES_PER_WORK_ORDER} blade row(s) scaffolded "
+                f"({work_order.blade_type.value})."
+            ),
+        ))
         await self.db.commit()
 
         log.info(
@@ -312,6 +324,14 @@ class WorkOrderService:
         await self._wo_repo.mark_complete(work_order, completed_by_id=user.id)
         await self.db.commit()
         await self.db.refresh(work_order)
+
+        self.db.add(WorkOrderEvent(
+            work_order_number=work_order.work_order_number,
+            event_type=BatchEventType.MEASUREMENTS_RECORDED,
+            action_by_id=user.id,
+            remarks=f"Grid entry completed — {len(blades)} blade(s) measured.",
+        ))
+        await self.db.commit()
 
         log.info(
             "work_order_service.completed",

@@ -17,6 +17,9 @@ import {
   Send,
   Wrench,
   MapPin,
+  ClipboardCheck,
+  SlidersHorizontal,
+  Scale,
 } from "lucide-react";
 import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
@@ -99,6 +102,11 @@ const STATUS_CONFIG: Record<
     cls: "bg-slate-500 text-white",
     icon: <Package className="w-3 h-3" />,
   },
+  MEASUREMENTS_RECORDED: {
+    label: "Measurements Recorded",
+    cls: "bg-indigo-500 text-white",
+    icon: <ClipboardCheck className="w-3 h-3" />,
+  },
   SENT_TO_ASSEMBLY: {
     label: "Sent to Assembly",
     cls: "bg-violet-500 text-white",
@@ -123,6 +131,16 @@ const STATUS_CONFIG: Record<
     label: "Slots Allocated",
     cls: "bg-cyan-500 text-white",
     icon: <MapPin className="w-3 h-3" />,
+  },
+  SET_MAKING: {
+    label: "Set Making",
+    cls: "bg-fuchsia-500 text-white",
+    icon: <SlidersHorizontal className="w-3 h-3" />,
+  },
+  BALANCED: {
+    label: "Balanced",
+    cls: "bg-teal-500 text-white",
+    icon: <Scale className="w-3 h-3" />,
   },
   MODIFIED: {
     label: "Modified",
@@ -422,12 +440,15 @@ export default function BatchTrackingPage() {
 
   const statusOrder: Record<BatchStatus, number> = {
     CREATED: 0,
-    SENT_TO_ASSEMBLY: 1,
-    RECEIVED_BY_ASSEMBLY: 2,
-    MODIFIED: 3,
-    ACCEPTED: 4,
-    SLOTS_ALLOCATED: 5,
-    REJECTED: 6,
+    MEASUREMENTS_RECORDED: 1,
+    SENT_TO_ASSEMBLY: 2,
+    RECEIVED_BY_ASSEMBLY: 3,
+    MODIFIED: 4,
+    ACCEPTED: 5,
+    SLOTS_ALLOCATED: 6,
+    SET_MAKING: 7,
+    BALANCED: 8,
+    REJECTED: 9,
   };
 
   const ASSEMBLY_STATUSES: BatchStatus[] = [
