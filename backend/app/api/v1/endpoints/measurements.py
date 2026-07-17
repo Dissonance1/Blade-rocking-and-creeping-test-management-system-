@@ -311,6 +311,11 @@ async def set_rocking_creep(
     rocking/creep fields on it.  If the blade has no measurement yet,
     a new INITIAL record is created with only those values.
 
+    Only one physical gauge is shared between the Rocking and Creep
+    measurement fixtures, so each value is saved independently as soon as
+    it arrives — the request may carry just one of the two fields, and the
+    other can follow later (even from a different session).
+
     This endpoint is intended for the dedicated Rocking & Creep Entry
     workflow after Assembly has allocated slot numbers.
     """
@@ -321,18 +326,16 @@ async def set_rocking_creep(
 
     # Enforce blade-type rules
     is_lptr = str(getattr(blade.blade_type, "value", blade.blade_type)).upper() == "LPTR"
-    if is_lptr:
-        if body.rocking_value is None or body.creep_value is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="LPTR blades require both rocking_value and creep_value.",
-            )
-    else:  # HPTR
-        if body.rocking_value is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="HPTR blades require rocking_value.",
-            )
+    if body.rocking_value is None and body.creep_value is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one of rocking_value or creep_value must be provided.",
+        )
+    if not is_lptr and body.creep_value is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="HPTR blades do not have a creep value.",
+        )
 
     measurement = (
         await db.execute(

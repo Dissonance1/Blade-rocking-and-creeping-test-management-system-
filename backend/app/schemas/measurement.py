@@ -101,9 +101,16 @@ class RockingCreepUpdate(BaseSchema):
     """
     Payload for the dedicated Rocking & Creep entry step (post slot-allocation).
 
+    Only one physical gauge is shared between the Rocking and Creep columns,
+    so operators feed whichever value is still missing whenever the gauge is
+    free — the other value may already exist, arrive later, or come from a
+    different session entirely.
+
     Blade-type rules (enforced in the endpoint after blade_type is resolved):
-      LPTR  → both rocking_value and creep_value are required.
-      HPTR  → rocking_value is required; creep_value must be omitted/null.
+      LPTR  → at least one of rocking_value / creep_value must be provided;
+              each is saved independently and the other may follow later.
+      HPTR  → rocking_value is required; creep_value must be omitted/null
+              (HPTR has no creep measurement).
     """
 
     rocking_value: Decimal | None = Field(default=None, ge=0)

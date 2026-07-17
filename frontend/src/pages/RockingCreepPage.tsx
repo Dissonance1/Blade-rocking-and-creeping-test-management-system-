@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   ExternalLink,
-  Save,
   Loader2,
   CheckCircle2,
   AlertTriangle,
@@ -84,9 +83,26 @@ export default function RockingCreepPage() {
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
   const [activeTarget, setActiveTarget] = useState<ActiveTarget | null>(null);
 
-  // ── DTI gauge — one physical button press = one captured value ─────────────
-  const { lastReading, connected: dtiConnected } = useDTISocket(DTI_STATION);
+  // ── DTI gauge — one physical button press = one captured value. Must skip
+  //    replay: this flow treats any "dti" message as a fresh press, so a
+  //    reconnect (refresh, wifi blip, backend restart) replaying old Redis-
+  //    buffered readings would silently auto-fill/save stale values. ────────
+  const { lastReading, connected: dtiConnected } = useDTISocket(DTI_STATION, { replay: false });
   const lastAppliedAtRef = useRef<number>(0);
+
+  // ── Debounced auto-save while typing — onBlur/Enter alone left a gap: a
+  //    value typed and never blurred (e.g. the operator hits refresh right
+  //    after typing) was never sent to the server and silently vanished.
+  //    This fires shortly after typing pauses, independent of focus. ────────
+  const AUTO_SAVE_DEBOUNCE_MS = 700;
+  const autoSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const clearAutoSaveTimer = useCallback((bladeId: string) => {
+    const existing = autoSaveTimersRef.current.get(bladeId);
+    if (existing) {
+      clearTimeout(existing);
+      autoSaveTimersRef.current.delete(bladeId);
+    }
+  }, []);
 
   // ── Input DOM refs, keyed "bladeId:field" — lets us move real keyboard
   //    focus (not just the visual highlight) when activeTarget advances ──────
@@ -165,19 +181,20 @@ export default function RockingCreepPage() {
     },
   });
 
+  // Rocking and Creep are saved independently — the gauge is shared between
+  // two separate measurement fixtures, so whichever value the operator has
+  // just entered is saved on its own; the other one may already exist, may
+  // follow later, or may never have been asked for (HPTR has no Creep).
   const handleSave = useCallback(
     (entry: BladeRockingCreepEntry) => {
       const row = rowState[entry.blade_id];
       if (!row) return;
       const rocking = row.rocking !== "" ? parseFloat(row.rocking) : null;
       const creep   = row.creep   !== "" ? parseFloat(row.creep)   : null;
-      const isLPTR  = entry.blade_type === "LPTR";
 
-      if (isLPTR) {
-        if (rocking === null) { toast.error("Rocking value is required for LPTR blades"); return; }
-        if (creep   === null) { toast.error("Creep value is required for LPTR blades");   return; }
-      } else {
-        if (rocking === null) { toast.error("Rocking value is required for HPTR blades"); return; }
+      if (rocking === null && creep === null) {
+        toast.error("Enter a Rocking or Creep value first");
+        return;
       }
       saveMutation.mutate({ bladeId: entry.blade_id, rocking, creep });
     },
@@ -192,18 +209,25 @@ export default function RockingCreepPage() {
     return e.blade_type === "LPTR" ? e.creep_value != null : true;
   }, []);
 
+  // Whether a specific column already has a server-confirmed value for this
+  // blade — HPTR has no Creep column at all, so it's treated as pre-filled.
+  const isFieldFilled = useCallback((e: BladeRockingCreepEntry, field: ActiveField) => {
+    if (field === "creep" && e.blade_type !== "LPTR") return true;
+    return (field === "rocking" ? e.rocking_value : e.creep_value) != null;
+  }, []);
+
   // ── Next editable target after (entries[index], field) ──────────────────────
+  // Stays in the SAME column — the gauge physically sits at one measurement
+  // fixture (Rocking or Creep) for a batch of blades before moving to the
+  // other, so the next suggested cell is the next row still missing THIS
+  // column, not a jump to the other column on the same row.
   const advanceTarget = useCallback(
     (fromEntry: BladeRockingCreepEntry, fromField: ActiveField) => {
-      if (fromField === "rocking" && fromEntry.blade_type === "LPTR") {
-        setActiveTarget({ bladeId: fromEntry.blade_id, field: "creep" });
-        return;
-      }
       const idx = entries.findIndex((e) => e.blade_id === fromEntry.blade_id);
-      const next = entries.slice(idx + 1).find((e) => !!e.slot_number && !isEntryComplete(e));
-      setActiveTarget(next ? { bladeId: next.blade_id, field: "rocking" } : null);
+      const next = entries.slice(idx + 1).find((e) => !!e.slot_number && !isFieldFilled(e, fromField));
+      setActiveTarget(next ? { bladeId: next.blade_id, field: fromField } : null);
     },
-    [entries, isEntryComplete]
+    [entries, isFieldFilled]
   );
 
   // Default the active target to the first editable, not-yet-complete blade
@@ -219,10 +243,9 @@ export default function RockingCreepPage() {
   }, [entries]);
 
   // ── Apply each new DTI gauge reading to whichever cell is active ────────────
-  // NOTE: the backend requires rocking_value AND creep_value together in one
-  // PATCH for LPTR blades (rejects a rocking-only save with 422) — so for LPTR
-  // we buffer the Rocking capture locally and only save once Creep arrives too,
-  // matching the same completeness rule the manual Save button already enforces.
+  // The gauge is shared between the Rocking and Creep fixtures, so each
+  // capture is saved on its own the moment it arrives — it never waits for
+  // the other column, which may be filled already, later, or never (HPTR).
   useEffect(() => {
     if (!lastReading || !activeTarget) return;
     const capturedAt = lastReading.capturedAt.getTime();
@@ -238,14 +261,9 @@ export default function RockingCreepPage() {
     const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
     setRowState((prev) => patchRow(prev, bladeId, { [field]: String(value), saved: false }));
 
-    const isLPTR = entry.blade_type === "LPTR";
     const rockingNum = updatedRow.rocking !== "" ? parseFloat(updatedRow.rocking) : null;
     const creepNum   = updatedRow.creep   !== "" ? parseFloat(updatedRow.creep)   : null;
-    const readyToSave = isLPTR ? rockingNum !== null && creepNum !== null : rockingNum !== null;
-
-    if (readyToSave) {
-      saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
-    }
+    saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
     advanceTarget(entry, field);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastReading]);
@@ -260,20 +278,59 @@ export default function RockingCreepPage() {
     el?.select?.();
   }, [activeTarget]);
 
-  // Save a row only once it actually has everything its blade type needs —
-  // never toasts, since manual column-fill entry deliberately leaves LPTR
-  // rows half-filled (Rocking only) until a second pass fills Creep.
+  // Save whichever column(s) are filled in — never toasts, since manual
+  // column-fill entry deliberately leaves LPTR rows half-filled (Rocking
+  // only, or Creep only) until a later pass fills the other column.
   const trySaveIfReady = useCallback(
     (entry: BladeRockingCreepEntry) => {
       const row = rowState[entry.blade_id];
       if (!row) return;
       const rocking = row.rocking !== "" ? parseFloat(row.rocking) : null;
       const creep = row.creep !== "" ? parseFloat(row.creep) : null;
-      const ready = entry.blade_type === "LPTR" ? rocking !== null && creep !== null : rocking !== null;
-      if (ready) saveMutation.mutate({ bladeId: entry.blade_id, rocking, creep });
+      if (rocking !== null || creep !== null) {
+        saveMutation.mutate({ bladeId: entry.blade_id, rocking, creep });
+      }
     },
     [rowState, saveMutation]
   );
+
+  // Debounced counterpart to trySaveIfReady — called from onChange so typing
+  // gets persisted a moment after the operator stops, without waiting for
+  // blur/Enter. Restarts the timer on every keystroke for that blade.
+  const scheduleAutoSave = useCallback(
+    (entry: BladeRockingCreepEntry) => {
+      clearAutoSaveTimer(entry.blade_id);
+      const timer = setTimeout(() => {
+        autoSaveTimersRef.current.delete(entry.blade_id);
+        trySaveIfReady(entry);
+      }, AUTO_SAVE_DEBOUNCE_MS);
+      autoSaveTimersRef.current.set(entry.blade_id, timer);
+    },
+    [clearAutoSaveTimer, trySaveIfReady]
+  );
+
+  // Flush all pending debounced saves immediately — used when navigating
+  // away (work order switch / unmount) so a typed-but-not-yet-debounced
+  // value isn't lost to the same gap this whole mechanism exists to close.
+  const flushAutoSaves = useCallback(() => {
+    for (const [bladeId, timer] of autoSaveTimersRef.current) {
+      clearTimeout(timer);
+      autoSaveTimersRef.current.delete(bladeId);
+      const entry = entries.find((e) => e.blade_id === bladeId);
+      if (entry) trySaveIfReady(entry);
+    }
+  }, [entries, trySaveIfReady]);
+
+  // Flush on unmount (e.g. navigating to a different page) too — kept in a
+  // ref so the cleanup always calls the latest closure without re-running
+  // this effect (and re-arming the cleanup) on every render.
+  const flushAutoSavesRef = useRef(flushAutoSaves);
+  useEffect(() => {
+    flushAutoSavesRef.current = flushAutoSaves;
+  }, [flushAutoSaves]);
+  useEffect(() => {
+    return () => flushAutoSavesRef.current();
+  }, []);
 
   // ── Enter-to-confirm for manual typing: stays in the SAME column, next
   //    row — operators fill one whole column (Rocking, then Creep) down the
@@ -285,6 +342,7 @@ export default function RockingCreepPage() {
       const value = field === "rocking" ? row.rocking : row.creep;
       if (value.trim() === "") return;
 
+      clearAutoSaveTimer(entry.blade_id);
       trySaveIfReady(entry);
 
       const idx = entries.findIndex((e) => e.blade_id === entry.blade_id);
@@ -293,7 +351,7 @@ export default function RockingCreepPage() {
         .find((e) => !!e.slot_number && (field === "rocking" || e.blade_type === "LPTR"));
       setActiveTarget(next ? { bladeId: next.blade_id, field } : null);
     },
-    [rowState, entries, trySaveIfReady]
+    [rowState, entries, trySaveIfReady, clearAutoSaveTimer]
   );
 
   // ── Stats derived from entries ───────────────────────────────────────────────
@@ -303,6 +361,16 @@ export default function RockingCreepPage() {
     (e) => e.rocking_value != null || (rowState[e.blade_id]?.saved ?? false)
   ).length;
   const activeEntry = activeTarget ? entries.find((e) => e.blade_id === activeTarget.bladeId) : undefined;
+
+  // Blade type + status breakdown for the header — a work order mixes LPTR
+  // and HPTR blades, and status can differ row to row, so there is no single
+  // "the" type/status to show; a per-value count summary is the honest one.
+  const lptrCount = entries.filter((e) => e.blade_type === "LPTR").length;
+  const hptrCount = entries.filter((e) => e.blade_type === "HPTR").length;
+  const statusCounts = entries.reduce<Record<string, number>>((acc, e) => {
+    acc[e.status] = (acc[e.status] ?? 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -336,6 +404,7 @@ export default function RockingCreepPage() {
                 <select
                   value={selectedBatch}
                   onChange={(e) => {
+                    flushAutoSaves();
                     setSelectedBatch(e.target.value);
                     setRowState({});
                     setActiveTarget(null);
@@ -414,11 +483,37 @@ export default function RockingCreepPage() {
       {/* Table */}
       {selectedBatch && !isLoading && entries.length > 0 && (
         <Card className="bg-white dark:bg-background border border-slate-200 dark:border-slate-700/60 overflow-hidden">
-          <CardHeader className="pb-0 pt-4 px-4 border-b border-slate-100 dark:border-slate-700/50">
-            <CardTitle className="text-base text-slate-900 dark:text-white flex items-center gap-2">
-              Work Order {selectedBatch}
-              {isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
-            </CardTitle>
+          <CardHeader className="pb-3 pt-4 px-4 border-b border-slate-100 dark:border-slate-700/50">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <CardTitle className="text-base text-slate-900 dark:text-white flex items-center gap-2">
+                Work Order {selectedBatch}
+                {isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+              </CardTitle>
+
+              {/* Blade type breakdown */}
+              <div className="flex items-center gap-1.5">
+                {lptrCount > 0 && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                    {lptrCount} LPTR
+                  </span>
+                )}
+                {hptrCount > 0 && (
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
+                    {hptrCount} HPTR
+                  </span>
+                )}
+              </div>
+
+              {/* Status breakdown */}
+              <div className="flex items-center gap-1.5">
+                {Object.entries(statusCounts).map(([status, count]) => (
+                  <span key={status} className="inline-flex items-center gap-1">
+                    <StatusBadge status={status} />
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">×{count}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
@@ -426,11 +521,11 @@ export default function RockingCreepPage() {
                 <thead className="bg-slate-800 dark:bg-background">
                   <tr>
                     {[
+                      "Slot No.",
                       "Serial Number",
                       "Melt Number",
-                      "Blade Type",
-                      "Status",
-                      "Slot No.",
+                      "Weight (g)",
+                      "Static Moment",
                       "Rocking Value",
                       "Creep Value",
                       "Action",
@@ -468,6 +563,20 @@ export default function RockingCreepPage() {
                           (row.saved || hasSavedData) && "border-l-2 border-l-emerald-400"
                         )}
                       >
+                        {/* Slot */}
+                        <td className="px-4 py-3">
+                          {entry.slot_number ? (
+                            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600 text-white text-sm font-bold shadow-sm">
+                              {entry.slot_number}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-amber-500 dark:text-amber-400 text-xs font-medium">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              Not assigned
+                            </span>
+                          )}
+                        </td>
+
                         {/* Serial */}
                         <td className="px-4 py-3">
                           <button
@@ -484,36 +593,17 @@ export default function RockingCreepPage() {
                           {entry.melt_number}
                         </td>
 
-                        {/* Blade type */}
-                        <td className="px-4 py-3">
-                          <span
-                            className={cn(
-                              "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                              isLPTR
-                                ? "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300"
-                                : "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300"
-                            )}
-                          >
-                            {entry.blade_type}
-                          </span>
+                        {/* Weight */}
+                        <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">
+                          {entry.weight_grams != null ? entry.weight_grams.toFixed(2) : (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
+                          )}
                         </td>
 
-                        {/* Status */}
-                        <td className="px-4 py-3">
-                          <StatusBadge status={entry.status} />
-                        </td>
-
-                        {/* Slot */}
-                        <td className="px-4 py-3">
-                          {entry.slot_number ? (
-                            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600 text-white text-sm font-bold shadow-sm">
-                              {entry.slot_number}
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1 text-amber-500 dark:text-amber-400 text-xs font-medium">
-                              <AlertTriangle className="w-3.5 h-3.5" />
-                              Not assigned
-                            </span>
+                        {/* Static moment */}
+                        <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">
+                          {entry.static_moment_gcm != null ? entry.static_moment_gcm.toFixed(2) : (
+                            <span className="text-slate-300 dark:text-slate-600">—</span>
                           )}
                         </td>
 
@@ -527,12 +617,14 @@ export default function RockingCreepPage() {
                               min={0}
                               placeholder="0.0000"
                               value={row.rocking}
-                              onChange={(e) =>
+                              onChange={(e) => {
                                 setRowState((prev) =>
                                   patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
-                                )
-                              }
+                                );
+                                scheduleAutoSave(entry);
+                              }}
                               onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
+                              onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                   e.preventDefault();
@@ -563,12 +655,14 @@ export default function RockingCreepPage() {
                               min={0}
                               placeholder="0.0000"
                               value={row.creep}
-                              onChange={(e) =>
+                              onChange={(e) => {
                                 setRowState((prev) =>
                                   patchRow(prev, entry.blade_id, { creep: e.target.value, saved: false })
-                                )
-                              }
+                                );
+                                scheduleAutoSave(entry);
+                              }}
                               onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "creep" })}
+                              onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
                                   e.preventDefault();
@@ -589,13 +683,20 @@ export default function RockingCreepPage() {
                           )}
                         </td>
 
-                        {/* Save */}
+                        {/* Save status — entry auto-saves (DTI capture, or Enter/blur while
+                            typing), so there's nothing to click the first time. "Update" only
+                            appears once a value exists, for manually re-pushing a correction. */}
                         <td className="px-4 py-3">
                           {!entry.slot_number ? (
                             <span className="text-xs text-slate-400 dark:text-slate-500 italic">
                               Awaiting slot
                             </span>
-                          ) : row.saved || (hasSavedData && !isSaving) ? (
+                          ) : isSaving ? (
+                            <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-xs font-medium">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Saving…
+                            </span>
+                          ) : row.saved || hasSavedData ? (
                             <div className="flex items-center gap-2">
                               <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
                                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -605,26 +706,15 @@ export default function RockingCreepPage() {
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => handleSave(entry)}
-                                disabled={isSaving}
                                 className="h-7 px-2 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white"
                               >
                                 Update
                               </Button>
                             </div>
                           ) : (
-                            <Button
-                              size="sm"
-                              onClick={() => handleSave(entry)}
-                              disabled={isSaving}
-                              className="bg-orange-500 hover:bg-orange-600 text-white h-8 px-3 text-xs"
-                            >
-                              {isSaving ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Save className="w-3.5 h-3.5" />
-                              )}
-                              Save
-                            </Button>
+                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                              Auto-saves on entry
+                            </span>
                           )}
                         </td>
                       </tr>
