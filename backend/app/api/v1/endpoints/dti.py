@@ -193,6 +193,15 @@ async def dti_ws(websocket: WebSocket) -> None:
       {"type": "status",  "status": "connected", "station": "1"}  — on open
       {"type": "dti",     "position": "H1", "value": 12.345}      — each new reading
       {"type": "ping"}                                              — keepalive every 30 s
+
+    Query param `replay` (default "true"): whether to catch the client up on
+    readings already buffered for this station before subscribing to live
+    pushes. Multi-position height-measurement forms want this (recovering
+    readings taken during a reconnect gap). Single-shot capture flows (e.g.
+    Rocking & Creep, where any "dti" message is treated as a brand-new button
+    press) must pass replay=false — otherwise a reconnect (page refresh, wifi
+    blip, server restart) replays old cached values and they get silently
+    captured as if the gauge had just been pressed.
     """
     token: str | None = websocket.query_params.get("token")
     if not token:
@@ -204,6 +213,7 @@ async def dti_ws(websocket: WebSocket) -> None:
         return
 
     station: str = websocket.query_params.get("station", "1")
+    replay: bool = websocket.query_params.get("replay", "true").lower() != "false"
 
     redis_client = getattr(websocket.app.state, "redis", None)
     if redis_client is None:
@@ -216,10 +226,11 @@ async def dti_ws(websocket: WebSocket) -> None:
     # Catch the client up on readings captured for this blade before it connected
     # (server restart, WS reconnect gap, page navigation) — otherwise those readings
     # would be lost since the pub/sub channel only reaches subscribers listening
-    # at publish time.
-    buffered = await redis_client.hgetall(_CYCLE_KEY_FMT.format(station=station))
-    for position in sorted(buffered, key=lambda p: int(p[1:])):
-        await websocket.send_json({"type": "dti", "position": position, "value": float(buffered[position])})
+    # at publish time. Skipped when replay=false (single-shot capture flows).
+    if replay:
+        buffered = await redis_client.hgetall(_CYCLE_KEY_FMT.format(station=station))
+        for position in sorted(buffered, key=lambda p: int(p[1:])):
+            await websocket.send_json({"type": "dti", "position": position, "value": float(buffered[position])})
 
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(_CHANNEL_FMT.format(station=station))

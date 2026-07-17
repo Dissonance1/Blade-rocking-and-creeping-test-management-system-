@@ -133,14 +133,25 @@ const NAV_ITEMS: NavItem[] = [
 
 /* ─── WebSocket singleton ─────────────────────────────────────────────────── */
 
-const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8000";
+// Derived from the current origin (matching useDTISocket/useWeighingSocket) so
+// this works both in the two-station LAN deployment (nginx on whatever host/
+// port the browser is already using) and behind a different domain — a
+// hardcoded "localhost:8000" only ever worked on the machine running the dev
+// server. VITE_WS_URL remains available to override for local dev setups
+// where the frontend and backend run on different ports outside nginx.
+function resolveWsBaseUrl(): string {
+  const override = import.meta.env.VITE_WS_URL as string | undefined;
+  if (override) return override;
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
+}
 
 function connectWebSocket(
   token: string,
   onMessage: (notification: Notification) => void,
   onClose?: () => void
 ): WebSocket {
-  const ws = new WebSocket(`${WS_URL}/ws/notifications?token=${token}`);
+  const ws = new WebSocket(`${resolveWsBaseUrl()}/api/v1/notifications/ws/notifications?token=${token}`);
 
   ws.onmessage = (event) => {
     try {

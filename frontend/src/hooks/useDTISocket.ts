@@ -16,11 +16,25 @@ interface WsMessage {
 const RECONNECT_DELAY_MS = 3000;
 const AUTH_ERROR_CODE    = 4001; // backend sends this on expired/invalid token — don't retry
 
+export interface UseDTISocketOptions {
+  /**
+   * Whether to receive readings buffered in Redis before this connection was
+   * opened. Multi-position height-measurement forms want this (recovering
+   * readings taken during a reconnect gap). Single-shot capture flows (e.g.
+   * Rocking & Creep, where any "dti" message is treated as a brand-new button
+   * press) must pass false — otherwise a reconnect (page refresh, wifi blip,
+   * backend restart) replays old cached values as if the gauge had just been
+   * pressed. Defaults to true.
+   */
+  replay?: boolean;
+}
+
 /**
  * Connects to /api/v1/dti/ws and streams live height readings from the gauge bridge.
  * Auto-reconnects after backend restarts (3 s delay). Does not retry on auth errors.
  */
-export function useDTISocket(station: string = "1") {
+export function useDTISocket(station: string = "1", options: UseDTISocketOptions = {}) {
+  const { replay = true } = options;
   const [lastReading, setLastReading] = useState<DTIReading | null>(null);
   const [connected, setConnected]     = useState(false);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -37,7 +51,7 @@ export function useDTISocket(station: string = "1") {
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host     = window.location.host;
-      const url      = `${protocol}//${host}/api/v1/dti/ws?token=${accessToken}&station=${station}`;
+      const url      = `${protocol}//${host}/api/v1/dti/ws?token=${accessToken}&station=${station}&replay=${replay}`;
 
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -79,7 +93,7 @@ export function useDTISocket(station: string = "1") {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [accessToken, station]);
+  }, [accessToken, station, replay]);
 
   return { lastReading, connected };
 }
