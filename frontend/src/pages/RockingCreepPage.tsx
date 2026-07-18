@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -26,6 +26,10 @@ import { cn } from "@/utils/cn";
 
 // Only one DTI gauge is connected for Rocking & Creep entry — a fixed station id.
 const DTI_STATION = "1";
+
+// Acceptable Rocking range — HPTR only, LPTR has no such limit.
+const HPTR_ROCKING_MIN = 0.5;
+const HPTR_ROCKING_MAX = 1.8;
 
 type ActiveField = "rocking" | "creep";
 interface ActiveTarget {
@@ -125,7 +129,7 @@ export default function RockingCreepPage() {
 
   // ── Blades for selected work order with slot + rocking/creep data ───────────
   const {
-    data: entries = [],
+    data: rawEntries = [],
     isLoading,
     isFetching,
   } = useQuery({
@@ -134,6 +138,17 @@ export default function RockingCreepPage() {
     enabled: !!selectedBatch,
     staleTime: 0,
   });
+
+  // Sorted by slot number (1 → 90) so the table — and the auto-advance order
+  // that walks this same array — follows slot order, not allocation order.
+  // Not-yet-slotted rows have no number to sort by, so they sink to the end.
+  const entries = useMemo(() => {
+    return [...rawEntries].sort((a, b) => {
+      if (!a.slot_number || !b.slot_number) return (a.slot_number ? -1 : 0) - (b.slot_number ? -1 : 0);
+      const na = parseInt(a.slot_number, 10), nb = parseInt(b.slot_number, 10);
+      return isNaN(na) || isNaN(nb) ? a.slot_number.localeCompare(b.slot_number) : na - nb;
+    });
+  }, [rawEntries]);
 
   // Initialise row inputs when data loads
   useEffect(() => {
@@ -552,6 +567,13 @@ export default function RockingCreepPage() {
                     const hasSavedData = entry.rocking_value != null || entry.creep_value != null;
                     const isLPTR = entry.blade_type === "LPTR";
 
+                    const rockingNum = row.rocking !== "" ? parseFloat(row.rocking) : null;
+                    const isRockingOutOfRange =
+                      !isLPTR &&
+                      rockingNum != null &&
+                      !isNaN(rockingNum) &&
+                      (rockingNum < HPTR_ROCKING_MIN || rockingNum > HPTR_ROCKING_MAX);
+
                     return (
                       <tr
                         key={entry.blade_id}
@@ -610,34 +632,43 @@ export default function RockingCreepPage() {
                         {/* Rocking input */}
                         <td className="px-4 py-3">
                           {entry.slot_number ? (
-                            <Input
-                              ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
-                              type="number"
-                              step="0.0001"
-                              min={0}
-                              placeholder="0.0000"
-                              value={row.rocking}
-                              onChange={(e) => {
-                                setRowState((prev) =>
-                                  patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
-                                );
-                                scheduleAutoSave(entry);
-                              }}
-                              onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
-                              onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  handleFieldEnter(entry, "rocking");
-                                }
-                              }}
-                              className={cn(
-                                "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
-                                activeTarget?.bladeId === entry.blade_id &&
-                                  activeTarget.field === "rocking" &&
-                                  "ring-2 ring-orange-400 border-orange-400"
+                            <div className="flex items-center gap-1.5">
+                              <Input
+                                ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
+                                type="number"
+                                step="0.0001"
+                                min={0}
+                                placeholder="0.0000"
+                                value={row.rocking}
+                                onChange={(e) => {
+                                  setRowState((prev) =>
+                                    patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
+                                  );
+                                  scheduleAutoSave(entry);
+                                }}
+                                onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
+                                onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleFieldEnter(entry, "rocking");
+                                  }
+                                }}
+                                className={cn(
+                                  "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
+                                  activeTarget?.bladeId === entry.blade_id &&
+                                    activeTarget.field === "rocking" &&
+                                    "ring-2 ring-orange-400 border-orange-400",
+                                  isRockingOutOfRange &&
+                                    "border-red-400 dark:border-red-500 text-red-600 dark:text-red-400"
+                                )}
+                              />
+                              {isRockingOutOfRange && (
+                                <span title={`Out of range (${HPTR_ROCKING_MIN}–${HPTR_ROCKING_MAX})`}>
+                                  <AlertTriangle className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
+                                </span>
                               )}
-                            />
+                            </div>
                           ) : (
                             <span className="text-slate-300 dark:text-slate-600">—</span>
                           )}
