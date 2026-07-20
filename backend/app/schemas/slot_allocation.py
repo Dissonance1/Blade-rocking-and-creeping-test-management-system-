@@ -127,3 +127,7 @@ class SlotAllocationResponse(BaseSchema):
         default=None,
         description="Slot number before the last reassignment (audit trail)",
     )
+    stage: int | None = Field(
+        default=None,
+        description="LPTR two-stage allocation stage (1 or 2) this row came from; null for HPTR/legacy rows",
+    )

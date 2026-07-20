@@ -11,3 +11,9 @@ WEIGHT_TO_GRAMS_FACTOR: float = 1.57
 
 STATIC_MOMENT_FACTOR: float = 20.0
 """Static Moment = Weight (g) * this factor."""
+
+LPTR_STAGE1_BLADE_COUNT: int = 46
+"""LPTR slot allocation stage 1 installs this many blades before the first balancing check."""
+
+LPTR_STAGE2_BLADE_COUNT: int = 44
+"""LPTR slot allocation stage 2 fills the remaining slots stage 1 left empty."""

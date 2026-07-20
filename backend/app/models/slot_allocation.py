@@ -52,6 +52,11 @@ class SlotAllocation(UUIDPrimaryKeyMixin, Base):
     )
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     group_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="LPTR two-stage allocation stage (1 or 2) this row came from; null for HPTR/legacy rows",
+    )
 
     # -----------------------------------------------------------------------
     # Who allocated and when

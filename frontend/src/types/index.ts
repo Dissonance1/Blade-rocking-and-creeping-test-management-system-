@@ -237,6 +237,47 @@ export interface SlotAllocation {
   is_balanced: boolean;
   unbalance_value?: number | null;
   previous_slot_number?: string | null;
+  /** LPTR two-stage allocation stage (1 or 2) this row came from; null for HPTR/legacy rows */
+  stage?: number | null;
+}
+
+// ─── LPTR two-stage balancing records ──────────────────────────────────────────
+
+export interface LptrEmptyRotorReading {
+  id: string;
+  work_order_number: string;
+  unbalance_slot: number;
+  unbalance_value: number;
+  recorded_by: MeasurementApprover;
+  recorded_at: string;
+}
+
+export interface LptrBalancingCheck {
+  id: string;
+  work_order_number: string;
+  stage: number;
+  measured_unbalance: number;
+  is_pass: boolean;
+  remarks?: string | null;
+  recorded_by: MeasurementApprover;
+  recorded_at: string;
+}
+
+export type LptrCorrectionType =
+  | "REARRANGEMENT"
+  | "BALANCING_ADJUSTMENT"
+  | "MANUFACTURER_REPLACEMENT_REQUEST";
+
+export interface LptrManualCorrection {
+  id: string;
+  work_order_number: string;
+  stage: number;
+  correction_type: LptrCorrectionType;
+  description: string;
+  blade_id?: string | null;
+  slot_number?: string | null;
+  recorded_by: MeasurementApprover;
+  recorded_at: string;
 }
 
 export interface SlotAssignRequest {

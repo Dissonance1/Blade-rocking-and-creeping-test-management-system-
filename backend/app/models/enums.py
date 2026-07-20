@@ -80,6 +80,12 @@ class BladeType(str, enum.Enum):
     HPTR = "HPTR"   # High Pressure Turbine Rotor — Rocking only (no Creep)
 
 
+class LptrCorrectionType(str, enum.Enum):
+    REARRANGEMENT = "REARRANGEMENT"
+    BALANCING_ADJUSTMENT = "BALANCING_ADJUSTMENT"
+    MANUFACTURER_REPLACEMENT_REQUEST = "MANUFACTURER_REPLACEMENT_REQUEST"
+
+
 class BatchEventType(str, enum.Enum):
     CREATED = "CREATED"
     MEASUREMENTS_RECORDED = "MEASUREMENTS_RECORDED"

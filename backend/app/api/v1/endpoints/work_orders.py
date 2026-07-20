@@ -840,29 +840,105 @@ async def _assign_lptr_work_order_slot(
     background_tasks: BackgroundTasks,
 ) -> dict:
     """
-    Runs the heavy/light interleave balancing algorithm over the work order's
-    eligible LPTR blades and assigns each one a computed disc slot.
+    Persists the operator-confirmed LPTR two-stage blade-to-slot mapping.
 
-    Algorithm: sort blades by static_moment_gcm descending (heaviest first),
-    then assign slots starting at ``imbalance_slot`` and stepping through
-    positions: slot_i = ((K - 1 + i) % N) + 1.
+    LPTR slot allocation happens in two physical stages: 46 blades are
+    installed and balancing-checked first, then physically removed, then
+    the remaining 44 blades fill the slots stage 1 left empty and are
+    balancing-checked again. The allocation itself (weight sort, anchor
+    placement at the reported unbalance position, target-weight matching
+    for the opposite slots, alternating-gap fill) is computed client-side
+    in frontend/src/utils/lptrBalancing.ts — like HPTR's set-making swaps,
+    this endpoint only validates and persists whatever final
+    ``assignments`` the frontend submits for the given ``stage``, it does
+    not run the allocation algorithm itself.
 
-    Requires ASSEMBLY_OPERATOR/SUPER_ADMIN (checked by the caller). The work
-    order must already be ACCEPTED/MODIFIED by Assembly, and eligible blades
-    are those in SENT_TO_ASSEMBLY/ASSEMBLY_RECEIVED/ASSEMBLY_VERIFIED.
+    Requires ASSEMBLY_OPERATOR/SUPER_ADMIN (checked by the caller). The
+    work order must already be ACCEPTED/MODIFIED by Assembly. Stage 2
+    additionally requires a stage-1 allocation to already exist — it
+    physically cannot happen before those 46 blades are installed and
+    removed.
     """
+    from app.core.constants import LPTR_STAGE1_BLADE_COUNT, LPTR_STAGE2_BLADE_COUNT
     from app.models.blade import Blade
     from app.models.work_order_event import WorkOrderEvent
     from app.models.slot_allocation import SlotAllocation
     from app.workflows.state_machine import WorkflowEngine
 
-    imbalance_slot: int = int(body.get("imbalance_slot", 0))
-    total_slots: int = int(body.get("total_slots", 80))
-
-    if imbalance_slot < 1 or imbalance_slot > total_slots:
+    try:
+        stage: int = int(body["stage"])
+    except (KeyError, TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"imbalance_slot must be between 1 and {total_slots}",
+            detail="stage (1 or 2) is required for LPTR slot assignment",
+        )
+    if stage not in (1, 2):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="stage must be 1 or 2",
+        )
+
+    try:
+        unbalance_slot: int = int(body["unbalance_slot"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="unbalance_slot (int) is required for LPTR slot assignment",
+        )
+
+    total_slots: int = int(body.get("total_slots", 90))
+    assignments = body.get("assignments")
+
+    if total_slots < 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="total_slots must be at least 2",
+        )
+    if unbalance_slot < 1 or unbalance_slot > total_slots:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unbalance_slot must be between 1 and {total_slots}",
+        )
+    if not isinstance(assignments, list) or not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="assignments (non-empty list of {blade_id, slot_number}) is required for LPTR slot assignment",
+        )
+
+    try:
+        parsed = [
+            (uuid.UUID(str(a["blade_id"])), int(a["slot_number"]))
+            for a in assignments
+        ]
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Each assignment must have a valid blade_id (uuid) and slot_number (int)",
+        )
+
+    slot_by_blade_id: dict = dict(parsed)
+    if len(slot_by_blade_id) != len(parsed):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Duplicate blade_id in assignments",
+        )
+    slot_numbers = [s for _, s in parsed]
+    if len(set(slot_numbers)) != len(slot_numbers):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Duplicate slot_number in assignments",
+        )
+    if any(s < 1 or s > total_slots for s in slot_numbers):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"All slot_number values must be between 1 and {total_slots}",
+        )
+
+    expected_count = LPTR_STAGE1_BLADE_COUNT if stage == 1 else LPTR_STAGE2_BLADE_COUNT
+    if len(slot_by_blade_id) != expected_count:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Stage {stage} requires exactly {expected_count} assignments, received {len(slot_by_blade_id)}",
         )
 
     # Gate: work order must have been accepted by Assembly before slots can be assigned
@@ -876,8 +952,8 @@ async def _assign_lptr_work_order_slot(
     ).scalar_one_or_none()
 
     work_order_status = latest_event.event_type.value if latest_event else "CREATED"
-    # SLOTS_ALLOCATED is included so re-running/recomputing slot balancing after
-    # the first pass doesn't get blocked by its own prior event.
+    # SLOTS_ALLOCATED is included so stage 2 (submitted after stage 1's own
+    # SLOTS_ALLOCATED event) isn't blocked by its own prior event.
     _ACCEPTED_STATUSES = {
         BatchEventType.ACCEPTED.value,
         BatchEventType.MODIFIED.value,
@@ -892,6 +968,34 @@ async def _assign_lptr_work_order_slot(
                 f"Please accept the work order first."
             ),
         )
+
+    # Stage 2 physically cannot happen before stage 1's blades are installed
+    # and balancing-checked. Do not additionally require a passing check —
+    # the operator may proceed via documented manual corrections/manufacturer
+    # replacement even when balancing can't be perfected; the software must
+    # never gate on or silently override that judgment call.
+    if stage == 2:
+        existing_stage1 = (
+            await db.execute(
+                select(SlotAllocation.id)
+                .join(Blade, Blade.id == SlotAllocation.blade_id)
+                .where(
+                    Blade.work_order_number == work_order_number,
+                    Blade.blade_type == BladeType.LPTR,
+                    SlotAllocation.stage == 1,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_stage1 is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Work Order '{work_order_number}' has no stage-1 LPTR slot allocation yet. "
+                    "Stage 1 must be installed and balancing-checked before stage 2."
+                ),
+            )
+
     _ELIGIBLE_FOR_SLOT = [
         BladeStatus.SENT_TO_ASSEMBLY,
         BladeStatus.ASSEMBLY_RECEIVED,
@@ -915,47 +1019,24 @@ async def _assign_lptr_work_order_slot(
             detail=f"No eligible LPTR blades found in Work Order '{work_order_number}' — all blades may already have slots assigned.",
         )
 
-    # Fetch latest INITIAL measurement static_moment_gcm for each blade
-    from app.models.measurement import Measurement
-    from sqlalchemy import func as sa_func
-
-    blade_ids = [b.id for b in blades]
-    subq = (
-        select(
-            Measurement.blade_id,
-            sa_func.max(Measurement.measured_at).label("latest_at"),
+    # Stage 1 assigns 46 of the currently-eligible pool (the other 44 stay
+    # eligible, for stage 2) — unlike HPTR's single-shot assignment, this is
+    # deliberately a subset, not an exact match to the full eligible set.
+    # Every referenced blade must still be currently eligible, though.
+    eligible_ids = {b.id for b in blades}
+    if not set(slot_by_blade_id.keys()) <= eligible_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "assignments reference blade(s) that are not currently eligible "
+                f"for LPTR slot assignment in Work Order '{work_order_number}'."
+            ),
         )
-        .where(
-            Measurement.blade_id.in_(blade_ids),
-            Measurement.measurement_type == "INITIAL",
-        )
-        .group_by(Measurement.blade_id)
-        .subquery()
-    )
-    meas_rows = (
-        await db.execute(
-            select(Measurement.blade_id, Measurement.static_moment_gcm)
-            .join(
-                subq,
-                (Measurement.blade_id == subq.c.blade_id)
-                & (Measurement.measured_at == subq.c.latest_at),
-            )
-        )
-    ).all()
-    sm_map: dict = {str(row.blade_id): float(row.static_moment_gcm or 0) for row in meas_rows}
 
-    # Sort heaviest static moment first, then interleave:
-    # first half (heavy) + reversed second half (light) so that
-    # each heavy blade is placed directly opposite a light blade.
-    sorted_blades = sorted(blades, key=lambda b: -sm_map.get(str(b.id), 0))
-    half = len(sorted_blades) // 2
-    interleaved = sorted_blades[:half] + list(reversed(sorted_blades[half:]))
+    assigned_blades = [b for b in blades if b.id in slot_by_blade_id]
 
-    N = total_slots
-    K = imbalance_slot
-
-    for i, blade in enumerate(interleaved):
-        computed_slot = str(((K - 1 + i) % N) + 1)
+    for blade in assigned_blades:
+        slot_number = str(slot_by_blade_id[blade.id])
 
         # Deactivate any existing allocation
         existing = (
@@ -973,7 +1054,8 @@ async def _assign_lptr_work_order_slot(
         # Create new allocation
         alloc = SlotAllocation(
             blade_id=blade.id,
-            slot_number=computed_slot,
+            slot_number=slot_number,
+            stage=stage,
             allocated_by_id=current_user.id,
         )
         db.add(alloc)
@@ -985,8 +1067,8 @@ async def _assign_lptr_work_order_slot(
             user=current_user,
             station_id=None,
             remarks=(
-                f"Slot {computed_slot} assigned via work order balancing "
-                f"(imbalance at slot {K}, disc has {N} slots)"
+                f"LPTR stage {stage} slot {slot_number} assigned "
+                f"(unbalance at slot {unbalance_slot}, disc has {total_slots} slots)"
             ),
         )
 
@@ -998,19 +1080,20 @@ async def _assign_lptr_work_order_slot(
         work_order_number=work_order_number,
         event_type=BatchEventType.SLOTS_ALLOCATED,
         action_by_id=current_user.id,
-        remarks=f"{len(sorted_blades)} blade(s) assigned to computed disc slots.",
+        remarks=f"LPTR stage {stage}: {len(assigned_blades)} blade(s) assigned to computed disc slots.",
         changes={
-            "blades_assigned": len(sorted_blades),
-            "imbalance_slot": K,
-            "total_slots": N,
+            "stage": stage,
+            "blades_assigned": len(assigned_blades),
+            "unbalance_slot": unbalance_slot,
+            "total_slots": total_slots,
         },
     )
     db.add(ev)
     await db.commit()
 
-    # Notify Super Admin that all slots in the work order are now assigned.
-    blade_count_assigned = len(sorted_blades)
-    async def _notify_slots_assigned(_work_order: str, _count: int) -> None:
+    # Notify OH that this stage's slots are now assigned.
+    blade_count_assigned = len(assigned_blades)
+    async def _notify_slots_assigned(_work_order: str, _count: int, _stage: int) -> None:
         from app.notifications.service import NotificationService
         from app.models.notification import NotificationType
         from app.db.session import AsyncSessionLocal
@@ -1019,31 +1102,35 @@ async def _assign_lptr_work_order_slot(
                 svc = NotificationService(_db)
                 await svc.notify_roles(
                     roles=["OH_OPERATOR", "SUPER_ADMIN"],
-                    title=f"Work Order {_work_order} — All slots assigned",
-                    body=f"Assembly has assigned disc slots to all {_count} blade(s) in Work Order {_work_order}.",
+                    title=f"Work Order {_work_order} — LPTR stage {_stage} slots assigned",
+                    body=f"Assembly has assigned disc slots to {_count} blade(s) for LPTR stage {_stage} in Work Order {_work_order}.",
                     notification_type=NotificationType.SLOT_PENDING,
-                    metadata={"work_order_number": _work_order, "blades_assigned": _count},
+                    metadata={"work_order_number": _work_order, "stage": _stage, "blades_assigned": _count},
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("notify_slots_assigned_failed", error=str(exc))
 
-    background_tasks.add_task(_notify_slots_assigned, work_order_number, blade_count_assigned)
+    background_tasks.add_task(
+        _notify_slots_assigned, work_order_number, blade_count_assigned, stage
+    )
 
     logger.info(
-        "work_order_slots_assigned",
+        "work_order_lptr_slots_assigned",
         work_order=work_order_number,
         blade_type="LPTR",
-        blades=len(sorted_blades),
-        imbalance_slot=K,
-        total_slots=N,
+        stage=stage,
+        blades=len(assigned_blades),
+        unbalance_slot=unbalance_slot,
+        total_slots=total_slots,
     )
     return {
         "work_order_number": work_order_number,
         "blade_type": "LPTR",
-        "blades_assigned": len(sorted_blades),
-        "imbalance_slot": K,
-        "total_slots": N,
-        "message": f"{len(sorted_blades)} LPTR blade(s) assigned to computed disc slots.",
+        "stage": stage,
+        "blades_assigned": len(assigned_blades),
+        "unbalance_slot": unbalance_slot,
+        "total_slots": total_slots,
+        "message": f"{len(assigned_blades)} LPTR blade(s) assigned to computed disc slots (stage {stage}).",
     }
 
 

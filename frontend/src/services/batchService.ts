@@ -74,6 +74,21 @@ export interface HptrSlotAssignment {
   slot_number: number;
 }
 
+export interface LptrSlotAssignment {
+  blade_id: string;
+  slot_number: number;
+}
+
+export interface LptrAssignSlotResult {
+  work_order_number: string;
+  blade_type: "LPTR";
+  stage: number;
+  blades_assigned: number;
+  unbalance_slot: number;
+  total_slots: number;
+  message: string;
+}
+
 export interface HptrAssignSlotResult {
   work_order_number: string;
   blade_type: "HPTR";
@@ -162,14 +177,28 @@ export const batchService = {
     return data;
   },
 
-  assignSlot: async (
+  /**
+   * Persists the operator-confirmed LPTR stage-1 or stage-2 blade-to-slot
+   * mapping. The allocation itself is computed client-side via
+   * `lptrBalancing.ts` (weight sort, target-weight matching, alternating-gap
+   * fill) — this call just saves the final result for the given stage.
+   */
+  assignLptrSlots: async (
     batchNumber: string,
-    imbalanceSlot: number,
-    totalSlots: number
-  ): Promise<{ work_order_number: string; blades_assigned: number; message: string }> => {
+    stage: number,
+    unbalanceSlot: number,
+    totalSlots: number,
+    assignments: LptrSlotAssignment[]
+  ): Promise<LptrAssignSlotResult> => {
     const { data } = await api.post(
       `/work-orders/${batchNumber}/assign-slot`,
-      { blade_type: "LPTR", imbalance_slot: imbalanceSlot, total_slots: totalSlots }
+      {
+        blade_type: "LPTR",
+        stage,
+        unbalance_slot: unbalanceSlot,
+        total_slots: totalSlots,
+        assignments,
+      }
     );
     return data;
   },

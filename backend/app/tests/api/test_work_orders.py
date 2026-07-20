@@ -143,19 +143,36 @@ async def test_send_work_order_hptr_returns_422(
 # ---------------------------------------------------------------------------
 
 
+async def _make_lptr_stage1_blades(db_session, oh_user: User, work_order: WorkOrder) -> list[Blade]:
+    """LPTR stage 1 requires exactly LPTR_STAGE1_BLADE_COUNT (46) eligible blades."""
+    from app.core.constants import LPTR_STAGE1_BLADE_COUNT
+
+    return [
+        await _make_blade(
+            db_session, oh_user, work_order, BladeStatus.SENT_TO_ASSEMBLY, weight_grams=100.0 + i
+        )
+        for i in range(LPTR_STAGE1_BLADE_COUNT)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_assign_slot_lptr_requires_assembly_operator(
     client: AsyncClient, auth_headers: dict, oh_user: User, db_session
 ) -> None:
     """OH_OPERATOR is forbidden from an LPTR work order's assign-slot — 403."""
     work_order = await _make_work_order(db_session, oh_user, BladeType.LPTR)
-    await _make_blade(
+    blade = await _make_blade(
         db_session, oh_user, work_order, BladeStatus.SENT_TO_ASSEMBLY, weight_grams=100.0
     )
 
     resp = await client.post(
         f"{BASE}/{work_order.work_order_number}/assign-slot",
-        json={"imbalance_slot": 1, "total_slots": 80},
+        json={
+            "stage": 1,
+            "unbalance_slot": 1,
+            "total_slots": 90,
+            "assignments": [{"blade_id": str(blade.id), "slot_number": 1}],
+        },
         headers=auth_headers,
     )
     assert resp.status_code == 403
@@ -167,13 +184,18 @@ async def test_assign_slot_lptr_requires_accepted_work_order(
 ) -> None:
     """LPTR slot assignment is blocked until the work order has an ACCEPTED/MODIFIED event."""
     work_order = await _make_work_order(db_session, oh_user, BladeType.LPTR)
-    await _make_blade(
-        db_session, oh_user, work_order, BladeStatus.SENT_TO_ASSEMBLY, weight_grams=100.0
-    )
+    blades = await _make_lptr_stage1_blades(db_session, oh_user, work_order)
 
     resp = await client.post(
         f"{BASE}/{work_order.work_order_number}/assign-slot",
-        json={"imbalance_slot": 1, "total_slots": 80},
+        json={
+            "stage": 1,
+            "unbalance_slot": 1,
+            "total_slots": 90,
+            "assignments": [
+                {"blade_id": str(b.id), "slot_number": i + 1} for i, b in enumerate(blades)
+            ],
+        },
         headers=assembly_headers,
     )
     assert resp.status_code == 422
@@ -184,14 +206,9 @@ async def test_assign_slot_lptr_requires_accepted_work_order(
 async def test_assign_slot_lptr_succeeds_after_accepted(
     client: AsyncClient, assembly_headers: dict, oh_user: User, db_session
 ) -> None:
-    """LPTR slot assignment succeeds once the work order is ACCEPTED."""
+    """LPTR stage-1 slot assignment succeeds once the work order is ACCEPTED."""
     work_order = await _make_work_order(db_session, oh_user, BladeType.LPTR)
-    lptr_blades = [
-        await _make_blade(
-            db_session, oh_user, work_order, BladeStatus.SENT_TO_ASSEMBLY, weight_grams=100.0 + i
-        )
-        for i in range(4)
-    ]
+    lptr_blades = await _make_lptr_stage1_blades(db_session, oh_user, work_order)
 
     db_session.add(
         WorkOrderEvent(
@@ -206,13 +223,21 @@ async def test_assign_slot_lptr_succeeds_after_accepted(
 
     resp = await client.post(
         f"{BASE}/{work_order.work_order_number}/assign-slot",
-        json={"imbalance_slot": 1, "total_slots": 80},
+        json={
+            "stage": 1,
+            "unbalance_slot": 1,
+            "total_slots": 90,
+            "assignments": [
+                {"blade_id": str(b.id), "slot_number": i + 1} for i, b in enumerate(lptr_blades)
+            ],
+        },
         headers=assembly_headers,
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["blades_assigned"] == 4
+    assert data["blades_assigned"] == len(lptr_blades)
     assert data["blade_type"] == "LPTR"
+    assert data["stage"] == 1
 
     for blade in lptr_blades:
         await db_session.refresh(blade)

@@ -4,8 +4,8 @@ import type { BladeListItem } from "@/types";
  * HPTR slot allocation & set-making logic.
  *
  * HPTR blades never leave OH, and use a different balancing procedure than
- * LPTR (see `SlotAllocationPage.tsx` / `utils/balancing.ts` for LPTR's
- * heavy/light interleave):
+ * LPTR (see `SlotAllocationPage.tsx` / `utils/lptrBalancing.ts` for LPTR's
+ * two-stage target-weight-matching allocation):
  *
  * 1. Sort the batch's HPTR blades by weight descending.
  * 2. Pair the heaviest with the Assembly-provided `startSlot`, and the

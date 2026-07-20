@@ -94,4 +94,24 @@ export const reportService = {
     document.body.removeChild(anchor);
     window.URL.revokeObjectURL(url);
   },
+
+  /** Excel export of a batch's saved LPTR two-stage slot assignments (Stage 1/2 + audit sheet) — triggers the browser download directly. */
+  exportLptrSlots: async (batchNumber: string): Promise<void> => {
+    const { data } = await api.post(
+      "/reports/export/lptr-slots",
+      {},
+      { params: { work_order_number: batchNumber }, responseType: "blob" }
+    );
+    const blob = new Blob([data as BlobPart], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `lptr_slots_${batchNumber}.xlsx`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(url);
+  },
 };

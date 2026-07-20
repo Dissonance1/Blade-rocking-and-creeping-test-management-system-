@@ -1,103 +1,135 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Loader2, CheckCircle2, XCircle, AlertTriangle,
-  RefreshCw, Pencil, Check, PackageSearch, XOctagon, Play, Save,
+  Loader2,
+  RefreshCw, PackageSearch, XOctagon, Play, Save, FileSpreadsheet, Scale,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 
 import { bladeService } from "@/services/bladeService";
-import { batchService } from "@/services/batchService";
+import { batchService, type LptrSlotAssignment } from "@/services/batchService";
 import { slotService } from "@/services/slotService";
-import type { SlotAllocation, BladeListItem } from "@/types";
+import { lptrService } from "@/services/lptrService";
+import { reportService } from "@/services/reportService";
+import type { BladeListItem, SlotAllocation } from "@/types";
 import { cn } from "@/utils/cn";
-import { computeBalancedSlots, type PreviewRow } from "@/utils/balancing";
+import {
+  LPTR_TOTAL_SLOTS, LPTR_STAGE1_COUNT, LPTR_STAGE2_COUNT,
+  computeLptrStage1, computeLptrStage2,
+  type LptrAllocationEntry, type LptrStage1Result,
+} from "@/utils/lptrBalancing";
 
-// ─── Update balancing dialog ──────────────────────────────────────────────────
+const ELIGIBLE_FOR_SLOT_STATUSES = new Set(["SENT_TO_ASSEMBLY", "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED"]);
 
-function UpdateBalancingDialog({
-  slot,
-  open,
-  onClose,
+// ─── Shared: W1/W2 half-split allocation tables ─────────────────────────────
+
+const HALF_TABLE_HEADERS = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"];
+
+function splitByHalf<T>(items: T[], slotOf: (item: T) => number, totalSlots: number = LPTR_TOTAL_SLOTS) {
+  const half = totalSlots / 2;
+  const w1 = items.filter((item) => slotOf(item) <= half).sort((a, b) => slotOf(a) - slotOf(b));
+  const w2 = items.filter((item) => slotOf(item) > half).sort((a, b) => slotOf(a) - slotOf(b));
+  return { half, w1, w2 };
+}
+
+function HalfTable({
+  title,
+  rows,
 }: {
-  slot: SlotAllocation | null;
-  open: boolean;
-  onClose: () => void;
+  title: string;
+  rows: { slot: number; serial: string; melt: string | null | undefined; weight: number | null | undefined; staticMoment: number | null | undefined }[];
 }) {
-  const qc = useQueryClient();
-  const [remarks, setRemarks] = useState(slot?.balancing_remarks ?? "");
-  const [isBalanced, setIsBalanced] = useState(slot?.is_balanced ?? false);
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      slotService.update(slot!.id, { is_balanced: isBalanced, balancing_remarks: remarks }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["slots"] });
-      toast.success(`Slot ${slot?.slot_number} updated`);
-      onClose();
-    },
-    onError: () => toast.error("Failed to update balancing"),
-  });
-
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
-        <DialogHeader>
-          <DialogTitle>Update Balancing — Slot {slot?.slot_number}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="flex items-center gap-3">
-            <Checkbox
-              id="balanced"
-              checked={isBalanced}
-              onCheckedChange={(v) => setIsBalanced(!!v)}
-            />
-            <Label htmlFor="balanced" className="text-sm cursor-pointer">Mark as balanced</Label>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-sm font-medium">Remarks</Label>
-            <Textarea
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              placeholder="Enter balancing notes…"
-              className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}
-            className="bg-emerald-500 hover:bg-emerald-600 text-white">
-            {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Check className="w-4 h-4 mr-1" />}
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-slate-100 dark:bg-background rounded-t-lg border border-b-0 border-slate-200 dark:border-slate-700/60">
+        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{title}</span>
+        <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">{rows.length} slots</span>
+      </div>
+      <div className="border border-slate-200 dark:border-slate-700/60 rounded-b-lg overflow-x-auto max-h-[28rem] overflow-y-auto">
+        <table className="w-full text-sm whitespace-nowrap">
+          <thead className="sticky top-0">
+            <tr className="bg-slate-800 dark:bg-background">
+              {HALF_TABLE_HEADERS.map((hd) => (
+                <th key={hd} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
+                  {hd}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {rows.map((r, idx) => (
+              <tr key={`${r.slot}-${r.serial}`} className={cn(
+                "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
+                idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
+              )}>
+                <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{r.slot}</td>
+                <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">{r.serial}</td>
+                <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">{r.melt ?? "—"}</td>
+                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                  {r.weight != null ? Number(r.weight).toFixed(1) : "—"}
+                </td>
+                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                  {r.staticMoment != null ? Number(r.staticMoment).toFixed(2) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
-// ─── Reject batch dialog ──────────────────────────────────────────────────────
+function AllocationTable({ entries }: { entries: LptrAllocationEntry[] }) {
+  const { half, w1, w2 } = splitByHalf(entries, (e) => e.slot);
+  const toRow = (e: LptrAllocationEntry) => ({
+    slot: e.slot,
+    serial: e.blade.serial_number,
+    melt: e.blade.melt_number,
+    weight: e.blade.weight_grams,
+    staticMoment: e.blade.static_moment_gcm,
+  });
+  return (
+    <div className="flex flex-col lg:flex-row gap-4">
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+    </div>
+  );
+}
 
-function RejectBatchDialog({
-  workOrderNumber,
-  open,
-  onClose,
-}: {
-  workOrderNumber: string;
-  open: boolean;
-  onClose: () => void;
-}) {
+interface SavedRow { slot: SlotAllocation; blade: BladeListItem | undefined; }
+
+function SavedSlotsTable({ rows }: { rows: SavedRow[] }) {
+  const { half, w1, w2 } = splitByHalf(rows, (r) => parseInt(r.slot.slot_number, 10) || 0);
+  const toRow = (r: SavedRow) => ({
+    slot: parseInt(r.slot.slot_number, 10) || 0,
+    serial: r.blade?.serial_number ?? "—",
+    melt: r.blade?.melt_number,
+    weight: r.blade?.weight_grams,
+    staticMoment: r.blade?.static_moment_gcm,
+  });
+  return (
+    <div className="flex flex-col lg:flex-row gap-4">
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+    </div>
+  );
+}
+
+// ─── Reject batch dialog ────────────────────────────────────────────────────
+
+function RejectBatchDialog({ workOrderNumber, open, onClose }: { workOrderNumber: string; open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const [remarks, setRemarks] = useState("");
 
@@ -122,26 +154,15 @@ function RejectBatchDialog({
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            This will reject the entire batch and notify OH. Please state the reason clearly.
-          </p>
-          <div className="space-y-1.5">
-            <Label className="text-sm font-medium text-red-500">Rejection Reason *</Label>
-            <Textarea
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              placeholder="Describe why the batch is being rejected…"
-              className="border-red-300 dark:border-red-700/50 min-h-[100px]"
-            />
-          </div>
+          <Textarea
+            value={remarks} onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Describe why the batch is being rejected…"
+            className="border-red-300 dark:border-red-700/50 min-h-[100px]"
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !remarks.trim()}
-            className="bg-red-600 hover:bg-red-700 text-white"
-          >
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !remarks.trim()} className="bg-red-600 hover:bg-red-700 text-white">
             {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <XOctagon className="w-4 h-4 mr-1" />}
             Confirm Reject
           </Button>
@@ -151,332 +172,183 @@ function RejectBatchDialog({
   );
 }
 
-// ─── Preview table (before saving) ───────────────────────────────────────────
-
-function PreviewTable({
-  rows,
-  onSave,
-  onReject,
-  saving,
-}: {
-  rows: PreviewRow[];
-  onSave: () => void;
-  onReject: () => void;
-  saving: boolean;
-}) {
-  return (
-    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
-      <CardHeader className="pb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-          <SlotAllocationIcon className="w-4 h-4 text-orange-500 shrink-0" />
-          Computed Slot Assignments
-          <span className="text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">
-            Preview — not saved yet
-          </span>
-        </CardTitle>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={onReject}
-            variant="outline"
-            size="sm"
-            className="flex-1 sm:flex-none justify-center border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
-          >
-            <XOctagon className="w-3.5 h-3.5 mr-1.5" />
-            Reject Batch
-          </Button>
-          <Button
-            onClick={onSave}
-            disabled={saving}
-            size="sm"
-            className="flex-1 sm:flex-none justify-center bg-emerald-500 hover:bg-emerald-600 text-white"
-          >
-            {saving ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
-            ) : (
-              <Save className="w-3.5 h-3.5 mr-1.5" />
-            )}
-            Save Slots
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm whitespace-nowrap">
-            <thead>
-              <tr className="bg-slate-800 dark:bg-background">
-                {["Slot", "Blade Serial", "Melt No.", "Static Moment (g·cm)", "Weight (g)"].map((h) => (
-                  <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-              {rows.map(({ blade, slot }, idx) => {
-                return (
-                  <tr
-                    key={blade.id}
-                    className={cn(
-                      "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                      idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
-                    )}
-                  >
-                    <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">
-                      #{slot}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">
-                      {blade.serial_number}
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">
-                      {blade.melt_number ?? "—"}
-                    </td>
-                    <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                      {blade.static_moment_gcm != null ? Number(blade.static_moment_gcm).toFixed(2) : "—"}
-                    </td>
-                    <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                      {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Saved slots table ────────────────────────────────────────────────────────
-
-interface SlotRow { slot: SlotAllocation; blade: BladeListItem | undefined; }
-
-function SavedSlotsTable({
-  rows,
-  onEdit,
-  onReject,
-}: {
-  rows: SlotRow[];
-  onEdit: (s: SlotAllocation) => void;
-  onReject: () => void;
-}) {
-  const balancedCount = rows.filter((r) => r.slot.is_balanced).length;
-  const unbalancedCount = rows.filter((r) => !r.slot.is_balanced).length;
-  const allBalanced = rows.length > 0 && unbalancedCount === 0;
-
-  return (
-    <div className="space-y-4">
-      {/* Summary bar */}
-      <div className={cn(
-        "rounded-xl border px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-4",
-        allBalanced
-          ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50"
-          : "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50"
-      )}>
-        <div className="flex items-center gap-3 flex-1">
-          {allBalanced
-            ? <CheckCircle2 className="w-6 h-6 text-emerald-500 shrink-0" />
-            : <AlertTriangle className="w-6 h-6 text-amber-500 shrink-0" />}
-          <div>
-            <p className={cn("font-semibold text-sm",
-              allBalanced ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"
-            )}>
-              {allBalanced
-                ? `All ${rows.length} blades balanced — batch ready`
-                : `${unbalancedCount} blade${unbalancedCount > 1 ? "s" : ""} not yet balanced`}
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {balancedCount} balanced · {unbalancedCount} unbalanced · {rows.length} total
-            </p>
-          </div>
-        </div>
-        <div className="w-full sm:w-48">
-          <div className="h-2.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden">
-            <div
-              className={cn("h-full rounded-full transition-all", allBalanced ? "bg-emerald-500" : "bg-amber-400")}
-              style={{ width: `${Math.round((balancedCount / rows.length) * 100)}%` }}
-            />
-          </div>
-          <p className="text-xs text-right text-slate-400 mt-0.5">
-            {Math.round((balancedCount / rows.length) * 100)}%
-          </p>
-        </div>
-        {unbalancedCount > 0 && (
-          <Button onClick={onReject} className="bg-red-600 hover:bg-red-700 text-white shrink-0">
-            <XOctagon className="w-4 h-4 mr-2" />
-            Reject Batch
-          </Button>
-        )}
-      </div>
-
-      {/* Slots table */}
-      <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center justify-between">
-            <span>Saved Slot Assignments</span>
-            <span className="text-sm font-normal text-slate-400">{rows.length} slots</span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm whitespace-nowrap">
-              <thead>
-                <tr className="bg-slate-800 dark:bg-background">
-                  {["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Balance", "Remarks", "Action"].map((h) => (
-                    <th key={h} className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-100 whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-                {rows.map(({ slot, blade }, idx) => {
-                  return (
-                    <tr
-                      key={slot.id}
-                      className={cn(
-                        "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                        !slot.is_balanced ? "bg-red-50/40 dark:bg-red-900/10"
-                          : idx % 2 === 0 ? "bg-white dark:bg-background"
-                            : "bg-slate-50/60 dark:bg-background"
-                      )}
-                    >
-                      <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">
-                        #{slot.slot_number}
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">
-                        {blade?.serial_number ?? "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">
-                        {blade?.melt_number ?? "—"}
-                      </td>
-                      <td className="px-3 py-2.5 tabular-nums text-xs">
-                        {blade?.weight_grams != null ? Number(blade.weight_grams).toFixed(1) : "—"}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        {slot.is_balanced ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                            <CheckCircle2 className="w-4 h-4" />Balanced
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-500 dark:text-red-400">
-                            <XCircle className="w-4 h-4" />Unbalanced
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400 max-w-[160px] truncate">
-                        {slot.balancing_remarks || "—"}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <Button
-                          variant="ghost" size="sm"
-                          onClick={() => onEdit(slot)}
-                          className="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white h-7 px-2 text-xs"
-                        >
-                          <Pencil className="w-3 h-3 mr-1" />Update
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
+// ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function SlotAllocationPage() {
   const qc = useQueryClient();
   const [selectedBatch, setSelectedBatch] = useState("");
-  const [preview, setPreview] = useState<PreviewRow[] | null>(null);
-  const [editSlot, setEditSlot] = useState<SlotAllocation | null>(null);
+  const [activeTab, setActiveTab] = useState("empty-rotor");
   const [showReject, setShowReject] = useState(false);
 
-  // Accepted batches only
+  const [unbalanceSlotInput, setUnbalanceSlotInput] = useState("");
+  const [unbalanceValueInput, setUnbalanceValueInput] = useState("");
+
+  const [stage1Preview, setStage1Preview] = useState<LptrStage1Result | null>(null);
+  const [stage2Preview, setStage2Preview] = useState<LptrAllocationEntry[] | null>(null);
+
   const { data: batches = [] } = useQuery({
     queryKey: ["batches"],
     queryFn: () => batchService.list(),
     staleTime: 30_000,
   });
   const eligibleBatches = useMemo(
-    () => batches.filter((b) => ["ACCEPTED", "MODIFIED"].includes(b.current_status)),
+    () => batches.filter((b) => ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED"].includes(b.current_status)),
     [batches]
   );
 
-  // Blades in selected batch
   const { data: bladesData, isLoading: bladesLoading } = useQuery({
-    queryKey: ["blades", "batch", selectedBatch],
-    queryFn: () => bladeService.list({ work_order_number: selectedBatch, limit: 200 }),
+    queryKey: ["blades", "lptr-batch", selectedBatch],
+    queryFn: () => bladeService.list({ work_order_number: selectedBatch, blade_type: "LPTR", limit: 200 }),
     enabled: !!selectedBatch,
     staleTime: 0,
   });
   const blades: BladeListItem[] = bladesData?.items ?? [];
-
-  // Saved slot allocations — scoped to selected batch server-side
-  const { data: batchSlotsRaw = [], isLoading: slotsLoading } = useQuery({
-    queryKey: ["slots", selectedBatch],
-    queryFn: () => slotService.list({ work_order_number: selectedBatch, limit: 200 }),
-    enabled: !!selectedBatch,
-    refetchInterval: 30_000,
-  });
-
   const bladeMap = useMemo(() => {
     const m = new Map<string, BladeListItem>();
     blades.forEach((b) => m.set(b.id, b));
     return m;
   }, [blades]);
 
-  // Saved slots for this batch sorted by slot number
-  const batchSlots: SlotRow[] = useMemo(() => {
-    return [...batchSlotsRaw]
-      .sort((a, b) => {
-        const na = parseInt(a.slot_number, 10), nb = parseInt(b.slot_number, 10);
-        return isNaN(na) || isNaN(nb) ? a.slot_number.localeCompare(b.slot_number) : na - nb;
-      })
-      .map((s) => ({ slot: s, blade: bladeMap.get(s.blade_id) }));
-  }, [batchSlotsRaw, bladeMap]);
+  const { data: batchSlotsRaw = [], isLoading: slotsLoading } = useQuery({
+    queryKey: ["slots", selectedBatch],
+    queryFn: () => slotService.list({ work_order_number: selectedBatch, limit: 200 }),
+    enabled: !!selectedBatch,
+    refetchInterval: 30_000,
+  });
+  const bladeIds = useMemo(() => new Set(blades.map((b) => b.id)), [blades]);
+  const lptrSlots = useMemo(() => batchSlotsRaw.filter((s) => s.is_active && bladeIds.has(s.blade_id)), [batchSlotsRaw, bladeIds]);
+  const stage1Slots = useMemo(() => lptrSlots.filter((s) => s.stage === 1), [lptrSlots]);
+  const stage2Slots = useMemo(() => lptrSlots.filter((s) => s.stage === 2), [lptrSlots]);
 
-  const hasSavedSlots = batchSlots.length > 0;
-  const isLoading = bladesLoading || slotsLoading;
-  const batchInfo = batches.find((b) => b.work_order_number === selectedBatch);
+  const { data: emptyRotor, isLoading: emptyRotorLoading } = useQuery({
+    queryKey: ["lptr-empty-rotor", selectedBatch],
+    queryFn: () => lptrService.getEmptyRotorReading(selectedBatch),
+    enabled: !!selectedBatch,
+  });
 
-  // Save slots mutation
-  const saveMutation = useMutation({
-    mutationFn: () => batchService.assignSlot(selectedBatch, 1, 90),
+  const eligibleBlades = useMemo(
+    () => blades.filter((b) => ELIGIBLE_FOR_SLOT_STATUSES.has(b.status)),
+    [blades]
+  );
+
+  const unbalanceSlot = emptyRotor?.unbalance_slot;
+  const unbalanceValue = emptyRotor ? Number(emptyRotor.unbalance_value) : undefined;
+
+  function refresh() {
+    qc.invalidateQueries({ queryKey: ["slots", selectedBatch] });
+    qc.invalidateQueries({ queryKey: ["blades", "lptr-batch", selectedBatch] });
+    qc.invalidateQueries({ queryKey: ["batches"] });
+  }
+
+  // ── Empty rotor ──────────────────────────────────────────────────────────
+  const saveEmptyRotorMutation = useMutation({
+    mutationFn: () => lptrService.saveEmptyRotorReading(selectedBatch, Number(unbalanceSlotInput), Number(unbalanceValueInput)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lptr-empty-rotor", selectedBatch] });
+      toast.success("Empty rotor reading saved");
+      setActiveTab("stage1");
+    },
+    onError: () => toast.error("Failed to save empty rotor reading"),
+  });
+
+  // ── Stage 1 ──────────────────────────────────────────────────────────────
+  function handleRunStage1() {
+    if (!unbalanceSlot || unbalanceValue == null) {
+      toast.error("Record the empty rotor reading first");
+      return;
+    }
+    if (eligibleBlades.length < LPTR_STAGE1_COUNT) {
+      toast.error(`Need at least ${LPTR_STAGE1_COUNT} eligible blades, found ${eligibleBlades.length}`);
+      return;
+    }
+    setStage1Preview(computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS));
+  }
+
+  const saveStage1Mutation = useMutation({
+    mutationFn: () => {
+      if (!stage1Preview || !unbalanceSlot) throw new Error("No stage 1 allocation to save");
+      const assignments: LptrSlotAssignment[] = stage1Preview.entries.map((e) => ({ blade_id: e.blade.id, slot_number: e.slot }));
+      return batchService.assignLptrSlots(selectedBatch, 1, unbalanceSlot, LPTR_TOTAL_SLOTS, assignments);
+    },
     onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ["slots", selectedBatch] });
-      qc.invalidateQueries({ queryKey: ["blades", "batch", selectedBatch] });
-      setPreview(null);
-      toast.success(res.message ?? "Slots saved");
+      refresh();
+      setStage1Preview(null);
+      toast.success(res.message ?? "Stage 1 slots saved");
     },
     onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to save slots";
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to save stage 1 slots";
       toast.error(msg);
     },
   });
 
-  function handleRunBalancing() {
-    if (blades.length === 0) {
-      toast.error("No blades loaded for this batch");
+  // ── Stage 2 ──────────────────────────────────────────────────────────────
+  function handleRunStage2() {
+    if (!unbalanceSlot) {
+      toast.error("Record the empty rotor reading first");
       return;
     }
-    const rows = computeBalancedSlots(blades, 1, 90);
-    setPreview(rows);
+    if (stage1Slots.length === 0) {
+      toast.error("Save Stage 1 first");
+      return;
+    }
+    if (eligibleBlades.length < LPTR_STAGE2_COUNT) {
+      toast.error(`Need ${LPTR_STAGE2_COUNT} remaining eligible blades, found ${eligibleBlades.length}`);
+      return;
+    }
+    setStage2Preview(computeLptrStage2(eligibleBlades, unbalanceSlot, LPTR_TOTAL_SLOTS));
+  }
+
+  const saveStage2Mutation = useMutation({
+    mutationFn: () => {
+      if (!stage2Preview || !unbalanceSlot) throw new Error("No stage 2 allocation to save");
+      const assignments: LptrSlotAssignment[] = stage2Preview.map((e) => ({ blade_id: e.blade.id, slot_number: e.slot }));
+      return batchService.assignLptrSlots(selectedBatch, 2, unbalanceSlot, LPTR_TOTAL_SLOTS, assignments);
+    },
+    onSuccess: (res) => {
+      refresh();
+      setStage2Preview(null);
+      toast.success(res.message ?? "Stage 2 slots saved");
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to save stage 2 slots";
+      toast.error(msg);
+    },
+  });
+
+  const [exporting, setExporting] = useState(false);
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await reportService.exportLptrSlots(selectedBatch);
+    } catch {
+      toast.error("Failed to export Excel file");
+    } finally {
+      setExporting(false);
+    }
   }
 
   function handleBatchChange(bn: string) {
     setSelectedBatch(bn);
-    setPreview(null);
+    setActiveTab("empty-rotor");
+    setStage1Preview(null);
+    setStage2Preview(null);
+    setUnbalanceSlotInput("");
+    setUnbalanceValueInput("");
   }
+
+  const stage1SavedRows: SavedRow[] = useMemo(
+    () => [...stage1Slots].sort((a, b) => parseInt(a.slot_number, 10) - parseInt(b.slot_number, 10)).map((s) => ({ slot: s, blade: bladeMap.get(s.blade_id) })),
+    [stage1Slots, bladeMap]
+  );
+  const stage2SavedRows: SavedRow[] = useMemo(
+    () => [...stage2Slots].sort((a, b) => parseInt(a.slot_number, 10) - parseInt(b.slot_number, 10)).map((s) => ({ slot: s, blade: bladeMap.get(s.blade_id) })),
+    [stage2Slots, bladeMap]
+  );
+
+  const isLoading = bladesLoading || slotsLoading;
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
-      {/* Header */}
       <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full gap-2">
           <div className="min-w-0">
@@ -485,13 +357,11 @@ export default function SlotAllocationPage() {
               LPTR Slot Allocation
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">
-              Run the balancing algorithm, review computed slots, then save or reject
+              Two-stage allocation — 46 blades, balancing check, then the remaining 44
             </p>
           </div>
           {selectedBatch && (
-            <Button variant="outline" size="sm"
-              onClick={() => { qc.invalidateQueries({ queryKey: ["slots"] }); qc.invalidateQueries({ queryKey: ["blades", "batch", selectedBatch] }); }}
-              className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
+            <Button variant="outline" size="sm" onClick={refresh} className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
               <RefreshCw className="w-4 h-4 mr-1.5" />Refresh
             </Button>
           )}
@@ -499,8 +369,6 @@ export default function SlotAllocationPage() {
       </div>
 
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
-
-        {/* Batch selector */}
         <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
           <CardContent className="pt-5 pb-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4">
@@ -516,9 +384,7 @@ export default function SlotAllocationPage() {
                   <option value="">— Select an accepted batch —</option>
                   {eligibleBatches.map((b) => (
                     <option key={b.work_order_number} value={b.work_order_number}>
-                      {b.work_order_number}
-                      {b.nomenclature ? ` · ${b.nomenclature}` : ""}
-                      {` · ${b.current_status_label}`}
+                      {b.work_order_number}{b.nomenclature ? ` · ${b.nomenclature}` : ""}{` · ${b.current_status_label}`}
                     </option>
                   ))}
                 </select>
@@ -528,28 +394,16 @@ export default function SlotAllocationPage() {
                   </p>
                 )}
               </div>
-              {batchInfo && (
-                <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-background text-slate-600 dark:text-slate-300 font-medium">
-                    {batchInfo.blade_count} blades
-                  </span>
-                  {batchInfo.work_order_number && (
-                    <span className="px-3 py-1.5 rounded-full bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-medium">
-                      WO: {batchInfo.work_order_number}
-                    </span>
-                  )}
-                  {batchInfo.part_number && (
-                    <span className="px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium">
-                      P/N: {batchInfo.part_number}
-                    </span>
-                  )}
-                </div>
+              {selectedBatch && stage1Slots.length > 0 && (
+                <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting} className="border-slate-300 dark:border-slate-600 shrink-0">
+                  {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
+                  Export Excel
+                </Button>
               )}
             </div>
           </CardContent>
         </Card>
 
-        {/* No batch selected */}
         {!selectedBatch && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500 gap-3">
             <PackageSearch className="w-12 h-12 opacity-30" />
@@ -557,82 +411,189 @@ export default function SlotAllocationPage() {
           </div>
         )}
 
-        {/* Loading */}
-        {selectedBatch && isLoading && (
+        {selectedBatch && (isLoading || emptyRotorLoading) && (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-7 h-7 animate-spin text-orange-400" />
           </div>
         )}
 
-        {/* === SAVED SLOTS VIEW === */}
-        {selectedBatch && !isLoading && hasSavedSlots && (
-          <SavedSlotsTable
-            rows={batchSlots}
-            onEdit={setEditSlot}
-            onReject={() => setShowReject(true)}
-          />
-        )}
+        {selectedBatch && !isLoading && !emptyRotorLoading && (
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList>
+              <TabsTrigger value="empty-rotor">Empty Rotor</TabsTrigger>
+              <TabsTrigger value="stage1">Stage 1 (46)</TabsTrigger>
+              <TabsTrigger value="stage2" disabled={stage1Slots.length === 0}>Stage 2 (44)</TabsTrigger>
+            </TabsList>
 
-        {/* === NO SLOTS YET — RUN BALANCING === */}
-        {selectedBatch && !isLoading && !hasSavedSlots && !preview && (
-          <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-            <CardContent className="py-14 flex flex-col items-center gap-5">
-              <SlotAllocationIcon className="w-12 h-12 text-orange-300 dark:text-orange-700" />
-              <div className="text-center">
-                <p className="font-semibold text-slate-700 dark:text-slate-200 text-lg">
-                  No slots assigned yet
-                </p>
-                <p className="text-sm text-slate-400 dark:text-slate-500 mt-1 max-w-sm">
-                  Click the button below to compute balanced disc slot assignments for
-                  all {blades.length} blade{blades.length !== 1 ? "s" : ""} in this batch.
-                  You can review before saving.
-                </p>
+            {/* ── Empty Rotor tab ────────────────────────────────────────── */}
+            <TabsContent value="empty-rotor">
+              <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Empty Rotor Balancing Reading</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-4">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Before any blades are installed, the empty rotor is balanced. Enter the reported
+                    unbalance position (the first of the two adjacent slots) and value.
+                  </p>
+                  {emptyRotor && (
+                    <div className="rounded-lg border border-emerald-200 dark:border-emerald-700/50 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+                      Saved: unbalance between slots {emptyRotor.unbalance_slot} and {(emptyRotor.unbalance_slot % LPTR_TOTAL_SLOTS) + 1}, {Number(emptyRotor.unbalance_value).toFixed(2)} g
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-end gap-4">
+                    <div className="space-y-1">
+                      <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Slot</Label>
+                      <Input
+                        type="number" min={1} max={LPTR_TOTAL_SLOTS}
+                        value={unbalanceSlotInput || String(emptyRotor?.unbalance_slot ?? "")}
+                        onChange={(e) => setUnbalanceSlotInput(e.target.value)}
+                        placeholder="e.g. 35"
+                        className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Value (g)</Label>
+                      <Input
+                        type="number" min={0} step="0.1"
+                        value={unbalanceValueInput || String(emptyRotor?.unbalance_value ?? "")}
+                        onChange={(e) => setUnbalanceValueInput(e.target.value)}
+                        placeholder="e.g. 6.8"
+                        className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => saveEmptyRotorMutation.mutate()}
+                      disabled={saveEmptyRotorMutation.isPending || (!unbalanceSlotInput && !emptyRotor) || (!unbalanceValueInput && !emptyRotor)}
+                      className="bg-orange-500 hover:bg-orange-400 text-white"
+                    >
+                      {saveEmptyRotorMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
+                      Save Reading
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Stage 1 tab ────────────────────────────────────────────── */}
+            <TabsContent value="stage1">
+              <div className="space-y-5">
+                {stage1Slots.length > 0 ? (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Saved Stage 1 Slots ({stage1SavedRows.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <SavedSlotsTable rows={stage1SavedRows} />
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardContent className="py-10 flex flex-col items-center gap-4">
+                      {!emptyRotor ? (
+                        <p className="text-sm text-slate-400 dark:text-slate-500">Record the Empty Rotor reading first.</p>
+                      ) : (
+                        <>
+                          <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
+                            {eligibleBlades.length} of {blades.length} LPTR blades ready. Stage 1 requires exactly {LPTR_STAGE1_COUNT}.
+                          </p>
+                          <Button onClick={handleRunStage1} disabled={eligibleBlades.length < LPTR_STAGE1_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
+                            <Play className="w-4 h-4 mr-1.5" />Run Stage 1 Allocation
+                          </Button>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {stage1Preview && stage1Slots.length === 0 && (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
+                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                      <CardTitle className="text-base">
+                        Stage 1 Preview
+                        <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+                      </CardTitle>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setShowReject(true)} className="border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
+                          <XOctagon className="w-3.5 h-3.5 mr-1.5" />Reject Batch
+                        </Button>
+                        <Button size="sm" onClick={() => saveStage1Mutation.mutate()} disabled={saveStage1Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
+                          {saveStage1Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                          Save Stage 1
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0 space-y-2">
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
+                      </p>
+                      <AllocationTable entries={stage1Preview.entries} />
+                    </CardContent>
+                  </Card>
+                )}
               </div>
-              <Button
-                onClick={handleRunBalancing}
-                disabled={blades.length === 0}
-                className="w-full sm:w-auto justify-center bg-orange-500 hover:bg-orange-400 text-white px-6 sm:px-10 py-3 sm:py-5 text-sm sm:text-base"
-              >
-                <Play className="w-5 h-5 mr-2 shrink-0" />
-                Run Balancing Algorithm
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+            </TabsContent>
 
-        {/* === PREVIEW VIEW === */}
-        {selectedBatch && !isLoading && !hasSavedSlots && preview && (
-          <>
-            <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-lg px-4 py-3">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>
-                This is a <strong>preview only</strong> — slots have not been saved yet.
-                Review the assignments below, then click <strong>Save Slots</strong> to confirm or <strong>Reject Batch</strong> if the assignments are not acceptable.
-              </span>
-            </div>
-            <PreviewTable
-              rows={preview}
-              onSave={() => saveMutation.mutate()}
-              onReject={() => setShowReject(true)}
-              saving={saveMutation.isPending}
-            />
-          </>
+            {/* ── Stage 2 tab ────────────────────────────────────────────── */}
+            <TabsContent value="stage2">
+              <div className="space-y-5">
+                {stage1Slots.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
+                    <Scale className="w-10 h-10 opacity-30" />
+                    <p className="text-sm">Save Stage 1 first.</p>
+                  </div>
+                ) : stage2Slots.length > 0 ? (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Saved Stage 2 Slots ({stage2SavedRows.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <SavedSlotsTable rows={stage2SavedRows} />
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardContent className="py-10 flex flex-col items-center gap-4">
+                      <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
+                        {eligibleBlades.length} blade{eligibleBlades.length !== 1 ? "s" : ""} remaining. Stage 2 requires exactly {LPTR_STAGE2_COUNT}.
+                      </p>
+                      <Button onClick={handleRunStage2} disabled={eligibleBlades.length < LPTR_STAGE2_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
+                        <Play className="w-4 h-4 mr-1.5" />Run Stage 2 Allocation
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {stage2Preview && stage2Slots.length === 0 && (
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
+                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                      <CardTitle className="text-base">
+                        Stage 2 Preview
+                        <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+                      </CardTitle>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setShowReject(true)} className="border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
+                          <XOctagon className="w-3.5 h-3.5 mr-1.5" />Reject Batch
+                        </Button>
+                        <Button size="sm" onClick={() => saveStage2Mutation.mutate()} disabled={saveStage2Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
+                          {saveStage2Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                          Save Stage 2
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <AllocationTable entries={stage2Preview} />
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         )}
       </div>
 
-      {/* Dialogs */}
-      <UpdateBalancingDialog
-        key={editSlot?.id ?? ""}
-        slot={editSlot}
-        open={!!editSlot}
-        onClose={() => setEditSlot(null)}
-      />
       {selectedBatch && (
-        <RejectBatchDialog
-          workOrderNumber={selectedBatch}
-          open={showReject}
-          onClose={() => setShowReject(false)}
-        />
+        <RejectBatchDialog workOrderNumber={selectedBatch} open={showReject} onClose={() => setShowReject(false)} />
       )}
     </div>
   );

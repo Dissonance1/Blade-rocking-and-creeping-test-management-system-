@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     auth,
     blades,
     dti,
+    lptr_balancing,
     measurements,
     notifications,
     ocr,
@@ -173,4 +174,13 @@ api_router.include_router(
     sync.router,
     prefix="/sync",
     tags=["sync"],
+)
+
+# ---------------------------------------------------------------------------
+# LPTR two-stage slot allocation & balancing records
+# ---------------------------------------------------------------------------
+api_router.include_router(
+    lptr_balancing.router,
+    prefix="/lptr",
+    tags=["lptr-balancing"],
 )
