@@ -50,6 +50,7 @@ DEFAULT_PORT   = "COM3"
 DEFAULT_SERVER = "http://localhost"
 PUSH_PATH      = "/api/v1/weighing/push"
 BAUD_RATES     = [9600, 4800, 2400, 19200, 38400]
+RETRY_INTERVAL_S = 5
 _WEIGHT_RE     = re.compile(r"\d+\.?\d*")
 
 
@@ -82,20 +83,29 @@ def _open_port(port: str, baud: int):
 
 
 def _connect(port: str):
-    """Try every baud rate in order. Return open Serial or None."""
-    log.info("[serial] opening %s …", port)
-    for baud in BAUD_RATES:
-        ser = _open_port(port, baud)
-        if ser:
-            return ser
-    log.error(
-        "[serial] could not open %s at any baud rate.\n"
-        "  • Is the device plugged in?\n"
-        "  • Is the COM port correct?  (Run: python -m serial.tools.list_ports)\n"
-        "  • Is another application (e.g. the scale software) using the port?",
-        port,
-    )
-    return None
+    """Open the port, retrying forever until it succeeds.
+
+    The scale is often powered on well after this bridge is started (or
+    loses power mid-session), so a failed attempt must keep retrying rather
+    than giving up — otherwise the bridge process exits and never notices
+    when the scale comes back.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        log.info("[serial] opening %s (attempt %d) …", port, attempt)
+        for baud in BAUD_RATES:
+            ser = _open_port(port, baud)
+            if ser:
+                return ser
+        log.warning(
+            "[serial] could not open %s — retrying in %ds.\n"
+            "  • Is the device plugged in and powered on?\n"
+            "  • Is the COM port correct?  (Run: python -m serial.tools.list_ports)\n"
+            "  • Is another application (e.g. the scale software) using the port?",
+            port, RETRY_INTERVAL_S,
+        )
+        time.sleep(RETRY_INTERVAL_S)
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
@@ -105,24 +115,28 @@ def run(port: str, server: str) -> None:
     log.info("[http ] push URL → %s", push_url)
     log.info("[http ] SSL verification disabled (self-signed cert)")
 
-    # Verify the server is reachable before opening the serial port
+    # Verify the server is reachable before opening the serial port — retry
+    # forever rather than exiting, since the backend may come up after this
+    # bridge is started.
     session = requests.Session()
     session.verify = False
-    try:
-        r = session.get(server.rstrip("/") + "/health", timeout=5)
-        log.info("[http ] server reachable — status %s", r.status_code)
-    except requests.RequestException as exc:
-        log.error(
-            "[http ] cannot reach server at %s: %s\n"
-            "  • Is the server running?  (docker compose ps)\n"
-            "  • Is the URL correct?  Try http://localhost or https://<server-ip>",
-            server, exc,
-        )
-        return
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            r = session.get(server.rstrip("/") + "/health", timeout=5)
+            log.info("[http ] server reachable — status %s", r.status_code)
+            break
+        except requests.RequestException as exc:
+            log.warning(
+                "[http ] cannot reach server at %s (attempt %d): %s — retrying in %ds\n"
+                "  • Is the server running?  (docker compose ps)\n"
+                "  • Is the URL correct?  Try http://localhost or https://<server-ip>",
+                server, attempt, exc, RETRY_INTERVAL_S,
+            )
+            time.sleep(RETRY_INTERVAL_S)
 
     ser = _connect(port)
-    if ser is None:
-        return
 
     last_weight = None
     log.info("[ready] reading weight — Ctrl+C to stop")
@@ -139,8 +153,6 @@ def run(port: str, server: str) -> None:
                     pass
                 time.sleep(5)
                 ser = _connect(port)
-                if ser is None:
-                    return
                 continue
 
             if not raw:
