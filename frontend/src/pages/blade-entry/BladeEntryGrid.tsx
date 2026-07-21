@@ -20,6 +20,8 @@ import { useBladeEntryStore, BLADES_PER_WORK_ORDER } from "@/store/bladeEntrySto
 import { useGridKeyboardNav } from "./hooks/useGridKeyboardNav";
 import GridRow from "./GridRow";
 import CompleteWorkOrderDialog from "./CompleteWorkOrderDialog";
+import ExcelImportButton from "./ExcelImportButton";
+import type { WorkOrderBulkImportResult } from "@/services/workOrderService";
 
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const SAVE_RETRY_DELAYS_MS = [500, 1500, 4000];
@@ -45,6 +47,7 @@ export default function BladeEntryGrid() {
     closeCompleteDialog,
     markEntryComplete,
     applyServerRow,
+    loadFromServer,
   } = useBladeEntryStore();
 
   const workOrderNumber = commonInfo.work_order_number;
@@ -264,6 +267,21 @@ export default function BladeEntryGrid() {
     [closeCompleteDialog, focusCell, nav]
   );
 
+  // ── Excel bulk import ────────────────────────────────────────────────────────
+  // Re-fetches the whole Work Order via loadFromServer rather than patching
+  // rows in place — bulk-imported rows go from blank to populated, and
+  // applyServerRow (designed for autosave's echo-back) only ever backfills
+  // computed fields, never melt_number/raw_weight/status/locked.
+  const handleExcelImport = useCallback(
+    async (file: File): Promise<WorkOrderBulkImportResult> => {
+      const result = await workOrderService.bulkImportRows(workOrderNumber, file);
+      const detail = await workOrderService.getEntry(workOrderNumber);
+      if (detail) loadFromServer(detail);
+      return result;
+    },
+    [workOrderNumber, loadFromServer]
+  );
+
   const savedCount = rows.filter((r) => r.status === "saved").length;
   const errorCount = rows.filter((r) => r.status === "error").length;
 
@@ -323,16 +341,24 @@ export default function BladeEntryGrid() {
           )}
         </div>
 
-        {errorCount > 0 && (
-          <button
-            type="button"
-            onClick={retryAllFailed}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700/50 rounded-full px-3 py-1"
-          >
-            <RefreshCw className="w-3 h-3" />
-            {errorCount} row(s) failed to save — Retry All
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {errorCount > 0 && (
+            <button
+              type="button"
+              onClick={retryAllFailed}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700/50 rounded-full px-3 py-1"
+            >
+              <RefreshCw className="w-3 h-3" />
+              {errorCount} row(s) failed to save — Retry All
+            </button>
+          )}
+          <ExcelImportButton
+            label="Upload Excel"
+            confirmMessage="This will overwrite Melt Number/Weight for any rows present in the file. Continue?"
+            onImport={handleExcelImport}
+            disabled={isEntryComplete}
+          />
+        </div>
       </div>
 
       {/* Column headers */}

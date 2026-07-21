@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -20,9 +20,14 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/utils/cn";
 import { extractApiError } from "@/services/api";
-import { workOrderService } from "@/services/workOrderService";
+import {
+  workOrderService,
+  type WorkOrderBulkImportResult,
+  type WorkOrderDetail,
+} from "@/services/workOrderService";
 import { batchService } from "@/services/batchService";
 import { useBladeEntryStore } from "@/store/bladeEntryStore";
+import ExcelImportButton from "./ExcelImportButton";
 
 const hhmmssRegex = /^\d{1,5}:[0-5]\d:[0-5]\d$/;
 const hoursField = z.string().regex(hhmmssRegex, "Format must be HH:MM:SS (e.g. 1500:30:00)");
@@ -164,23 +169,56 @@ export default function WorkOrderCommonInfoForm({ onStarted }: { onStarted: (wor
     defaultValues: { blade_type: "LPTR" },
   });
 
+  const buildCreatePayload = (values: FormValues) => ({
+    work_order_number: values.work_order_number.trim(),
+    shop_order_number: values.shop_order_number.trim(),
+    part_number: values.part_number.trim(),
+    blade_type: bladeType,
+    engine_number: values.engine_number?.trim() || null,
+    engine_hours: values.engine_hours,
+    component_hours: values.component_hours?.trim() || null,
+  });
+
   const startMutation = useMutation({
     mutationFn: async (values: FormValues) => {
-      return workOrderService.create({
-        work_order_number: values.work_order_number.trim(),
-        shop_order_number: values.shop_order_number.trim(),
-        part_number: values.part_number.trim(),
-        blade_type: bladeType,
-        engine_number: values.engine_number?.trim() || null,
-        engine_hours: values.engine_hours,
-        component_hours: values.component_hours?.trim() || null,
-      });
+      return workOrderService.create(buildCreatePayload(values));
     },
     onSuccess: (detail) => {
       loadFromServer(detail);
       onStarted(detail.work_order_number);
     },
   });
+
+  // Created inside handleExcelImport once the header fields validate; the
+  // grid can't be entered (loadFromServer flips phase to "grid" and unmounts
+  // this whole form) until the operator has dismissed the result dialog —
+  // otherwise the import summary would vanish before they can read it.
+  const pendingDetailRef = useRef<WorkOrderDetail | null>(null);
+
+  const handleExcelImport = (file: File): Promise<WorkOrderBulkImportResult> =>
+    new Promise((resolve, reject) => {
+      void handleSubmit(
+        async (values) => {
+          try {
+            const created = await workOrderService.create(buildCreatePayload(values));
+            pendingDetailRef.current = created;
+            const result = await workOrderService.bulkImportRows(created.work_order_number, file);
+            resolve(result);
+          } catch (err) {
+            reject(err);
+          }
+        },
+        () => reject(new Error("Please fill in the required Work Order fields above, then upload again."))
+      )();
+    });
+
+  const handleExcelDialogClosed = () => {
+    const created = pendingDetailRef.current;
+    if (created) {
+      loadFromServer(created);
+      onStarted(created.work_order_number);
+    }
+  };
 
   const inputCls =
     "h-11 text-sm bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400";
@@ -271,13 +309,19 @@ export default function WorkOrderCommonInfoForm({ onStarted }: { onStarted: (wor
               </Alert>
             )}
 
-            <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-700/60">
+            <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-slate-100 dark:border-slate-700/60 mt-4">
+              <ExcelImportButton
+                label="Upload Excel to Start"
+                onImport={handleExcelImport}
+                onDialogClosed={handleExcelDialogClosed}
+                disabled={startMutation.isPending}
+              />
               <Button
                 type="button"
                 onClick={handleSubmit((v) => startMutation.mutate(v))}
                 disabled={startMutation.isPending}
                 size="lg"
-                className="bg-orange-500 hover:bg-orange-600 text-white px-10 mt-4"
+                className="bg-orange-500 hover:bg-orange-600 text-white px-10"
               >
                 {startMutation.isPending ? (
                   <>

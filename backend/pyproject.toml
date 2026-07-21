@@ -36,6 +36,7 @@ dependencies = [
     "redis>=5.0.4",
     # Reporting
     "openpyxl>=3.1.2",
+    "xlrd>=2.0.1",
     "reportlab>=4.2.0",
     # Logging
     "structlog>=24.2.0",
