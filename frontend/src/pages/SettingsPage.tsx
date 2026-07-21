@@ -454,18 +454,6 @@ export default function SettingsPage() {
 
               <div className="flex items-center justify-between py-2">
                 <div>
-                  <p className="text-slate-900 dark:text-white text-sm font-medium">OCR Mismatch Auto-Hold</p>
-                  <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">
-                    Automatically put blades on hold when OCR mismatch is detected
-                  </p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-
-              <Separator className="bg-slate-200 dark:bg-slate-700/50" />
-
-              <div className="flex items-center justify-between py-2">
-                <div>
                   <p className="text-slate-900 dark:text-white text-sm font-medium">Notify on Rejection</p>
                   <p className="text-slate-500 dark:text-slate-400 text-xs mt-0.5">
                     Send system-wide notification when any blade is rejected

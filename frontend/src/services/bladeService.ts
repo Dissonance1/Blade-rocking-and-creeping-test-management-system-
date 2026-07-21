@@ -45,9 +45,9 @@ export const bladeService = {
       COMPLETED: "complete",
       REJECTED: "reject",
       REOPENED: "reopen",
-      ON_HOLD: "hold",
     };
-    const action = actionMap[payload.to_status] ?? "hold";
+    const action = actionMap[payload.to_status];
+    if (!action) throw new Error(`No transition action mapped for status ${payload.to_status}`);
     const { data } = await api.post<Blade>(`/blades/${bladeId}/${action}`, { remarks: payload.remarks });
     return data;
   },

@@ -12,7 +12,6 @@ POST   /blades/{blade_id}/return-to-oh
 POST   /blades/{blade_id}/complete
 POST   /blades/{blade_id}/reject
 POST   /blades/{blade_id}/reopen
-POST   /blades/{blade_id}/hold
 GET    /blades/{blade_id}/history
 POST   /blades/{blade_id}/attachments
 GET    /blades/{blade_id}/attachments
@@ -294,7 +293,6 @@ async def list_blades(
             "work_order_number": b.work_order_number,
             "shop_order_number": b.shop_order_number,
             "part_number": b.part_number,
-            "nomenclature": b.nomenclature,
             "engine_number": b.engine_number,
             "blade_type": b.blade_type,
             "status": b.status,
@@ -851,64 +849,6 @@ async def reopen_blade(
 
 
 # ---------------------------------------------------------------------------
-# POST /{blade_id}/hold
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/{blade_id}/hold",
-    response_model=BladeResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Put a blade on hold",
-)
-async def hold_blade(
-    blade_id: uuid.UUID,
-    remarks: str | None = None,
-    current_user: Any = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> Any:
-    """
-    Transition a blade to ``ON_HOLD`` status.
-
-    Any authenticated user may place a blade on hold.
-    Blades that are already COMPLETED, REJECTED, or ON_HOLD cannot be
-    placed on hold again.
-
-    Raises:
-        HTTP 404 — blade not found.
-        HTTP 409 — invalid transition.
-    """
-    from app.main import WorkflowTransitionError
-
-    blade = await _get_blade_or_404(blade_id, db)
-
-    blocked = {BladeStatus.COMPLETED, BladeStatus.REJECTED, BladeStatus.ON_HOLD}
-    if blade.status in blocked:
-        raise WorkflowTransitionError(
-            detail=f"Cannot place blade on hold from status '{blade.status}'",
-            current_status=str(blade.status),
-        )
-
-    from_status = blade.status
-    blade.status = BladeStatus.ON_HOLD
-
-    await _log_workflow_transition(
-        db=db,
-        blade=blade,
-        from_status=from_status,
-        to_status=BladeStatus.ON_HOLD,
-        actor_id=current_user.id,
-        remarks=remarks,
-    )
-
-    await db.commit()
-    await db.refresh(blade)
-
-    logger.info("blade_on_hold", blade_id=str(blade_id))
-    return blade
-
-
-# ---------------------------------------------------------------------------
 # DELETE /{blade_id}  — soft delete (SUPER_ADMIN only)
 # ---------------------------------------------------------------------------
 
@@ -928,7 +868,7 @@ async def delete_blade(
     logs, slot allocations, attachments, notifications).
 
     OH_OPERATOR may only delete blades that are still at the OH stage
-    (CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, REOPENED, ON_HOLD).
+    (CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, REOPENED).
     SUPER_ADMIN may delete any blade regardless of status.
     """
     from app.models.blade import Blade
@@ -944,7 +884,6 @@ async def delete_blade(
         BladeStatus.OH_INSPECTION,
         BladeStatus.MEASUREMENTS_RECORDED,
         BladeStatus.REOPENED,
-        BladeStatus.ON_HOLD,
     }
 
     blade = await _get_blade_or_404(blade_id, db)
@@ -963,7 +902,6 @@ async def delete_blade(
         work_order_number=blade.work_order_number,
         shop_order_number=blade.shop_order_number,
         part_number=blade.part_number,
-        nomenclature=blade.nomenclature,
         engine_number=blade.engine_number,
         engine_hours=blade.engine_hours,
         component_hours=blade.component_hours,
