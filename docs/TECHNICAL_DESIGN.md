@@ -300,7 +300,6 @@ User ◄──► Role (user_roles junction)                         ◄┘
 | `work_order_number` | VARCHAR(64) | MRO work order |
 | `shop_order_number` | VARCHAR(64) | Internal shop order |
 | `part_number` | VARCHAR(64) | Drawing/part number |
-| `nomenclature` | VARCHAR(128) | Human-readable component name |
 | `engine_number` | VARCHAR(64) | Parent engine |
 | `engine_hours` | VARCHAR(64) | Engine total hours at removal |
 | `component_hours` | VARCHAR(64) | Blade individual hours at removal |
@@ -394,7 +393,6 @@ Stores metadata associated with a batch number. Used to auto-fill blade fields w
 | `work_order_number` | VARCHAR(64) | Inherited from first blade in batch |
 | `part_number` | VARCHAR(64) | |
 | `engine_number` | VARCHAR(64) | |
-| `nomenclature` | VARCHAR(128) | |
 | `created_at` | TIMESTAMP | |
 
 **Batch size cap:** 90 LPTR + 90 HPTR = **180 blades total per batch number**. Enforced at the API layer via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`. Per-type counts are validated independently.
@@ -496,10 +494,9 @@ ASSEMBLY_RECEIVED → REJECTED   (via POST /assembly/blades/.../reject)
 
 Any other active state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
                                                               → SENT_TO_ASSEMBLY
-Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORDED
 ```
 
-**15 total states:** CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, SENT_TO_ASSEMBLY, ASSEMBLY_RECEIVED, ASSEMBLY_VERIFIED, SLOT_ASSIGNED, BALANCING_IN_PROGRESS, BALANCING_COMPLETED, RETURNED_TO_OH, FINAL_VERIFICATION, COMPLETED, REJECTED, ON_HOLD, REOPENED.
+**14 total states:** CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, SENT_TO_ASSEMBLY, ASSEMBLY_RECEIVED, ASSEMBLY_VERIFIED, SLOT_ASSIGNED, BALANCING_IN_PROGRESS, BALANCING_COMPLETED, RETURNED_TO_OH, FINAL_VERIFICATION, COMPLETED, REJECTED, REOPENED.
 
 ### Allowed Transitions Matrix
 
@@ -508,10 +505,8 @@ Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORD
 | CREATED | OH_INSPECTION | System | Auto on create |
 | OH_INSPECTION | MEASUREMENTS_RECORDED | OH_OPERATOR | Auto on first measurement |
 | OH_INSPECTION | REJECTED | Any operator | |
-| OH_INSPECTION | ON_HOLD | Any operator | |
 | MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | |
 | MEASUREMENTS_RECORDED | REJECTED | Any operator | |
-| MEASUREMENTS_RECORDED | ON_HOLD | Any operator | |
 | SENT_TO_ASSEMBLY | ASSEMBLY_RECEIVED | System | Via POST /assembly/batches/.../receive |
 | ASSEMBLY_RECEIVED | ASSEMBLY_VERIFIED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../accept |
 | ASSEMBLY_RECEIVED | REJECTED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../reject |
@@ -526,8 +521,6 @@ Any active state → ON_HOLD → resumes to OH_INSPECTION or MEASUREMENTS_RECORD
 | REJECTED | REOPENED | SUPER_ADMIN | |
 | REOPENED | OH_INSPECTION | System | |
 | REOPENED | SENT_TO_ASSEMBLY | OH_OPERATOR | If already measured |
-| ON_HOLD | OH_INSPECTION | Any operator | Resume target depends on prior state |
-| ON_HOLD | MEASUREMENTS_RECORDED | Any operator | |
 
 ### WorkflowEngine
 
@@ -696,7 +689,6 @@ Base path: `/api/v1`
 | POST | `/blades/{id}/complete` | OH_OPERATOR / ASSEMBLY_OPERATOR | Transition to COMPLETED |
 | POST | `/blades/{id}/reject` | Any operator | Reject with reason |
 | POST | `/blades/{id}/reopen` | SUPER_ADMIN | Reopen rejected blade |
-| POST | `/blades/{id}/hold` | Any operator | Place on hold |
 | GET | `/blades/{id}/history` | Any | Workflow log entries |
 | POST | `/blades/{id}/attachments` | Any | Upload file attachment |
 | GET | `/blades/{id}/attachments` | Any | List attachments |
@@ -749,7 +741,6 @@ GET /blades/?page=1&page_size=20
 | GET | `/batches/{batch_number}/rocking-creep` | Any | Rocking/creep values for all blades in batch |
 | POST | `/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Mark batch received |
 | POST | `/batches/{batch_number}/accept` | ASSEMBLY_OPERATOR | Bulk-accept remaining unverified blades |
-| POST | `/batches/{batch_number}/reject` | ASSEMBLY_OPERATOR | Bulk-reject batch |
 | POST | `/batches/{batch_number}/modify` | ASSEMBLY_OPERATOR | Apply blade-level field modifications |
 | POST | `/batches/{batch_number}/events` | ASSEMBLY_OPERATOR | Log a raw batch event |
 
@@ -1266,7 +1257,6 @@ Example: IRS-45786-SN010001-20260618
 | Work Order No. | `blade.work_order_number` |
 | Shop Order No. | `blade.shop_order_number` |
 | Part Number | `blade.part_number` |
-| Nomenclature | `blade.nomenclature` |
 | Serial Number | `blade.serial_number` |
 | Melt / Heat Number | `blade.melt_number` |
 | Engine No. | `blade.engine_number` |
