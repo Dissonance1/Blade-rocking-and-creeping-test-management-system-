@@ -6,16 +6,17 @@ GET  /work-orders/{work_order_number}                          — work order de
 POST /work-orders/{work_order_number}/send-to-assembly         — OH bulk-sends all eligible LPTR blades to Assembly
 POST /work-orders/{work_order_number}/assign-slot               — bulk-assigns computed disc slots (LPTR algorithmic / HPTR explicit)
 POST /work-orders/{work_order_number}/complete-hptr-balancing   — mark a saved HPTR slot allocation balanced/complete
+POST /work-orders/{work_order_number}/complete-lptr-balancing   — mark a saved LPTR slot allocation balanced/complete
 POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
 POST /work-orders/{work_order_number}/accept                    — Assembly accepts work order
-POST /work-orders/{work_order_number}/reject                    — Assembly rejects work order
 POST /work-orders/{work_order_number}/modify                    — Assembly corrects blade-level fields
 
 POST /work-orders/                                              — create a Work Order + scaffold 90 blade rows (grid entry)
 GET  /work-orders/{work_order_number}/entry                     — grid-entry resume/detail (rows + completion state)
 PUT  /work-orders/{work_order_number}/rows/{s_no}                — autosave a single grid row
+POST /work-orders/{work_order_number}/rows/bulk-import           — bulk-fill grid rows from an uploaded .xlsx
 POST /work-orders/{work_order_number}/complete                  — validate + bulk-transition grid entry to MEASUREMENTS_RECORDED
 """
 
@@ -25,14 +26,17 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.dependencies import _user_role_names, get_current_user, require_roles
 from app.db.session import get_db
 from app.models.enums import BatchEventType, BladeStatus, BladeType, MeasurementType, NotificationType
 from app.schemas.work_order import (
+    WorkOrderBulkImportError,
+    WorkOrderBulkImportResponse,
     WorkOrderCompleteResponse,
     WorkOrderCreate,
     WorkOrderDetailResponse,
@@ -69,7 +73,6 @@ def _status_label(status_val: str) -> str:
         "SENT_TO_ASSEMBLY": "Sent to Assembly",
         "RECEIVED_BY_ASSEMBLY": "Received by Assembly",
         "ACCEPTED": "Accepted",
-        "REJECTED": "Rejected",
         "MODIFIED": "Modified",
         "SLOTS_ALLOCATED": "Slots Allocated",
         "SET_MAKING": "Set Making",
@@ -116,7 +119,6 @@ async def _notify_oh_operators(
     event_labels = {
         BatchEventType.RECEIVED_BY_ASSEMBLY: "Received by Assembly",
         BatchEventType.ACCEPTED: "Accepted",
-        BatchEventType.REJECTED: "Rejected",
         BatchEventType.MODIFIED: "Modified",
     }
 
@@ -186,7 +188,7 @@ async def list_work_orders(
     """
     Return a summary of every work order known to the system, ordered by most
     recently created.  The ``current_status`` field reflects:
-    - The latest explicit Assembly action (RECEIVED/ACCEPTED/REJECTED/MODIFIED), or
+    - The latest explicit Assembly action (RECEIVED/ACCEPTED/MODIFIED), or
     - ``SENT_TO_ASSEMBLY`` if any blades have been sent, or
     - ``CREATED`` otherwise.
 
@@ -218,7 +220,6 @@ async def list_work_orders(
                         else_=0,
                     )
                 ).label("blades_completed"),
-                func.max(Blade.nomenclature).label("nomenclature"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.work_order_number.isnot(None), Blade.deleted_at.is_(None))
@@ -415,7 +416,6 @@ async def list_work_orders(
             "shop_order_number": wo.shop_order_number if wo else None,
             "part_number": wo.part_number if wo else None,
             "engine_number": wo.engine_number if wo else None,
-            "nomenclature": row.nomenclature,
             "is_entry_complete": wo.is_entry_complete if wo else False,
         })
     return result
@@ -490,7 +490,6 @@ async def get_work_order(
                         else_=0,
                     )
                 ).label("blades_completed"),
-                func.max(Blade.nomenclature).label("nomenclature"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.work_order_number == work_order_number, Blade.deleted_at.is_(None))
@@ -540,7 +539,6 @@ async def get_work_order(
         "shop_order_number": work_order.shop_order_number,
         "part_number": work_order.part_number,
         "engine_number": work_order.engine_number,
-        "nomenclature": blade_agg.nomenclature,
         "is_entry_complete": work_order.is_entry_complete,
     }
 
@@ -1075,7 +1073,7 @@ async def _assign_lptr_work_order_slot(
     await db.commit()
 
     # Record the work-order-level audit event for "Slots Allocated" so it shows
-    # up in the work order's Event History alongside Sent/Received/Accepted/Rejected.
+    # up in the work order's Event History alongside Sent/Received/Accepted.
     ev = WorkOrderEvent(
         work_order_number=work_order_number,
         event_type=BatchEventType.SLOTS_ALLOCATED,
@@ -1516,6 +1514,156 @@ async def complete_hptr_balancing(
 
 
 # ---------------------------------------------------------------------------
+# POST /{work_order_number}/complete-lptr-balancing
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/complete-lptr-balancing",
+    status_code=status.HTTP_200_OK,
+    summary="Mark a work order's saved LPTR slot allocation as balanced/complete",
+)
+async def complete_lptr_balancing(
+    work_order_number: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Physical balancing testing confirmed the set is balanced — transition
+    every LPTR blade in the work order's active slot allocation (whichever
+    stage(s) have been saved so far — stage 1's 46, stage 2's 44, or both)
+    from ``SLOT_ASSIGNED``/``BALANCING_IN_PROGRESS`` to
+    ``BALANCING_COMPLETED`` and mark each slot allocation as balanced.
+
+    Mirrors ``complete_hptr_balancing`` exactly, except this runs at
+    Assembly (720 Hanger) rather than OH, since that's where LPTR slot
+    allocation and balancing happen.
+
+    Only applies to LPTR work orders — calling this on an HPTR work order
+    returns 422.
+    """
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.blade_type != BladeType.LPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' is {work_order.blade_type.value} — "
+                "this endpoint only applies to LPTR work orders."
+            ),
+        )
+
+    remarks = (body or {}).get("remarks") or "Physical balancing testing confirmed — set balanced"
+
+    blades = (
+        await db.execute(
+            select(Blade)
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                SlotAllocation.is_active.is_(True),
+                Blade.status.in_([
+                    BladeStatus.SLOT_ASSIGNED,
+                    BladeStatus.BALANCING_IN_PROGRESS,
+                ]),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No LPTR blades pending balancing found for Work Order '{work_order_number}'",
+        )
+
+    alloc_by_blade_id: dict[uuid.UUID, Any] = {}
+    for blade in blades:
+        alloc = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if alloc:
+            alloc_by_blade_id[blade.id] = alloc
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        alloc = alloc_by_blade_id.get(blade.id)
+        if alloc:
+            alloc.is_balanced = True
+            alloc.balancing_remarks = remarks
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.BALANCING_COMPLETED,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.BALANCED,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} LPTR blade(s) confirmed balanced. {remarks}",
+        changes={"blades_balanced": len(blades)},
+    ))
+    await db.commit()
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+
+    async def _notify_lptr_balancing_complete(_work_order: str, _count: int, _actor: str) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Work Order {_work_order} — LPTR balancing complete",
+                    body=(
+                        f"{_actor} confirmed LPTR balancing complete for Work Order {_work_order} "
+                        f"({_count} blade(s))."
+                    ),
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                    metadata={"work_order_number": _work_order},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_lptr_balancing_complete_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_lptr_balancing_complete, work_order_number, len(blades), actor_name)
+
+    logger.info("work_order_lptr_balancing_completed", work_order=work_order_number, blades=len(blades))
+    return {
+        "work_order_number": work_order_number,
+        "blades_completed": len(blades),
+        "message": f"{len(blades)} LPTR blade(s) marked balanced.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /{work_order_number}/reset-hptr-slots
 # ---------------------------------------------------------------------------
 
@@ -1802,34 +1950,6 @@ async def accept_work_order(
     )
 
 
-# ---------------------------------------------------------------------------
-# POST /{work_order_number}/reject
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/{work_order_number}/reject",
-    status_code=status.HTTP_201_CREATED,
-    summary="Assembly rejects a work order",
-)
-async def reject_work_order(
-    work_order_number: str,
-    body: dict,
-    background_tasks: BackgroundTasks,
-    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    """Assembly operator rejects the work order, notifying OH."""
-    return await _create_work_order_event(
-        work_order_number=work_order_number,
-        event_type=BatchEventType.REJECTED,
-        remarks=body.get("remarks") or body.get("reason"),
-        changes=None,
-        current_user=current_user,
-        db=db,
-        background_tasks=background_tasks,
-    )
-
 
 # ---------------------------------------------------------------------------
 # POST /{work_order_number}/modify
@@ -1866,7 +1986,6 @@ async def modify_work_order(
         "static_moment_gcm",
         "melt_number",
         "part_number",
-        "nomenclature",
         "work_order_number",
         "shop_order_number",
         "engine_number",
@@ -2005,6 +2124,73 @@ async def save_work_order_row(
     """Idempotent per-row autosave for the grid-entry screen."""
     service = WorkOrderService(db)
     return await service.save_row(work_order_number, s_no, data, current_user)
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/rows/bulk-import  (grid-entry: Excel upload)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/rows/bulk-import",
+    status_code=status.HTTP_200_OK,
+    summary="Bulk-fill grid rows from an uploaded .xlsx/.xls (S.No / Melt Number / Weight)",
+    response_model=WorkOrderBulkImportResponse,
+)
+async def bulk_import_work_order_rows(
+    work_order_number: str,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    file: Annotated[UploadFile, File(description="Excel (.xlsx or .xls) file with S.No / Melt Number / Weight columns")],
+) -> WorkOrderBulkImportResponse:
+    """
+    Parses an uploaded Excel sheet and writes its rows into this Work
+    Order's grid via the same per-row logic as manual autosave — only S.No,
+    Melt Number, and the raw Weight reading are read; Weight (g)/Static
+    Moment are recomputed server-side exactly as for manual entry.
+
+    Partial success: bad rows (out-of-range/duplicate S.No, non-numeric
+    weight, S.No not found for this Work Order) are skipped and reported in
+    ``errors`` — valid rows still import.
+    """
+    from app.services.excel_import import parse_work_order_rows
+
+    filename = file.filename or ""
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xlsx or .xls files are supported.",
+        )
+
+    content = await file.read()
+    if len(content) > settings.max_file_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB} MB",
+        )
+
+    parsed = parse_work_order_rows(content)
+
+    service = WorkOrderService(db)
+    response = await service.bulk_import_rows(work_order_number, parsed.rows, current_user)
+
+    # Parse-time errors (bad header, unreadable file, bad rows) are prepended
+    # to any row-level errors raised while writing (e.g. S.No not found).
+    parse_errors = [
+        WorkOrderBulkImportError(s_no=None, message=f"Sheet row {e.row}: {e.message}" if e.row else e.message)
+        for e in parsed.errors
+    ]
+    response.errors = parse_errors + response.errors
+    response.skipped_count += len(parse_errors)
+
+    logger.info(
+        "work_order_bulk_import",
+        work_order=work_order_number,
+        filename=filename,
+        imported=response.imported_count,
+        skipped=response.skipped_count,
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------

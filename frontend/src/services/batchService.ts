@@ -9,7 +9,6 @@ export interface BatchEvent {
     | "SENT_TO_ASSEMBLY"
     | "RECEIVED_BY_ASSEMBLY"
     | "ACCEPTED"
-    | "REJECTED"
     | "MODIFIED"
     | "SLOTS_ALLOCATED"
     | "SET_MAKING"
@@ -26,7 +25,6 @@ export type BatchStatus =
   | "SENT_TO_ASSEMBLY"
   | "RECEIVED_BY_ASSEMBLY"
   | "ACCEPTED"
-  | "REJECTED"
   | "MODIFIED"
   | "SLOTS_ALLOCATED"
   | "SET_MAKING"
@@ -50,7 +48,6 @@ export interface BatchSummary {
   last_event: BatchEvent | null;
   part_number: string | null;
   engine_number: string | null;
-  nomenclature: string | null;
   /** True only once all 90 rows have Melt Number + Weight and Complete has been run. */
   is_entry_complete: boolean;
 }
@@ -152,14 +149,6 @@ export const batchService = {
     return data;
   },
 
-  reject: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
-    const { data } = await api.post<BatchEvent>(
-      `/work-orders/${batchNumber}/reject`,
-      { remarks }
-    );
-    return data;
-  },
-
   modify: async (
     batchNumber: string,
     modifications: Array<{
@@ -246,6 +235,20 @@ export const batchService = {
     remarks?: string
   ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
     const { data } = await api.post(`/work-orders/${batchNumber}/complete-hptr-balancing`, { remarks });
+    return data;
+  },
+
+  /**
+   * Physical balancing testing confirmed the set is balanced — transitions
+   * every LPTR blade in the batch's active slot allocation (whichever
+   * stage(s) have been saved) to BALANCING_COMPLETED. Mirrors
+   * completeHptrBalancing, run from Assembly instead of OH.
+   */
+  completeLptrBalancing: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-lptr-balancing`, { remarks });
     return data;
   },
 

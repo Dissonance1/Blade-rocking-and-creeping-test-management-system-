@@ -2,20 +2,16 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
-  RefreshCw, PackageSearch, XOctagon, Play, Save, FileSpreadsheet, Scale,
+  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
 
 import { bladeService } from "@/services/bladeService";
 import { batchService, type LptrSlotAssignment } from "@/services/batchService";
@@ -127,58 +123,12 @@ function SavedSlotsTable({ rows }: { rows: SavedRow[] }) {
   );
 }
 
-// ─── Reject batch dialog ────────────────────────────────────────────────────
-
-function RejectBatchDialog({ workOrderNumber, open, onClose }: { workOrderNumber: string; open: boolean; onClose: () => void }) {
-  const qc = useQueryClient();
-  const [remarks, setRemarks] = useState("");
-
-  const mutation = useMutation({
-    mutationFn: () => batchService.reject(workOrderNumber, remarks),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["batches"] });
-      qc.invalidateQueries({ queryKey: ["blades"] });
-      toast.success(`Work Order ${workOrderNumber} rejected`);
-      onClose();
-    },
-    onError: () => toast.error("Failed to reject batch"),
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="bg-white dark:bg-background border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-red-500">
-            <XOctagon className="w-5 h-5" />
-            Reject Work Order {workOrderNumber}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 py-2">
-          <Textarea
-            value={remarks} onChange={(e) => setRemarks(e.target.value)}
-            placeholder="Describe why the batch is being rejected…"
-            className="border-red-300 dark:border-red-700/50 min-h-[100px]"
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !remarks.trim()} className="bg-red-600 hover:bg-red-700 text-white">
-            {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <XOctagon className="w-4 h-4 mr-1" />}
-            Confirm Reject
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function SlotAllocationPage() {
   const qc = useQueryClient();
   const [selectedBatch, setSelectedBatch] = useState("");
   const [activeTab, setActiveTab] = useState("empty-rotor");
-  const [showReject, setShowReject] = useState(false);
 
   const [unbalanceSlotInput, setUnbalanceSlotInput] = useState("");
   const [unbalanceValueInput, setUnbalanceValueInput] = useState("");
@@ -315,6 +265,21 @@ export default function SlotAllocationPage() {
     },
   });
 
+  // ── Balancing ────────────────────────────────────────────────────────────
+  const completeBalancingMutation = useMutation({
+    mutationFn: () => batchService.completeLptrBalancing(selectedBatch),
+    onSuccess: (res) => {
+      refresh();
+      toast.success(res.message ?? "LPTR balancing marked complete");
+      setSelectedBatch("");
+      setActiveTab("empty-rotor");
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to mark balancing complete";
+      toast.error(msg);
+    },
+  });
+
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
     setExporting(true);
@@ -384,7 +349,7 @@ export default function SlotAllocationPage() {
                   <option value="">— Select an accepted batch —</option>
                   {eligibleBatches.map((b) => (
                     <option key={b.work_order_number} value={b.work_order_number}>
-                      {b.work_order_number}{b.nomenclature ? ` · ${b.nomenclature}` : ""}{` · ${b.current_status_label}`}
+                      {b.work_order_number}{` · ${b.current_status_label}`}
                     </option>
                   ))}
                 </select>
@@ -423,6 +388,7 @@ export default function SlotAllocationPage() {
               <TabsTrigger value="empty-rotor">Empty Rotor</TabsTrigger>
               <TabsTrigger value="stage1">Stage 1 (46)</TabsTrigger>
               <TabsTrigger value="stage2" disabled={stage1Slots.length === 0}>Stage 2 (44)</TabsTrigger>
+              <TabsTrigger value="balancing" disabled={stage2Slots.length === 0}>Balancing</TabsTrigger>
             </TabsList>
 
             {/* ── Empty Rotor tab ────────────────────────────────────────── */}
@@ -514,9 +480,6 @@ export default function SlotAllocationPage() {
                         <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
                       </CardTitle>
                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setShowReject(true)} className="border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
-                          <XOctagon className="w-3.5 h-3.5 mr-1.5" />Reject Batch
-                        </Button>
                         <Button size="sm" onClick={() => saveStage1Mutation.mutate()} disabled={saveStage1Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
                           {saveStage1Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
                           Save Stage 1
@@ -572,9 +535,6 @@ export default function SlotAllocationPage() {
                         <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
                       </CardTitle>
                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setShowReject(true)} className="border-red-300 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20">
-                          <XOctagon className="w-3.5 h-3.5 mr-1.5" />Reject Batch
-                        </Button>
                         <Button size="sm" onClick={() => saveStage2Mutation.mutate()} disabled={saveStage2Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
                           {saveStage2Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
                           Save Stage 2
@@ -588,13 +548,56 @@ export default function SlotAllocationPage() {
                 )}
               </div>
             </TabsContent>
+
+            {/* ── Balancing tab ────────────────────────────────────────────── */}
+            <TabsContent value="balancing">
+              {stage2Slots.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
+                  <Scale className="w-10 h-10 opacity-30" />
+                  <p className="text-sm">Save Stage 1 and Stage 2 first to track physical balancing here.</p>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Saved Slots ({stage1SavedRows.length + stage2SavedRows.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <SavedSlotsTable rows={[...stage1SavedRows, ...stage2SavedRows]} />
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                    <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                          Physical balancing confirmed?
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Save to mark this work order's LPTR balancing complete. It stops showing up
+                          in the accepted-batches selector above once saved.
+                        </p>
+                      </div>
+                      <Button
+                        onClick={() => completeBalancingMutation.mutate()}
+                        disabled={completeBalancingMutation.isPending}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white shrink-0"
+                      >
+                        {completeBalancingMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                        ) : (
+                          <Save className="w-4 h-4 mr-1.5" />
+                        )}
+                        Save
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+            </TabsContent>
           </Tabs>
         )}
       </div>
-
-      {selectedBatch && (
-        <RejectBatchDialog workOrderNumber={selectedBatch} open={showReject} onClose={() => setShowReject(false)} />
-      )}
     </div>
   );
 }
