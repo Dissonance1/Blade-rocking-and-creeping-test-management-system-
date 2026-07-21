@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2, CheckCircle2, AlertTriangle, RefreshCw,
-  PackageSearch, Play, Save, ArrowLeftRight, Scale, Lightbulb, FileSpreadsheet, RotateCcw,
+  PackageSearch, Play, Save, ArrowLeftRight, Scale, Lightbulb, FileSpreadsheet,
+  ClipboardCheck, ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
@@ -548,16 +549,12 @@ function BalancingTab({
   workOrderNumber,
   onComplete,
   completing,
-  onReset,
-  resetting,
 }: {
   rows: SavedRow[];
   totalSlots: number;
   workOrderNumber: string;
   onComplete: () => void;
   completing: boolean;
-  onReset: () => void;
-  resetting: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -590,29 +587,6 @@ function BalancingTab({
           >
             {completing ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <Save className="w-4 h-4 mr-1.5" />}
             Save
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card className="bg-white dark:bg-background border-amber-200 dark:border-amber-700/50">
-        <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
-              Not balanced correctly? Redo Slot Allocation
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Undoes this saved slot allocation and returns all {rows.length} blade(s) to Measurements
-              Recorded, so Slot Allocation / Set Making can be run again from scratch.
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            onClick={onReset}
-            disabled={resetting}
-            className="border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 shrink-0"
-          >
-            {resetting ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <RotateCcw className="w-4 h-4 mr-1.5" />}
-            Reset & Redo
           </Button>
         </CardContent>
       </Card>
@@ -660,6 +634,18 @@ export default function OHSlotAllocationPage() {
     }
     return eligible;
   }, [allBatches, selectedBatch]);
+
+  // HPTR work orders that already have slots saved but haven't been through
+  // "Physical balancing confirmed?" yet — someone needs to come back (maybe
+  // hours or a day later, once the physical balancing test is done) and
+  // save that confirmation.
+  const pendingBalancingBatches = useMemo(
+    () =>
+      allBatches.filter(
+        (b) => b.blade_type === "HPTR" && b.hptr_slotted_count > 0 && b.hptr_balanced_count < b.hptr_count
+      ),
+    [allBatches]
+  );
 
   const { data: hptrBladesData, isLoading: bladesLoading } = useQuery({
     queryKey: ["blades", "hptr-batch", selectedBatch],
@@ -794,21 +780,6 @@ export default function OHSlotAllocationPage() {
     },
   });
 
-  const resetMutation = useMutation({
-    mutationFn: () => batchService.resetHptrSlots(selectedBatch),
-    onSuccess: (res) => {
-      refresh();
-      setAllocation(null);
-      setSuggestion(null);
-      toast.success(res.message ?? "Slot allocation reset");
-      setActiveTab("slot-allocation");
-    },
-    onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to reset slot allocation";
-      toast.error(msg);
-    },
-  });
-
   function handleBatchChange(bn: string) {
     setSelectedBatch(bn);
     setAllocation(null);
@@ -877,6 +848,45 @@ export default function OHSlotAllocationPage() {
             </select>
           </CardContent>
         </Card>
+
+        {pendingBalancingBatches.length > 0 && (
+          <Card className="bg-amber-50/60 dark:bg-amber-900/10 border-amber-200 dark:border-amber-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                <ClipboardCheck className="w-4 h-4 shrink-0" />
+                Pending Physical Balancing
+                <span className="text-xs font-normal text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 rounded-full">
+                  {pendingBalancingBatches.length}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                Slots are saved for these work orders — once the physical balancing test comes back, open one and save "Physical balancing confirmed?" on its Balancing tab.
+              </p>
+              <div className="flex flex-col divide-y divide-amber-200/70 dark:divide-amber-700/40">
+                {pendingBalancingBatches.map((b) => (
+                  <button
+                    key={b.work_order_number}
+                    onClick={() => handleBatchChange(b.work_order_number)}
+                    className={cn(
+                      "flex items-center justify-between gap-3 py-2.5 text-left transition-colors hover:bg-amber-100/60 dark:hover:bg-amber-900/20 rounded-md px-2 -mx-2",
+                      selectedBatch === b.work_order_number && "bg-amber-100/80 dark:bg-amber-900/30"
+                    )}
+                  >
+                    <span className="font-mono text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      {b.work_order_number}
+                    </span>
+                    <span className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                      {b.hptr_slotted_count}/{b.hptr_count} slotted
+                      <ChevronRight className="w-3.5 h-3.5 text-amber-500" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {!selectedBatch && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500 gap-3">
@@ -955,8 +965,6 @@ export default function OHSlotAllocationPage() {
                 workOrderNumber={selectedBatch}
                 onComplete={() => completeMutation.mutate()}
                 completing={completeMutation.isPending}
-                onReset={() => resetMutation.mutate()}
-                resetting={resetMutation.isPending}
               />
             </TabsContent>
           </Tabs>
