@@ -77,19 +77,6 @@ async def test_qa_viewer_cannot_send_to_assembly(
 
 
 @pytest.mark.asyncio
-async def test_qa_viewer_cannot_reject_blade(
-    client: AsyncClient, qa_headers: dict, sample_blade: Blade
-) -> None:
-    """QA_VIEWER → POST /blades/{id}/reject → 403."""
-    resp = await client.post(
-        f"{BASE}/blades/{sample_blade.id}/reject",
-        json={"rejection_notes": "QA trying to reject"},
-        headers=qa_headers,
-    )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
 async def test_qa_viewer_cannot_reopen_blade(
     client: AsyncClient, qa_headers: dict, sample_blade: Blade
 ) -> None:
@@ -185,28 +172,6 @@ async def test_oh_operator_cannot_create_user(
             "role_names": ["OH_OPERATOR"],
         },
         headers=auth_headers,
-    )
-    assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# 5. Assembly operator cannot call OH-only actions
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_assembly_operator_cannot_reject_blade(
-    client: AsyncClient, assembly_headers: dict, sample_blade: Blade, db_session
-) -> None:
-    """ASSEMBLY_OPERATOR → POST /blades/{id}/reject → 403."""
-    sample_blade.status = BladeStatus.OH_INSPECTION
-    db_session.add(sample_blade)
-    await db_session.flush()
-
-    resp = await client.post(
-        f"{BASE}/blades/{sample_blade.id}/reject",
-        json={"rejection_notes": "Assembly trying to reject"},
-        headers=assembly_headers,
     )
     assert resp.status_code == 403
 

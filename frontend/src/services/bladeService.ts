@@ -43,7 +43,6 @@ export const bladeService = {
       SENT_TO_ASSEMBLY: "send-to-assembly",
       RETURNED_TO_OH: "return-to-oh",
       COMPLETED: "complete",
-      REJECTED: "reject",
       REOPENED: "reopen",
     };
     const action = actionMap[payload.to_status];

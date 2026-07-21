@@ -6,7 +6,7 @@ Import order matters for FK resolution — base tables first.
 
 from app.models.audit_log import AuditLog
 from app.models.user import User, Role, Permission, UserRole
-from app.models.workflow import Station, RejectionReason, WorkflowLog
+from app.models.workflow import Station, WorkflowLog
 from app.models.work_order import WorkOrder
 from app.models.blade import Blade
 from app.models.measurement import Measurement
@@ -27,7 +27,6 @@ __all__ = [
     "Permission",
     "UserRole",
     "Station",
-    "RejectionReason",
     "WorkflowLog",
     "WorkOrder",
     "Blade",

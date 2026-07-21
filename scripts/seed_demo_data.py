@@ -41,14 +41,6 @@ time.sleep(0.5)
 sc, d = api("POST", "/api/v1/auth/login", {"email":"assembly@bladerocking.com","password":"Test@123"})
 ASM = d["access_token"]; log("Assembly Operator logged in")
 
-# ─── Rejection reasons ────────────────────────────────────────────────────────
-
-REJECT_REASONS = [
-    "b7806b96-c5b0-4902-9e19-b2fd72aaea39",  # OCR_MISMATCH
-    "f776971d-fa15-4c52-ac42-0f20e50fdc45",  # WEIGHT_OOT
-    "95ad5859-e81d-4ec7-82bd-a0f51c310668",  # VISUAL_DEFECT
-]
-
 # ─── Engine / WO configurations ───────────────────────────────────────────────
 
 ENGINES = [
@@ -161,21 +153,9 @@ for eng, blade_list in created_blades:
         # Decide workflow stage based on position in list
         progress = idx / len(blade_list)
 
-        if progress < 0.08:
-            # ~8% stay in OH_INSPECTION (measurements not yet recorded — skip send)
+        if progress < 0.12:
+            # ~12% stay in OH_INSPECTION (measurements not yet recorded — skip send)
             pass
-
-        elif progress < 0.12:
-            # ~4% rejected at OH stage
-            api("POST", f"/api/v1/blades/{bid}/reject", {
-                "rejection_reason_id": random.choice(REJECT_REASONS),
-                "notes": random.choice([
-                    "Weight out of tolerance range",
-                    "Visual crack detected on leading edge",
-                    "OCR serial number mismatch with traveller",
-                    "Surface erosion beyond limits",
-                ])
-            }, token=OH)
 
         elif progress < 0.25:
             # ~13% at MEASUREMENTS_RECORDED — sent but not yet assigned

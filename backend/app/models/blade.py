@@ -104,16 +104,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     ocr_mismatch_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # -----------------------------------------------------------------------
-    # Rejection fields
-    # -----------------------------------------------------------------------
-    rejection_reason_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("rejection_reasons.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    rejection_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # -----------------------------------------------------------------------
     # Relationships
     # -----------------------------------------------------------------------
     work_order: Mapped["WorkOrder"] = relationship(  # type: ignore[name-defined]
@@ -136,12 +126,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     assigned_to: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
         "User",
         foreign_keys=[assigned_to_id],
-        lazy="selectin",
-    )
-    rejection_reason: Mapped["RejectionReason | None"] = relationship(  # type: ignore[name-defined]
-        "RejectionReason",
-        foreign_keys=[rejection_reason_id],
-        back_populates="blades",
         lazy="selectin",
     )
     measurements: Mapped[list["Measurement"]] = relationship(  # type: ignore[name-defined]
@@ -200,7 +184,7 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 # Deferred imports
 from app.models.work_order import WorkOrder  # noqa: E402, F401
-from app.models.workflow import Station, RejectionReason, WorkflowLog  # noqa: E402, F401
+from app.models.workflow import Station, WorkflowLog  # noqa: E402, F401
 from app.models.user import User  # noqa: E402, F401
 from app.models.measurement import Measurement  # noqa: E402, F401
 from app.models.slot_allocation import SlotAllocation  # noqa: E402, F401

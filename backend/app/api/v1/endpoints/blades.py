@@ -10,7 +10,6 @@ PUT    /blades/{blade_id}                — update blade basic info
 POST   /blades/{blade_id}/send-to-assembly
 POST   /blades/{blade_id}/return-to-oh
 POST   /blades/{blade_id}/complete
-POST   /blades/{blade_id}/reject
 POST   /blades/{blade_id}/reopen
 GET    /blades/{blade_id}/history
 POST   /blades/{blade_id}/attachments
@@ -52,7 +51,6 @@ from app.schemas.blade import (
     BladeResponse,
     BladeSearchParams,
     BladeUpdate,
-    RejectBladeRequest,
     SendToAssemblyRequest,
 )
 from app.schemas.workflow import WorkflowHistoryResponse, WorkflowLogResponse
@@ -307,33 +305,6 @@ async def list_blades(
         items.append(item)
 
     return PaginatedResponse(items=items, total=total, page=page, page_size=page_size)
-
-
-# ---------------------------------------------------------------------------
-# GET /rejection-reasons/
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/rejection-reasons/",
-    status_code=status.HTTP_200_OK,
-    summary="List all active rejection reasons",
-)
-async def list_rejection_reasons(
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[dict]:
-    from app.models.workflow import RejectionReason
-    from sqlalchemy import select as sa_select
-
-    result = await db.execute(
-        sa_select(RejectionReason).where(RejectionReason.is_active.is_(True)).order_by(RejectionReason.code)
-    )
-    reasons = result.scalars().all()
-    return [
-        {"id": str(r.id), "code": r.code, "description": r.description, "is_active": r.is_active}
-        for r in reasons
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -714,85 +685,6 @@ async def complete_blade(
 
 
 # ---------------------------------------------------------------------------
-# POST /{blade_id}/reject
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/{blade_id}/reject",
-    response_model=BladeResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Reject a blade",
-)
-async def reject_blade(
-    blade_id: uuid.UUID,
-    body: RejectBladeRequest,
-    current_user: Any = Depends(
-        require_roles("OH_OPERATOR", "ASSEMBLY_OPERATOR", "SUPER_ADMIN")
-    ),
-    db: AsyncSession = Depends(get_db),
-) -> Any:
-    """
-    Transition a blade to ``REJECTED`` status.
-
-    A pre-defined rejection reason is required.  The blade may be rejected
-    from any active (non-terminal) status.
-
-    Raises:
-        HTTP 404 — blade or rejection reason not found.
-        HTTP 409 — blade is already completed or rejected.
-    """
-    from app.main import WorkflowTransitionError
-
-    blade = await _get_blade_or_404(blade_id, db)
-
-    terminal_statuses = {BladeStatus.COMPLETED, BladeStatus.REJECTED}
-    if blade.status in terminal_statuses:
-        raise WorkflowTransitionError(
-            detail=f"Cannot reject a blade with status '{blade.status}'",
-            current_status=str(blade.status),
-        )
-
-    # Validate rejection reason exists
-    from app.models.workflow import RejectionReason
-    from sqlalchemy import select as sa_select
-
-    rr = (
-        await db.execute(
-            sa_select(RejectionReason).where(
-                RejectionReason.id == body.rejection_reason_id,
-                RejectionReason.is_active.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if rr is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Rejection reason {body.rejection_reason_id} not found",
-        )
-
-    from_status = blade.status
-    blade.status = BladeStatus.REJECTED
-    blade.rejection_reason_id = body.rejection_reason_id
-    blade.rejection_notes = body.rejection_notes
-
-    await _log_workflow_transition(
-        db=db,
-        blade=blade,
-        from_status=from_status,
-        to_status=BladeStatus.REJECTED,
-        actor_id=current_user.id,
-        remarks=body.rejection_notes,
-    )
-
-    await db.commit()
-    await db.refresh(blade)
-
-    logger.info("blade_rejected", blade_id=str(blade_id), reason_id=str(body.rejection_reason_id))
-    return blade
-
-
-# ---------------------------------------------------------------------------
 # POST /{blade_id}/reopen
 # ---------------------------------------------------------------------------
 
@@ -829,8 +721,6 @@ async def reopen_blade(
         )
 
     blade.status = BladeStatus.REOPENED
-    blade.rejection_reason_id = None
-    blade.rejection_notes = None
 
     await _log_workflow_transition(
         db=db,

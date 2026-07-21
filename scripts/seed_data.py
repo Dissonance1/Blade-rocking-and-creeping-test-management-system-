@@ -50,7 +50,7 @@ from app.models.enums import BladeStatus, BladeType, MeasurementType, RoleName, 
 from app.models.measurement import Measurement
 from app.models.user import Role, User, UserRole
 from app.models.work_order import WorkOrder
-from app.models.workflow import RejectionReason, Station
+from app.models.workflow import Station
 
 # ---------------------------------------------------------------------------
 # Seed data definitions
@@ -113,29 +113,6 @@ USERS = [
         "role": RoleName.QA_VIEWER,
         "is_superuser": False,
         "station_code": None,
-    },
-]
-
-REJECTION_REASONS = [
-    {
-        "code": "OCR_MISMATCH",
-        "description": "OCR Mismatch — scanned serial/melt number does not match records",
-    },
-    {
-        "code": "WEIGHT_OOT",
-        "description": "Weight Out of Tolerance — blade weight exceeds allowable limits",
-    },
-    {
-        "code": "VISUAL_DEFECT",
-        "description": "Visual Defect — cracks, erosion, corrosion, or FOD damage detected",
-    },
-    {
-        "code": "MISSING_DOCS",
-        "description": "Missing Documentation — required traveller or certificate not present",
-    },
-    {
-        "code": "ROCKING_OOT",
-        "description": "Rocking Value Out of Tolerance — exceeds serviceable limits",
     },
 ]
 
@@ -239,28 +216,6 @@ async def _get_or_create_user(
 
     _log_created(f"User {data['email']} [{data['role'].value}]")
     return user
-
-
-async def _get_or_create_rejection_reason(
-    db: AsyncSession, data: dict
-) -> RejectionReason:
-    result = await db.execute(
-        select(RejectionReason).where(RejectionReason.code == data["code"])
-    )
-    rr = result.scalar_one_or_none()
-    if rr:
-        _log_exists(f"RejectionReason {data['code']}")
-        return rr
-    rr = RejectionReason(
-        id=uuid.uuid4(),
-        code=data["code"],
-        description=data["description"],
-        is_active=True,
-    )
-    db.add(rr)
-    await db.flush()
-    _log_created(f"RejectionReason {data['code']}")
-    return rr
 
 
 async def _create_sample_blades(
@@ -467,15 +422,6 @@ async def seed() -> None:
                 user_map[user_data["email"]] = user
                 if user_data["email"] == "admin@bladerocking.com":
                     admin_id = user.id
-
-            # ----------------------------------------------------------------
-            # Rejection reasons
-            # ----------------------------------------------------------------
-            print("\n--- Rejection Reasons ---")
-            rejection_reasons: list[RejectionReason] = []
-            for rr_data in REJECTION_REASONS:
-                rr = await _get_or_create_rejection_reason(db, rr_data)
-                rejection_reasons.append(rr)
 
             # ----------------------------------------------------------------
             # Sample blades

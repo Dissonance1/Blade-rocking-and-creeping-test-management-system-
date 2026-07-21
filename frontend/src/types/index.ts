@@ -109,8 +109,6 @@ export interface Blade {
   ocr_serial_number?: string | null;
   ocr_mismatch_flag: boolean;
   ocr_mismatch_notes?: string | null;
-  rejection_reason_id?: string | null;
-  rejection_notes?: string | null;
   created_at: string;
   updated_at: string;
   // Optional eager-loaded relations (present when fetched via GET /blades/{id})
@@ -160,11 +158,6 @@ export interface BladeUpdateRequest {
 
 export interface BladeActionRequest {
   remarks?: string;
-}
-
-export interface BladeRejectRequest {
-  rejection_reason_id: string;
-  notes: string;
 }
 
 // ─── Measurements ─────────────────────────────────────────────────────────────
@@ -368,15 +361,6 @@ export interface Station {
   station_type: "OH" | "ASSEMBLY" | "QA" | "ADMIN";
   is_active: boolean;
   location?: string | null;
-}
-
-// ─── Rejection Reason ─────────────────────────────────────────────────────────
-
-export interface RejectionReason {
-  id: string;
-  code: string;
-  description: string;
-  is_active: boolean;
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

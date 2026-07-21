@@ -1,5 +1,5 @@
 """
-Station, RejectionReason, and WorkflowLog models.
+Station and WorkflowLog models.
 
 These are defined before blade.py and user.py finish loading because
 both FK-reference Station. The Station table is therefore in this module
@@ -61,30 +61,6 @@ class Station(UUIDPrimaryKeyMixin, Base):
 
     def __repr__(self) -> str:
         return f"<Station {self.code} ({self.station_type.value})>"
-
-
-# ---------------------------------------------------------------------------
-# RejectionReason
-# ---------------------------------------------------------------------------
-
-class RejectionReason(UUIDPrimaryKeyMixin, Base):
-    """Pre-defined reasons a blade can be rejected."""
-
-    __tablename__ = "rejection_reasons"
-
-    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    blades: Mapped[list["Blade"]] = relationship(  # type: ignore[name-defined]
-        "Blade",
-        foreign_keys="[Blade.rejection_reason_id]",
-        back_populates="rejection_reason",
-        lazy="noload",
-    )
-
-    def __repr__(self) -> str:
-        return f"<RejectionReason {self.code}>"
 
 
 # ---------------------------------------------------------------------------

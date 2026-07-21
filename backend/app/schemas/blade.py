@@ -26,12 +26,6 @@ class StationSummary(BaseSchema):
     code: str
 
 
-class RejectionReasonSummary(BaseSchema):
-    id: uuid.UUID
-    code: str
-    description: str
-
-
 # ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
@@ -76,19 +70,6 @@ class SendToAssemblyRequest(BaseSchema):
     target_station_id: uuid.UUID | None = Field(
         default=None,
         description="Assembly station to route the blade to (optional override)",
-    )
-
-
-class RejectBladeRequest(BaseSchema):
-    """Payload for rejecting a blade."""
-
-    rejection_reason_id: uuid.UUID = Field(
-        ..., description="Pre-defined rejection reason ID"
-    )
-    rejection_notes: str | None = Field(
-        default=None,
-        max_length=4096,
-        description="Detailed rejection notes (will appear in reports)",
     )
 
 
@@ -199,10 +180,6 @@ class BladeResponse(BaseSchema):
     ocr_melt_number: str | None = None
     ocr_mismatch_flag: bool
     ocr_mismatch_notes: str | None = None
-
-    # Rejection
-    rejection_reason: RejectionReasonSummary | None = None
-    rejection_notes: str | None = None
 
     measurements: list[MeasurementResponse] | None = None
 

@@ -313,8 +313,6 @@ User ◄──► Role (user_roles junction)                         ◄┘
 | `ocr_melt_number` | VARCHAR(64) | OCR-extracted melt number |
 | `ocr_mismatch_flag` | BOOLEAN | Set when OCR disagrees with manual entry |
 | `ocr_mismatch_notes` | TEXT | Explanation of the mismatch |
-| `rejection_reason_id` | UUID FK → rejection_reasons | |
-| `rejection_notes` | TEXT | |
 | `deleted_at` | TIMESTAMP | Soft delete |
 
 ### Measurement
@@ -584,7 +582,7 @@ POST /assembly/blades/{blade_id}/accept?batch_number=BXXX
   → Note: station_id is NOT recorded on this workflow log entry (known limitation)
 
 POST /assembly/blades/{blade_id}/reject?batch_number=BXXX
-  → body: { rejection_reason_id, remarks }
+  → body: { notes }
   → AssemblyBladeRecord.status → REJECTED
   → blade.status: ASSEMBLY_RECEIVED → REJECTED
   → Creates BatchEvent(event_type=REJECTED)
@@ -1312,8 +1310,7 @@ Rules enforced at the API layer:
 | Field | Source |
 |-------|--------|
 | Overall Result | Derived: `PASS` if status is active post-inspection; `FAIL` if REJECTED |
-| Rejection Reason | `blade.rejection_reason_id → rejection_reason.description` |
-| Rejection Notes | `blade.rejection_notes` |
+| Rejection Notes | `AssemblyBladeRecord.verification_notes` (set via the Assembly reject flow) |
 | Inspector Remarks | `measurement.notes` |
 | Approved By | `measurement.approved_by_id → user.full_name` |
 | Approval Date | `measurement.approved_at` |
