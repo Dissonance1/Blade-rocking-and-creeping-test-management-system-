@@ -27,7 +27,6 @@ export interface BladeModification {
     static_moment_gcm: number | null;
     melt_number: string;
     part_number: string;
-    nomenclature: string;
     work_order_number: string;
     shop_order_number: string;
     engine_number: string;
@@ -37,7 +36,6 @@ export interface BladeModification {
     static_moment_gcm: number | null;
     melt_number: string;
     part_number: string;
-    nomenclature: string;
     work_order_number: string;
     shop_order_number: string;
     engine_number: string;
@@ -61,7 +59,6 @@ const FIELD_LABELS: Record<string, string> = {
   static_moment_gcm: "Static Moment (g·cm)",
   melt_number: "Melt No.",
   part_number: "Part No.",
-  nomenclature: "Nomenclature",
   work_order_number: "Work Order",
   shop_order_number: "Shop Order",
   engine_number: "Engine No.",
@@ -98,7 +95,6 @@ function bladeToOriginal(blade: BladeListItem): BladeModification["original"] {
     static_moment_gcm: blade.static_moment_gcm ?? null,
     melt_number: blade.melt_number ?? "",
     part_number: blade.part_number ?? "",
-    nomenclature: blade.nomenclature ?? "",
     work_order_number: blade.work_order_number ?? "",
     shop_order_number: blade.shop_order_number ?? "",
     engine_number: blade.engine_number ?? "",
@@ -111,7 +107,6 @@ function emptyEditFields(blade: BladeListItem): EditableFields {
     static_moment_gcm: blade.static_moment_gcm != null ? String(blade.static_moment_gcm) : "",
     melt_number: blade.melt_number ?? "",
     part_number: blade.part_number ?? "",
-    nomenclature: blade.nomenclature ?? "",
     work_order_number: blade.work_order_number ?? "",
     shop_order_number: blade.shop_order_number ?? "",
     engine_number: blade.engine_number ?? "",
@@ -146,7 +141,6 @@ export function ModifyBladesPanel({
     static_moment_gcm: "",
     melt_number: "",
     part_number: "",
-    nomenclature: "",
     work_order_number: "",
     shop_order_number: "",
     engine_number: "",
@@ -174,7 +168,6 @@ export function ModifyBladesPanel({
         static_moment_gcm: existing.updated.static_moment_gcm != null ? String(existing.updated.static_moment_gcm) : "",
         melt_number: existing.updated.melt_number,
         part_number: existing.updated.part_number,
-        nomenclature: existing.updated.nomenclature,
         work_order_number: existing.updated.work_order_number,
         shop_order_number: existing.updated.shop_order_number,
         engine_number: existing.updated.engine_number,
@@ -192,7 +185,6 @@ export function ModifyBladesPanel({
       static_moment_gcm: editFields.static_moment_gcm !== "" ? parseFloat(editFields.static_moment_gcm) : (blade.static_moment_gcm ?? null),
       melt_number: editFields.melt_number || (blade.melt_number ?? ""),
       part_number: editFields.part_number || (blade.part_number ?? ""),
-      nomenclature: editFields.nomenclature || (blade.nomenclature ?? ""),
       work_order_number: editFields.work_order_number || (blade.work_order_number ?? ""),
       shop_order_number: editFields.shop_order_number || (blade.shop_order_number ?? ""),
       engine_number: editFields.engine_number || (blade.engine_number ?? ""),
@@ -203,7 +195,6 @@ export function ModifyBladesPanel({
       updated.static_moment_gcm !== original.static_moment_gcm ||
       updated.melt_number !== original.melt_number ||
       updated.part_number !== original.part_number ||
-      updated.nomenclature !== original.nomenclature ||
       updated.work_order_number !== original.work_order_number ||
       updated.shop_order_number !== original.shop_order_number ||
       updated.engine_number !== original.engine_number;
@@ -264,7 +255,7 @@ export function ModifyBladesPanel({
             <table className="w-full text-xs relative">
               <thead className="bg-slate-100 dark:bg-background sticky top-0 z-20 shadow-sm">
                 <tr>
-                  {["Serial No.", "Melt No.", "Weight (g)", "SM (g·cm)", "Status", ""].map((h) => (
+                  {["Serial No.", "Melt No.", "Weight (g)", "SM (g·cm)", "Type", "Status", ""].map((h) => (
                     <th
                       key={h}
                       className="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide whitespace-nowrap"
@@ -339,6 +330,16 @@ export function ModifyBladesPanel({
                           {numDiff(mod?.original.static_moment_gcm, mod?.updated.static_moment_gcm, blade.static_moment_gcm?.toFixed(2) ?? "—")}
                         </td>
                         <td className="px-3 py-2">
+                          <span className={cn(
+                            "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+                            blade.blade_type === "HPTR"
+                              ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                              : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                          )}>
+                            {blade.blade_type ?? "LPTR"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
                           <BladeStatusBadge status={blade.status} />
                         </td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -380,7 +381,7 @@ export function ModifyBladesPanel({
                       {/* Inline edit row — all fields in a grid, no horizontal scroll */}
                       {isEditing && (
                         <tr key={`${blade.id}-edit`} className="bg-amber-50 dark:bg-amber-900/10">
-                          <td colSpan={6} className="px-3 py-4">
+                          <td colSpan={7} className="px-3 py-4">
                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                               {/* Numeric fields */}
                               <div className="space-y-1">
@@ -402,7 +403,7 @@ export function ModifyBladesPanel({
                                 />
                               </div>
                               {/* Text fields */}
-                              {(["melt_number", "part_number", "work_order_number", "shop_order_number", "engine_number", "nomenclature"] as const).map((field) => (
+                              {(["melt_number", "part_number", "work_order_number", "shop_order_number", "engine_number"] as const).map((field) => (
                                 <div key={field} className="space-y-1">
                                   <Label className="text-xs text-slate-600 dark:text-slate-300 font-medium">
                                     {FIELD_LABELS[field]}

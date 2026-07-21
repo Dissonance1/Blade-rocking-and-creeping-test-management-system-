@@ -3,11 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Layers,
-  XCircle,
   Plus,
   ArrowRight,
   RefreshCw,
-  Activity,
   Wrench,
   Hash,
   ChevronDown,
@@ -75,7 +73,6 @@ export const STATUS_CFG: Record<BladeStatus, { label: string; color: string }> =
   FINAL_VERIFICATION:    { label: "Final Verify",          color: "bg-sky-500 text-white" },
   COMPLETED:             { label: "Completed",             color: "bg-green-600 text-white" },
   REJECTED:              { label: "Rejected",              color: "bg-red-500 text-white" },
-  ON_HOLD:               { label: "On Hold",               color: "bg-slate-500 text-white" },
   REOPENED:              { label: "Reopened",              color: "bg-purple-500 text-white" },
 };
 
@@ -159,7 +156,6 @@ interface WorkOrderSummary {
   shop_order_number: string | null;
   engine_number: string | null;
   part_number: string;
-  nomenclature: string;
   blade_count: number;
 }
 
@@ -207,8 +203,7 @@ export default function DashboardPage() {
   // ── Operations-dashboard derived values ──────────────────────────────────
   const byStatus = (stats?.by_status ?? {}) as Partial<Record<BladeStatus, number>>;
   const totalBlades = Object.values(byStatus).reduce((a, b) => a + (b ?? 0), 0);
-  const onHoldCount = byStatus.ON_HOLD ?? 0;
-  const inProgressCount = Math.max(0, (stats?.total_active ?? 0) - onHoldCount);
+  const inProgressCount = stats?.total_active ?? 0;
   const completedCount = stats?.total_completed ?? 0;
   const completionRate = totalBlades > 0 ? (completedCount / totalBlades) * 100 : 0;
   const todayCreated = throughputToday[0]?.created ?? 0;
@@ -243,7 +238,7 @@ export default function DashboardPage() {
     "CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "SENT_TO_ASSEMBLY",
     "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "SLOT_ASSIGNED",
     "BALANCING_IN_PROGRESS", "BALANCING_COMPLETED", "RETURNED_TO_OH",
-    "FINAL_VERIFICATION", "COMPLETED", "ON_HOLD", "REJECTED", "REOPENED",
+    "FINAL_VERIFICATION", "COMPLETED", "REJECTED", "REOPENED",
   ];
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
@@ -283,7 +278,7 @@ export default function DashboardPage() {
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-4 overflow-y-auto">
 
         {/* ── KPI cards ────────────────────────────────────────────────────── */}
-        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 items-start">
+        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 items-start">
           <KpiCard title="Total Blades" value={totalBlades}
             caption={`${activeBatches.length} active batch${activeBatches.length !== 1 ? "es" : ""}`}
             icon={<KTIcon iconName="category" className="text-xl leading-none" />} delta={todayCreated} accent="blue" />
@@ -293,9 +288,6 @@ export default function DashboardPage() {
           <KpiCard title="Completed" value={completedCount}
             caption={`${completionRate.toFixed(1)}% completion rate`}
             icon={<KTIcon iconName="check-circle" className="text-xl leading-none" />} delta={todayCompleted} accent="emerald" />
-          <KpiCard title="On Hold" value={onHoldCount}
-            caption="Needs attention"
-            icon={<KTIcon iconName="flag" className="text-xl leading-none" />} accent="rose" />
         </div>
 
         {/* ── Station cards ────────────────────────────────────────────────── */}
@@ -377,7 +369,6 @@ export default function DashboardPage() {
                   { icon: <Hash className="w-3.5 h-3.5" />, label: "Shop Order",   value: activeWO.shop_order_number,  mono: true },
                   { icon: <Wrench className="w-3.5 h-3.5"/>, label: "Engine No.",  value: activeWO.engine_number,      mono: true },
                   { icon: <Layers className="w-3.5 h-3.5"/>, label: "Part Number", value: activeWO.part_number,        mono: true },
-                  { icon: <Activity className="w-3.5 h-3.5"/>,label:"Nomenclature",value: activeWO.nomenclature,       mono: false },
                 ].map(({ icon, label, value, mono }) => (
                   <div key={label} className="px-3 py-2">
                     <div className="flex items-center gap-1.5 mb-1">
@@ -391,27 +382,6 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
-          </div>
-        )}
-
-        {/* ── Unbalanced alert ─────────────────────────────────────────────── */}
-        {((stats?.total_unbalanced ?? 0) > 0) && (
-          <div className="shrink-0 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
-            <div className="flex items-start gap-3">
-              <XCircle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-red-700 dark:text-red-300 text-sm font-semibold">
-                  {stats?.total_unbalanced} Unbalanced Slot{(stats?.total_unbalanced ?? 0) !== 1 ? "s" : ""} — Assembly Action Required
-                </p>
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {(stats?.unbalanced_slots ?? []).slice(0, 10).map((s) => (
-                    <span key={s.slot_number} className="rounded-md bg-red-100 dark:bg-red-500/20 border border-red-300 dark:border-red-500/40 px-2 py-0.5 text-xs font-mono font-semibold text-red-700 dark:text-red-300">
-                      Slot {s.slot_number}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -434,16 +404,24 @@ export default function DashboardPage() {
               ) : (
                 <div className="space-y-4">
                   {activeBatches.slice(0, 5).map((b) => {
-                    const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
+                    const pct = (b.rows_complete_count / 90) * 100;
                     return (
                       <div key={b.work_order_number}>
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate flex items-center gap-1.5">
                               {b.work_order_number}
+                              <span className={cn(
+                                "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold shrink-0",
+                                b.blade_type === "HPTR"
+                                  ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                                  : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                              )}>
+                                {b.blade_type ?? "LPTR"}
+                              </span>
                             </p>
                             <p className="text-xs text-slate-400 dark:text-slate-300 truncate">
-                              {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}
+                              {b.part_number ?? "—"}
                             </p>
                           </div>
                           <span className="text-sm font-bold text-orange-500 shrink-0 ml-2">
@@ -455,7 +433,7 @@ export default function DashboardPage() {
                             style={{ width: `${pct}%` }} />
                         </div>
                         <p className="text-xs text-slate-400 dark:text-slate-300 mt-1">
-                          {b.blades_completed} / {b.blade_count} blades completed
+                          {b.rows_complete_count} / 90 blades entered
                         </p>
                       </div>
                     );

@@ -91,8 +91,7 @@ export default function QaDashboardPage() {
 
   const byStatus = (stats?.by_status ?? {}) as Partial<Record<BladeStatus, number>>;
   const totalBlades = Object.values(byStatus).reduce((a, b) => a + (b ?? 0), 0);
-  const onHoldCount = byStatus.ON_HOLD ?? 0;
-  const inProgressCount = Math.max(0, (stats?.total_active ?? 0) - onHoldCount);
+  const inProgressCount = stats?.total_active ?? 0;
   const completedCount = stats?.total_completed ?? 0;
   const completionRate = totalBlades > 0 ? (completedCount / totalBlades) * 100 : 0;
   const activeBatches = batches.filter((b) => b.blades_completed < b.blade_count);
@@ -116,7 +115,7 @@ export default function QaDashboardPage() {
     "CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "SENT_TO_ASSEMBLY",
     "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "SLOT_ASSIGNED",
     "BALANCING_IN_PROGRESS", "BALANCING_COMPLETED", "RETURNED_TO_OH",
-    "FINAL_VERIFICATION", "COMPLETED", "ON_HOLD", "REJECTED", "REOPENED",
+    "FINAL_VERIFICATION", "COMPLETED", "REJECTED", "REOPENED",
   ];
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
@@ -150,7 +149,7 @@ export default function QaDashboardPage() {
       <div className="flex-1 min-h-0 overflow-y-auto max-w-screen-2xl w-full mx-auto px-6 py-6 pb-10 space-y-5">
 
         {/* ── KPI cards ────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
           <KpiCard title="Total Blades" value={totalBlades}
             caption={`${activeBatches.length} active batch${activeBatches.length !== 1 ? "es" : ""}`}
             icon={<Layers className="w-5 h-5" />} accent="blue" />
@@ -160,9 +159,6 @@ export default function QaDashboardPage() {
           <KpiCard title="Completed" value={completedCount}
             caption={`${completionRate.toFixed(1)}% completion rate`}
             icon={<CheckCircle2 className="w-5 h-5" />} accent="emerald" />
-          <KpiCard title="On Hold" value={onHoldCount}
-            caption="Needs attention"
-            icon={<XCircle className="w-5 h-5" />} accent="rose" />
         </div>
 
         {/* ── Station cards ────────────────────────────────────────────────── */}
@@ -227,16 +223,24 @@ export default function QaDashboardPage() {
               ) : (
                 <div className="space-y-5">
                   {activeBatches.slice(0, 5).map((b) => {
-                    const pct = b.blade_count > 0 ? (b.blades_completed / b.blade_count) * 100 : 0;
+                    const pct = (b.rows_complete_count / 90) * 100;
                     return (
                       <div key={b.work_order_number}>
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-white truncate flex items-center gap-1.5">
                               {b.work_order_number}
+                              <span className={cn(
+                                "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold shrink-0",
+                                b.blade_type === "HPTR"
+                                  ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                                  : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                              )}>
+                                {b.blade_type ?? "LPTR"}
+                              </span>
                             </p>
                             <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
-                              {b.work_order_number ?? "—"} · {b.part_number ?? b.nomenclature ?? "—"}
+                              {b.part_number ?? "—"}
                             </p>
                           </div>
                           <span className="text-sm font-bold text-orange-500 shrink-0 ml-2">
@@ -248,7 +252,7 @@ export default function QaDashboardPage() {
                             style={{ width: `${pct}%` }} />
                         </div>
                         <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                          {b.blades_completed} / {b.blade_count} blades completed
+                          {b.rows_complete_count} / 90 blades entered
                         </p>
                       </div>
                     );

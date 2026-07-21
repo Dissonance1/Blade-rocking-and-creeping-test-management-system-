@@ -75,8 +75,8 @@ function BladeTypeBadge({ bladeType }: { bladeType: "LPTR" | "HPTR" | null }) {
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
         bladeType === "HPTR"
-          ? "bg-blue-500/15 text-blue-600 dark:text-blue-300"
-          : "bg-purple-500/15 text-purple-600 dark:text-purple-300"
+          ? "bg-purple-500/15 text-purple-600 dark:text-purple-300"
+          : "bg-blue-500/15 text-blue-600 dark:text-blue-300"
       )}
     >
       {bladeType}
@@ -125,8 +125,7 @@ export default function ReportsPage() {
     return batches.filter(
       (b: BatchSummary) =>
         b.work_order_number.toLowerCase().includes(term) ||
-        (b.part_number ?? "").toLowerCase().includes(term) ||
-        (b.nomenclature ?? "").toLowerCase().includes(term)
+        (b.part_number ?? "").toLowerCase().includes(term)
     );
   }, [batches, searchTerm]);
 
@@ -195,7 +194,7 @@ export default function ReportsPage() {
                       <Input
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        placeholder="Search by work order, part number, or nomenclature…"
+                        placeholder="Search by work order or part number…"
                         className="pl-9 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white focus:border-orange-400"
                       />
                     </div>
@@ -233,7 +232,6 @@ export default function ReportsPage() {
                               </div>
                               <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
                                 {batch.part_number ?? "—"}
-                                {batch.nomenclature ? ` · ${batch.nomenclature}` : ""}
                               </p>
                             </div>
                             <div className="shrink-0 text-right">

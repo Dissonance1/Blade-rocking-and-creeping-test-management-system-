@@ -1,17 +1,15 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { useQuery } from "@tanstack/react-query";
-import { formatDistanceToNow, parseISO } from "date-fns";
+import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { toast } from "sonner";
 import {
   Package,
   CheckCircle2,
-  XCircle,
   AlertCircle,
-  Clock,
   Loader2,
-  ChevronDown,
-  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
   ArrowRight,
   Send,
@@ -25,6 +23,7 @@ import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import KTIcon from "@/components/common/KTIcon";
 
 import { batchService, type BatchSummary, type BatchStatus, type BatchEvent } from "@/services/batchService";
@@ -63,34 +62,6 @@ function RefreshToast() {
   );
 }
 
-// ─── KPI card ─────────────────────────────────────────────────────────────────
-
-type KpiAccent = "slate" | "violet" | "emerald" | "rose";
-
-const KPI_ACCENT: Record<KpiAccent, { gradient: string; glow: string }> = {
-  slate:   { gradient: "from-slate-400 to-slate-600",       glow: "shadow-slate-500/30" },
-  violet:  { gradient: "from-violet-400 to-violet-600",     glow: "shadow-violet-500/30" },
-  emerald: { gradient: "from-emerald-400 to-emerald-600",   glow: "shadow-emerald-500/30" },
-  rose:    { gradient: "from-rose-400 to-rose-600",         glow: "shadow-rose-500/30" },
-};
-
-function KpiCard({ title, value, icon, accent }: {
-  title: string; value: number; icon: React.ReactNode; accent: KpiAccent;
-}) {
-  const a = KPI_ACCENT[accent];
-  return (
-    <div className="h-24 w-full rounded-2xl border border-white/60 dark:border-white/10 bg-white/70 dark:bg-background backdrop-blur-xl p-3.5 shadow-xl shadow-slate-200/50 dark:shadow-black/20 flex flex-col">
-      <div className="flex items-center gap-2.5 min-w-0">
-        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br shadow-lg text-white shrink-0", a.gradient, a.glow)}>
-          {icon}
-        </div>
-        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{title}</p>
-      </div>
-      <p className="text-2xl font-semibold tabular-nums tracking-tight mt-auto text-slate-900 dark:text-white">{value}</p>
-    </div>
-  );
-}
-
 // ─── Status config ────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<
@@ -121,11 +92,6 @@ const STATUS_CONFIG: Record<
     label: "Accepted",
     cls: "bg-emerald-500 text-white",
     icon: <CheckCircle2 className="w-3 h-3" />,
-  },
-  REJECTED: {
-    label: "Rejected",
-    cls: "bg-red-500 text-white",
-    icon: <XCircle className="w-3 h-3" />,
   },
   SLOTS_ALLOCATED: {
     label: "Slots Allocated",
@@ -202,143 +168,141 @@ function ModificationChanges({ changes }: { changes: Record<string, unknown> | n
   );
 }
 
-// ─── Work order detail panel ─────────────────────────────────────────────────
+// ─── Work order events dialog ────────────────────────────────────────────────
 
-function BatchDetailPanel({ workOrderNumber }: { workOrderNumber: string }) {
+function WorkOrderEventsDialog({
+  workOrderNumber,
+  onClose,
+}: {
+  workOrderNumber: string | null;
+  onClose: () => void;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ["batch", workOrderNumber],
-    queryFn: () => batchService.get(workOrderNumber),
+    queryFn: () => batchService.get(workOrderNumber!),
+    enabled: !!workOrderNumber,
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="w-5 h-5 animate-spin text-slate-400 dark:text-slate-500" />
-      </div>
-    );
-  }
-  if (!data) return null;
-
   return (
-    <div className="mt-3 space-y-3 border-t border-slate-100 dark:border-white/10 pt-3 max-h-56 overflow-y-auto">
-      {/* Metadata row */}
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        {data.work_order_number && (
-          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Work Order</p>
-            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.work_order_number}</p>
-          </div>
-        )}
-        {data.part_number && (
-          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Part No.</p>
-            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.part_number}</p>
-          </div>
-        )}
-        {data.engine_number && (
-          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Engine No.</p>
-            <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.engine_number}</p>
-          </div>
-        )}
-        {data.nomenclature && (
-          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Nomenclature</p>
-            <p className="font-semibold text-slate-900 dark:text-white mt-1 truncate">{data.nomenclature}</p>
-          </div>
-        )}
-      </div>
+    <Dialog open={!!workOrderNumber} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="font-mono text-slate-900 dark:text-white">
+            {workOrderNumber}
+          </DialogTitle>
+        </DialogHeader>
 
-      {/* Event timeline */}
-      <div className="pt-4 mt-4 border-t border-dashed border-slate-200 dark:border-white/10 space-y-3">
-        <div className="flex items-center gap-3">
-          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-widest shrink-0">
-            Event History
-          </p>
-          <div className="flex-1 h-px bg-slate-100 dark:bg-white/5" />
-        </div>
-        {data.events.length === 0 ? (
-          <p className="text-xs text-slate-400 dark:text-slate-500 italic py-2">No events recorded yet.</p>
-        ) : (
-          <div className="space-y-2.5">
-            {data.events.map((ev: BatchEvent) => {
-              const scfg = STATUS_CONFIG[ev.event_type as BatchStatus];
-              return (
-                <div
-                  key={ev.id}
-                  className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3 text-xs"
-                >
-                  <div className="flex items-start gap-3">
-                    <span
-                      className={cn(
-                        "mt-0.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold flex-shrink-0",
-                        scfg?.cls ?? "bg-slate-500 text-white"
-                      )}
-                    >
-                      {scfg?.icon}
-                      {scfg?.label ?? ev.event_type}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      {ev.remarks && (
-                        <p className="text-slate-600 dark:text-slate-300">{ev.remarks}</p>
-                      )}
-                      <p className="text-slate-400 dark:text-slate-500 mt-0.5">
-                        by {ev.action_by?.full_name ?? ev.action_by?.username ?? "System"}{" "}
-                        · {formatDistanceToNow(parseISO(ev.timestamp), { addSuffix: true })}
-                      </p>
-                    </div>
-                  </div>
-                  {ev.event_type === "MODIFIED" && (
-                    <ModificationChanges changes={ev.changes} />
-                  )}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-5 h-5 animate-spin text-slate-400 dark:text-slate-500" />
+          </div>
+        ) : !data ? null : (
+          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto">
+            {/* Metadata row */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              {data.part_number && (
+                <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Part No.</p>
+                  <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.part_number}</p>
                 </div>
-              );
-            })}
+              )}
+              {data.engine_number && (
+                <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Engine No.</p>
+                  <p className="font-semibold text-slate-900 dark:text-white mt-1 font-mono">{data.engine_number}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Event timeline */}
+            <div className="pt-3 mt-3 border-t border-dashed border-slate-200 dark:border-white/10 space-y-3">
+              <div className="flex items-center gap-3">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-widest shrink-0">
+                  Event History
+                </p>
+                <div className="flex-1 h-px bg-slate-100 dark:bg-white/5" />
+              </div>
+              {data.events.length === 0 ? (
+                <p className="text-xs text-slate-400 dark:text-slate-500 italic py-2">No events recorded yet.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {data.events.map((ev: BatchEvent) => {
+                    const scfg = STATUS_CONFIG[ev.event_type as BatchStatus];
+                    const ts = parseISO(ev.timestamp);
+                    return (
+                      <div
+                        key={ev.id}
+                        className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-3 text-xs"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <span
+                            className={cn(
+                              "mt-0.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold flex-shrink-0",
+                              scfg?.cls ?? "bg-slate-500 text-white"
+                            )}
+                          >
+                            {scfg?.icon}
+                            {scfg?.label ?? ev.event_type}
+                          </span>
+                          <span className="text-right text-slate-400 dark:text-slate-500 shrink-0 whitespace-nowrap">
+                            {format(ts, "dd MMM yyyy, HH:mm")}
+                          </span>
+                        </div>
+                        <div className="mt-1.5">
+                          {ev.remarks && (
+                            <p className="text-slate-600 dark:text-slate-300">{ev.remarks}</p>
+                          )}
+                          <p className="text-slate-400 dark:text-slate-500 mt-0.5">
+                            by {ev.action_by?.full_name ?? ev.action_by?.username ?? "System"}{" "}
+                            · {formatDistanceToNow(ts, { addSuffix: true })}
+                          </p>
+                        </div>
+                        {ev.event_type === "MODIFIED" && (
+                          <ModificationChanges changes={ev.changes} />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-// ─── Work order card (read-only) ─────────────────────────────────────────────
+// ─── Work order table (read-only) ────────────────────────────────────────────
 
-function BatchCard({ batch }: { batch: BatchSummary }) {
-  const [expanded, setExpanded] = useState(false);
+function BatchTableRow({
+  batch,
+  showSentColumn,
+  onSelect,
+}: {
+  batch: BatchSummary;
+  showSentColumn: boolean;
+  onSelect: (workOrderNumber: string) => void;
+}) {
   // rows_complete_count = blades with Melt Number + Weight actually stored —
   // NOT blade_count, which is the fixed 90-row scaffold present from the
   // moment the Work Order is started, before any row is filled in.
   const filledPct = Math.round((batch.rows_complete_count / 90) * 100);
-  const sentPct = Math.round((batch.blades_sent / 90) * 100);
 
   return (
-    <Card className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20">
-      <CardHeader className="pb-1 pt-3 px-3.5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <CardTitle className="text-sm font-semibold text-slate-900 dark:text-white font-mono truncate">
-              {batch.work_order_number}
-            </CardTitle>
-            {batch.nomenclature && (
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-                {batch.nomenclature}
-              </p>
-            )}
-          </div>
-          <StatusBadge status={batch.current_status} />
-        </div>
-      </CardHeader>
-
-      <CardContent className="px-3.5 pb-3.5 space-y-2">
-        {/* Blade progress bar */}
-        <div className="space-y-1">
-          <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
-            <span>Blade entry progress</span>
-            <span className={cn(batch.is_entry_complete ? "text-emerald-500 font-semibold" : "")}>
-              {batch.rows_complete_count} / 90{batch.is_entry_complete ? " (Complete)" : ""}
-            </span>
-          </div>
-          <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
+    <tr
+      className="border-b border-slate-100 dark:border-white/10 last:border-b-0 hover:bg-slate-50/80 dark:hover:bg-white/5 cursor-pointer"
+      onClick={() => onSelect(batch.work_order_number)}
+    >
+      <td className="px-3 py-2.5 font-mono text-sm font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+        {batch.work_order_number}
+      </td>
+      <td className="px-3 py-2.5">
+        <StatusBadge status={batch.current_status} />
+      </td>
+      <td className="px-3 py-2.5 min-w-[9rem]">
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 flex-1 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
             <div
               className={cn(
                 "h-full rounded-full transition-all",
@@ -349,70 +313,173 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
               style={{ width: `${Math.min(filledPct, 100)}%` }}
             />
           </div>
+          <span
+            className={cn(
+              "text-xs whitespace-nowrap",
+              batch.is_entry_complete
+                ? "text-emerald-500 font-semibold"
+                : "text-slate-500 dark:text-slate-400"
+            )}
+          >
+            {batch.rows_complete_count}/90
+          </span>
         </div>
-
-        {/* Sent bar */}
-        {batch.blades_sent > 0 && (
-          <div className="space-y-1">
-            <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>Sent to Assembly</span>
-              <span className="text-violet-500 font-semibold">{batch.blades_sent}</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-slate-100 dark:bg-white/15 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-400 to-violet-600 transition-all"
-                style={{ width: `${Math.min(sentPct, 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Timestamps */}
-        <div className="flex gap-4 text-xs text-slate-400 dark:text-slate-500">
-          {batch.first_blade_at && (
-            <span className="flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              Created {formatDistanceToNow(parseISO(batch.first_blade_at), { addSuffix: true })}
-            </span>
-          )}
-          {batch.first_sent_at && (
-            <span className="flex items-center gap-1">
-              <ArrowRight className="w-3 h-3" />
-              Sent {formatDistanceToNow(parseISO(batch.first_sent_at), { addSuffix: true })}
-            </span>
-          )}
-        </div>
-
-        {/* Last event snippet */}
-        {batch.last_event && (
-          <div className="rounded-xl bg-slate-50/80 dark:bg-white/5 border border-slate-100 dark:border-white/10 p-2 text-xs text-slate-600 dark:text-slate-300">
-            <span className="font-medium text-slate-400 dark:text-slate-500">Latest: </span>
-            {batch.last_event.remarks ?? STATUS_CONFIG[batch.last_event.event_type as BatchStatus]?.label}
-          </div>
-        )}
-
-        {/* Expand / collapse event history */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 h-7"
-          onClick={() => setExpanded((p) => !p)}
-        >
-          {expanded ? (
-            <>
-              <ChevronUp className="w-3 h-3 mr-1" />
-              Hide Events
-            </>
+      </td>
+      {showSentColumn && (
+        <td className="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
+          {batch.blades_sent > 0 ? (
+            <span className="text-violet-500 font-semibold">{batch.blades_sent}</span>
           ) : (
-            <>
-              <ChevronDown className="w-3 h-3 mr-1" />
-              Show Events
-            </>
+            "—"
           )}
-        </Button>
+        </td>
+      )}
+      <td className="px-3 py-2.5 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
+        {batch.first_blade_at
+          ? formatDistanceToNow(parseISO(batch.first_blade_at), { addSuffix: true })
+          : "—"}
+      </td>
+    </tr>
+  );
+}
 
-        {expanded && <BatchDetailPanel workOrderNumber={batch.work_order_number} />}
-      </CardContent>
+const ROWS_PER_PAGE = 13;
+
+/** Windowed page numbers around `current`, always including first/last, "…" for gaps. */
+function pageWindow(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | "…")[] = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("…");
+    result.push(p);
+  });
+  return result;
+}
+
+function TablePager({
+  page,
+  totalPages,
+  onPageChange,
+  className,
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  className?: string;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className={cn("shrink-0 flex items-center justify-center gap-1 px-3 py-2 border-t border-slate-100 dark:border-white/10", className)}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 w-7 p-0 text-slate-500 dark:text-slate-300"
+        disabled={page === 1}
+        onClick={() => onPageChange(page - 1)}
+      >
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </Button>
+      {pageWindow(page, totalPages).map((p, i) =>
+        p === "…" ? (
+          <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-slate-400 dark:text-slate-500">
+            …
+          </span>
+        ) : (
+          <Button
+            key={p}
+            variant={p === page ? "default" : "outline"}
+            size="sm"
+            className={cn(
+              "h-7 w-7 p-0 text-xs",
+              p === page
+                ? "bg-orange-500 hover:bg-orange-600 text-white border-orange-500"
+                : "text-slate-500 dark:text-slate-300"
+            )}
+            onClick={() => onPageChange(p)}
+          >
+            {p}
+          </Button>
+        )
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 w-7 p-0 text-slate-500 dark:text-slate-300"
+        disabled={page === totalPages}
+        onClick={() => onPageChange(page + 1)}
+      >
+        <ChevronRight className="w-3.5 h-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+function BatchTable({
+  title,
+  batches,
+  emptyLabel,
+  showSentColumn = true,
+  onSelectWorkOrder,
+}: {
+  title: string;
+  batches: BatchSummary[];
+  emptyLabel: string;
+  showSentColumn?: boolean;
+  onSelectWorkOrder: (workOrderNumber: string) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(batches.length / ROWS_PER_PAGE));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = batches.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
+
+  return (
+    <Card className="h-full flex flex-col bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+      <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
+        <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
+          <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
+            <KTIcon iconName="chart-line-up" className="text-base leading-none" />
+          </span>
+          {title}
+          <span className="text-sm font-normal text-slate-400 dark:text-slate-400">
+            ({batches.length})
+          </span>
+        </CardTitle>
+      </CardHeader>
+      {batches.length === 0 ? (
+        <CardContent className="flex-1 flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 gap-2">
+          <Package className="w-8 h-8 opacity-40" />
+          <p className="text-center text-sm max-w-sm">{emptyLabel}</p>
+        </CardContent>
+      ) : (
+        <CardContent className="flex-1 min-h-0 flex flex-col p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-white/10 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                  <th className="px-3 py-2 whitespace-nowrap">Work Order</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Status</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Blade Entry</th>
+                  {showSentColumn && <th className="px-3 py-2 whitespace-nowrap">Sent</th>}
+                  <th className="px-3 py-2 whitespace-nowrap">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((batch) => (
+                  <BatchTableRow
+                    key={batch.work_order_number}
+                    batch={batch}
+                    showSentColumn={showSentColumn}
+                    onSelect={onSelectWorkOrder}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <TablePager page={safePage} totalPages={totalPages} onPageChange={setPage} className="mt-auto" />
+        </CardContent>
+      )}
     </Card>
   );
 }
@@ -421,6 +488,7 @@ function BatchCard({ batch }: { batch: BatchSummary }) {
 
 export default function BatchTrackingPage() {
   const hasRole = useAuthStore((s) => s.hasRole);
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<string | null>(null);
 
   // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) work order view.
   // Assembly Operator sees only work orders that have been sent/received at assembly.
@@ -448,7 +516,6 @@ export default function BatchTrackingPage() {
     SLOTS_ALLOCATED: 6,
     SET_MAKING: 7,
     BALANCED: 8,
-    REJECTED: 9,
   };
 
   const ASSEMBLY_STATUSES: BatchStatus[] = [
@@ -457,19 +524,24 @@ export default function BatchTrackingPage() {
     "MODIFIED",
     "ACCEPTED",
     "SLOTS_ALLOCATED",
-    "REJECTED",
   ];
 
-  // OH view: all work orders regardless of status
-  // Assembly view: only work orders that crossed into assembly
+  // OH view: all work orders regardless of status.
+  // Assembly view: LPTR-only, and only once it's crossed into assembly —
+  // HPTR blades never leave OH (see state_machine.py), so even though HPTR
+  // work orders pass through some of the same status values (e.g.
+  // SLOTS_ALLOCATED is used by both LPTR's assembly-side and HPTR's OH-side
+  // slot allocation), an Assembly user must never see HPTR batches at all.
   const sorted = [...batches]
-    .filter((b) => isOHView || ASSEMBLY_STATUSES.includes(b.current_status))
+    .filter((b) =>
+      isOHView || (b.blade_type === "LPTR" && ASSEMBLY_STATUSES.includes(b.current_status))
+    )
     .sort((a, b) => (statusOrder[a.current_status] ?? 99) - (statusOrder[b.current_status] ?? 99));
 
-  const total = sorted.length;
-  const sent = sorted.filter((b) => b.current_status === "SENT_TO_ASSEMBLY").length;
-  const accepted = sorted.filter((b) => b.current_status === "ACCEPTED").length;
-  const rejected = sorted.filter((b) => b.current_status === "REJECTED").length;
+  // A Work Order is always exactly one blade_type — split into two tables
+  // rather than a single mixed list/grid.
+  const lptrBatches = sorted.filter((b) => b.blade_type === "LPTR");
+  const hptrBatches = isAssemblyView ? [] : sorted.filter((b) => b.blade_type === "HPTR");
 
   const pageTitle = isAssemblyView ? "Assembly Work Order Overview" : "OH Work Order Overview";
   const pageSubtitle = isAssemblyView
@@ -477,7 +549,7 @@ export default function BatchTrackingPage() {
     : "Work orders created and managed at 701 Hanger (OH)";
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
 
       {/* Header */}
       <div className="shrink-0 bg-white/60 backdrop-blur-xl dark:bg-background px-4 sm:px-6 py-2.5">
@@ -504,79 +576,49 @@ export default function BatchTrackingPage() {
         </div>
       </div>
 
-      <div className="w-full px-4 sm:px-6 py-3 flex flex-col gap-3">
-
-        {/* KPI row */}
-        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <KpiCard
-            title="Total Work Orders"
-            value={total}
-            icon={<Package className="w-5 h-5" />}
-            accent="slate"
-          />
-          <KpiCard
-            title="Sent to Assembly"
-            value={sent}
-            icon={<Send className="w-5 h-5" />}
-            accent="violet"
-          />
-          <KpiCard
-            title="Accepted"
-            value={accepted}
-            icon={<CheckCircle2 className="w-5 h-5" />}
-            accent="emerald"
-          />
-          <KpiCard
-            title="Rejected"
-            value={rejected}
-            icon={<XCircle className="w-5 h-5" />}
-            accent="rose"
-          />
-        </div>
-
-        {/* Work order grid */}
-        <Card className="shrink-0 bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
-          <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
-            <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
-              <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
-                <KTIcon iconName="chart-line-up" className="text-base leading-none" />
-              </span>
-              All Work Orders
-              {!isLoading && (
-                <span className="text-sm font-normal text-slate-400 dark:text-slate-400">
-                  ({sorted.length})
-                </span>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-3">
-            {isLoading ? (
-              <div className="flex items-center justify-center h-full min-h-[12rem]">
-                <Loader2 className="w-6 h-6 animate-spin text-slate-400 dark:text-slate-500" />
-              </div>
-            ) : isError ? (
-              <div className="flex items-center justify-center gap-2 h-full min-h-[12rem] text-red-500 dark:text-red-400">
-                <AlertCircle className="w-5 h-5" />
-                <span>Failed to load work orders</span>
-              </div>
-            ) : sorted.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full min-h-[12rem] text-slate-400 dark:text-slate-500 gap-3">
-                <Package className="w-10 h-10 opacity-40" />
-                <p className="text-center text-sm max-w-sm">
-                  No work orders found. Register blades with a work order number to get started.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 pb-1 items-start">
-                {sorted.map((batch) => (
-                  <BatchCard key={batch.work_order_number} batch={batch} />
-                ))}
-              </div>
+      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-3 overflow-hidden">
+        {isLoading ? (
+          <div className="flex items-center justify-center min-h-[12rem]">
+            <Loader2 className="w-6 h-6 animate-spin text-slate-400 dark:text-slate-500" />
+          </div>
+        ) : isError ? (
+          <div className="flex items-center justify-center gap-2 min-h-[12rem] text-red-500 dark:text-red-400">
+            <AlertCircle className="w-5 h-5" />
+            <span>Failed to load work orders</span>
+          </div>
+        ) : sorted.length === 0 ? (
+          <div className="flex flex-col items-center justify-center min-h-[12rem] text-slate-400 dark:text-slate-500 gap-3">
+            <Package className="w-10 h-10 opacity-40" />
+            <p className="text-center text-sm max-w-sm">
+              No work orders found. Register blades with a work order number to get started.
+            </p>
+          </div>
+        ) : (
+          <div className={cn("flex-1 min-h-0 grid grid-cols-1 gap-3", !isAssemblyView && "lg:grid-cols-2")}>
+            <BatchTable
+              title="LPTR Work Orders"
+              batches={lptrBatches}
+              emptyLabel="No LPTR work orders found."
+              onSelectWorkOrder={setSelectedWorkOrder}
+            />
+            {/* HPTR blades never leave OH — Assembly users never see this table. */}
+            {!isAssemblyView && (
+              <BatchTable
+                title="HPTR Work Orders"
+                batches={hptrBatches}
+                emptyLabel="No HPTR work orders found."
+                showSentColumn={false}
+                onSelectWorkOrder={setSelectedWorkOrder}
+              />
             )}
-          </CardContent>
-        </Card>
+          </div>
+        )}
       </div>
 
+      <WorkOrderEventsDialog
+        workOrderNumber={selectedWorkOrder}
+        onClose={() => setSelectedWorkOrder(null)}
+      />
     </div>
   );
 }

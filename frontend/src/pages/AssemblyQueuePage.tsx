@@ -7,7 +7,6 @@ import {
   Layers,
   Clock,
   CheckCircle2,
-  XCircle,
   Loader2,
   Inbox,
   Wrench,
@@ -23,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
 
 import { bladeService } from "@/services/bladeService";
 import { batchService } from "@/services/batchService";
@@ -121,8 +119,6 @@ export default function AssemblyQueuePage() {
   const [activeTab, setActiveTab] = useState("incoming");
   const [search, setSearch] = useState("");
   const [batchFilter, setBatchFilter] = useState<string>("");
-  const [rejectingBatch, setRejectingBatch] = useState<string | null>(null);
-  const [batchRemarks, setBatchRemarks] = useState("");
 
   // Batch list — drives cards, counts, and dropdown
   const { data: batches = [] } = useQuery({
@@ -159,29 +155,11 @@ export default function AssemblyQueuePage() {
     },
   });
 
-  const rejectMutation = useMutation({
-    mutationFn: ({ workOrderNumber, remarks }: { workOrderNumber: string; remarks: string }) =>
-      batchService.reject(workOrderNumber, remarks),
-    onSuccess: (_, { workOrderNumber }) => {
-      queryClient.invalidateQueries({ queryKey: ["batches"] });
-      queryClient.invalidateQueries({ queryKey: ["blades", "assembly-blades", workOrderNumber] });
-      toast.success(`Work Order ${workOrderNumber} rejected`);
-      setRejectingBatch(null);
-      setBatchRemarks("");
-    },
-    onError: (err: unknown) => {
-      const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-        "Failed to reject batch";
-      toast.error(msg);
-    },
-  });
-
   // Only batches that have reached the assembly stage
   const assemblyBatches = useMemo(
     () =>
       batches.filter((b) =>
-        ["SENT_TO_ASSEMBLY", "RECEIVED_BY_ASSEMBLY", "ACCEPTED", "REJECTED", "MODIFIED"].includes(
+        ["SENT_TO_ASSEMBLY", "RECEIVED_BY_ASSEMBLY", "ACCEPTED", "MODIFIED"].includes(
           b.current_status
         )
       ),
@@ -206,11 +184,6 @@ export default function AssemblyQueuePage() {
     () => assemblyBatches.filter((b) => b.current_status === "ACCEPTED").reduce((s, b) => s + b.blade_count, 0),
     [assemblyBatches]
   );
-  const rejectedCount = useMemo(
-    () => assemblyBatches.filter((b) => b.current_status === "REJECTED").length,
-    [assemblyBatches]
-  );
-
   const allBlades = batchBladesData?.items ?? [];
 
   const currentTab = ASSEMBLY_TABS.find((t) => t.id === activeTab) ?? ASSEMBLY_TABS[0];
@@ -249,7 +222,7 @@ export default function AssemblyQueuePage() {
 
       <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-4 sm:px-6 py-5 flex flex-col gap-5">
         {/* Quick stats — vibrant gradients */}
-        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="shrink-0 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           <QuickStat
             label="Incoming"
             count={incomingCount}
@@ -268,160 +241,126 @@ export default function AssemblyQueuePage() {
             icon={<CheckCircle2 className="w-5 h-5 text-white" />}
             gradient="bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-emerald-500/30"
           />
-          <QuickStat
-            label="Rejected Batches"
-            count={rejectedCount}
-            icon={<XCircle className="w-5 h-5 text-white" />}
-            gradient="bg-gradient-to-br from-red-400 to-red-600 shadow-red-500/30"
-          />
         </div>
 
-        {/* Batch action cards — always visible */}
+        {/* Batches table */}
         {assemblyBatches.length > 0 && (
-          <div className="shrink-0 flex flex-col">
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2 shrink-0">
-              Batches
-            </p>
-            <div className="grid gap-3 pr-2 pb-1">
-              {assemblyBatches.map((batch) => {
-                const isActionable =
-                  batch.current_status === "SENT_TO_ASSEMBLY" ||
-                  batch.current_status === "RECEIVED_BY_ASSEMBLY" ||
-                  batch.current_status === "MODIFIED";
-                const isRejecting = rejectingBatch === batch.work_order_number;
-
-                return (
-                  <Card
-                    key={batch.work_order_number}
-                    className="bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20"
-                  >
-                    <CardContent className="p-4 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-4">
-                        {/* Batch info */}
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Package className="w-5 h-5 text-violet-500 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <p className="font-semibold text-slate-900 dark:text-white font-mono truncate">
-                              {batch.work_order_number}
-                            </p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                              <span
-                                className={cn(
-                                  "font-medium",
-                                  batch.current_status === "SENT_TO_ASSEMBLY" && "text-violet-600 dark:text-violet-400",
-                                  batch.current_status === "RECEIVED_BY_ASSEMBLY" && "text-blue-600 dark:text-blue-400",
-                                  batch.current_status === "MODIFIED" && "text-amber-600 dark:text-amber-400",
-                                  batch.current_status === "ACCEPTED" && "text-emerald-600 dark:text-emerald-400",
-                                  batch.current_status === "REJECTED" && "text-red-600 dark:text-red-400",
-                                )}
-                              >
-                                {batch.current_status_label}
-                              </span>
-                              {" · "}{batch.blade_count} blades
-                              {batch.blades_sent > 0 && ` · ${batch.blades_sent} in Assembly`}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Action buttons */}
-                        {isActionable && !isRejecting && (
-                          <div className="flex flex-wrap gap-2">
-                            {batch.current_status === "SENT_TO_ASSEMBLY" && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-2 border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 text-xs h-8"
-                                disabled={receiveMutation.isPending && receiveMutation.variables === batch.work_order_number}
-                                onClick={() => receiveMutation.mutate(batch.work_order_number)}
-                              >
-                                {receiveMutation.isPending && receiveMutation.variables === batch.work_order_number ? (
-                                  <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                                ) : (
-                                  <PackageCheck className="w-3 h-3 mr-1" />
-                                )}
-                                Mark Received
-                              </Button>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-2 border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 text-xs h-8"
-                              onClick={() => navigate(`/batches/${batch.work_order_number}/accept`)}
-                            >
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              Accept
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-2 border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 text-xs h-8"
-                              onClick={() => navigate(`/batches/${batch.work_order_number}/modify`)}
-                            >
-                              <Wrench className="w-3 h-3 mr-1" />
-                              Modify
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-2 border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 text-xs h-8"
-                              onClick={() => { setRejectingBatch(batch.work_order_number); setBatchRemarks(""); }}
-                            >
-                              <XCircle className="w-3 h-3 mr-1" />
-                              Reject
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Inline reject form */}
-                      {isRejecting && (
-                        <div className="pt-3 border-t border-slate-200 dark:border-slate-700 space-y-3">
-                          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                            Reject Work Order —{" "}
-                            <span className="font-mono text-orange-500">{batch.work_order_number}</span>
-                          </p>
-                          <Textarea
-                            value={batchRemarks}
-                            onChange={(e) => setBatchRemarks(e.target.value)}
-                            placeholder="Reason required…"
-                            className="bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white min-h-[60px] text-sm"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() =>
-                                rejectMutation.mutate({ workOrderNumber: batch.work_order_number, remarks: batchRemarks.trim() })
-                              }
-                              disabled={rejectMutation.isPending || !batchRemarks.trim()}
-                              className={cn(
-                                "text-white",
-                                (!batchRemarks.trim() || rejectMutation.isPending)
-                                  ? "bg-slate-400 dark:bg-background cursor-not-allowed opacity-100"
-                                  : "bg-red-600 hover:bg-red-500"
-                              )}
-                            >
-                              {rejectMutation.isPending && (
-                                <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
-                              )}
-                              Confirm Rejection
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => { setRejectingBatch(null); setBatchRemarks(""); }}
-                              className="text-slate-500 hover:text-slate-700"
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              })}
+          <Card className="shrink-0 bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+            <div className="px-4 pt-3 pb-1">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+                Batches ({assemblyBatches.length})
+              </p>
             </div>
-          </div>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-white/10 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                      <th className="px-4 py-2 whitespace-nowrap">Work Order</th>
+                      <th className="px-4 py-2 whitespace-nowrap">Type</th>
+                      <th className="px-4 py-2 whitespace-nowrap">Status</th>
+                      <th className="px-4 py-2 whitespace-nowrap">Blades</th>
+                      <th className="px-4 py-2 whitespace-nowrap">In Assembly</th>
+                      <th className="px-4 py-2 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assemblyBatches.map((batch) => {
+                      const isActionable =
+                        batch.current_status === "SENT_TO_ASSEMBLY" ||
+                        batch.current_status === "RECEIVED_BY_ASSEMBLY" ||
+                        batch.current_status === "MODIFIED";
+
+                      return (
+                        <tr
+                          key={batch.work_order_number}
+                          className="border-b border-slate-100 dark:border-white/10 last:border-b-0 hover:bg-slate-50/80 dark:hover:bg-white/5"
+                        >
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Package className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                              <span className="font-mono font-semibold text-sm text-slate-900 dark:text-white truncate">
+                                {batch.work_order_number}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap">
+                            <span className={cn(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold",
+                              batch.blade_type === "HPTR"
+                                ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300"
+                                : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                            )}>
+                              {batch.blade_type ?? "LPTR"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap">
+                            <span
+                              className={cn(
+                                "text-xs font-semibold",
+                                batch.current_status === "SENT_TO_ASSEMBLY" && "text-violet-600 dark:text-violet-400",
+                                batch.current_status === "RECEIVED_BY_ASSEMBLY" && "text-blue-600 dark:text-blue-400",
+                                batch.current_status === "MODIFIED" && "text-amber-600 dark:text-amber-400",
+                                batch.current_status === "ACCEPTED" && "text-emerald-600 dark:text-emerald-400",
+                              )}
+                            >
+                              {batch.current_status_label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            {batch.blade_count}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            {batch.blades_sent > 0 ? batch.blades_sent : "—"}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {isActionable && (
+                              <div className="flex flex-wrap justify-end gap-2">
+                                {batch.current_status === "SENT_TO_ASSEMBLY" && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-2 border-blue-500 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 text-xs h-8"
+                                    disabled={receiveMutation.isPending && receiveMutation.variables === batch.work_order_number}
+                                    onClick={() => receiveMutation.mutate(batch.work_order_number)}
+                                  >
+                                    {receiveMutation.isPending && receiveMutation.variables === batch.work_order_number ? (
+                                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                                    ) : (
+                                      <PackageCheck className="w-3 h-3 mr-1" />
+                                    )}
+                                    Mark Received
+                                  </Button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-2 border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 text-xs h-8"
+                                  onClick={() => navigate(`/batches/${batch.work_order_number}/accept`)}
+                                >
+                                  <CheckCircle2 className="w-3 h-3 mr-1" />
+                                  Accept
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-2 border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 text-xs h-8"
+                                  onClick={() => navigate(`/batches/${batch.work_order_number}/modify`)}
+                                >
+                                  <Wrench className="w-3 h-3 mr-1" />
+                                  Modify
+                                </Button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Search + Batch filter (for blade table) */}
@@ -497,7 +436,6 @@ export default function AssemblyQueuePage() {
                               "Status",
                               "Type",
                               "Part Number",
-                              "Nomenclature",
                               "Received",
                               "Preview",
                             ].map((h) => (
@@ -554,9 +492,6 @@ export default function AssemblyQueuePage() {
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{blade.part_number}</td>
-                              <td className="px-4 py-3 text-slate-500 dark:text-slate-400 max-w-[160px] truncate">
-                                {blade.nomenclature}
-                              </td>
                               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                                 {formatDistanceToNow(parseISO(blade.updated_at), {
                                   addSuffix: true,
