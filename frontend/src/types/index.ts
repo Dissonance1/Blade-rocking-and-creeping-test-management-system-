@@ -20,7 +20,6 @@ export type BladeStatus =
   | "FINAL_VERIFICATION"
   | "COMPLETED"
   | "REJECTED"
-  | "ON_HOLD"
   | "REOPENED";
 
 export type UserRole =
@@ -99,7 +98,6 @@ export interface Blade {
   work_order_number: string;
   shop_order_number: string;
   part_number: string;
-  nomenclature: string;
   engine_number?: string | null;
   engine_hours?: string | null;
   component_hours?: string | null;
@@ -126,7 +124,6 @@ export interface BladeListItem {
   serial_number: string;
   melt_number: string;
   part_number: string;
-  nomenclature: string;
   blade_type: BladeType;
   status: BladeStatus;
   work_order_number?: string | null;
@@ -147,7 +144,6 @@ export interface BladeCreateRequest {
   work_order_number: string;
   shop_order_number: string;
   part_number: string;
-  nomenclature?: string;
   engine_number?: string;
   engine_hours?: string;
   component_hours?: string;

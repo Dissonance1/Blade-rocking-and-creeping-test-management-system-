@@ -871,7 +871,7 @@ export default function OHSlotAllocationPage() {
               <option value="">— Select a work order —</option>
               {batches.map((b) => (
                 <option key={b.work_order_number} value={b.work_order_number}>
-                  {b.work_order_number}{b.nomenclature ? ` · ${b.nomenclature}` : ""}
+                  {b.work_order_number}
                 </option>
               ))}
             </select>

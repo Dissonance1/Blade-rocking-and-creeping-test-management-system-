@@ -279,7 +279,6 @@ async def _create_sample_blades(
     ENGINE_STRIP = "1458763"        # hyphens removed
     PART_NUMBER  = "104.04.02.020"
     PART_SUFFIX  = "02020"          # last five digits, dots removed
-    NOMENCLATURE = "HP Turbine Blade Stage 1"
     BLADES_PER_WORK_ORDER = 90
 
     # (date_suffix_DDMMYY, blade_type) — 5 LPTR + 5 HPTR work orders
@@ -348,7 +347,6 @@ async def _create_sample_blades(
                     work_order_number=wo_number,
                     shop_order_number=work_order.shop_order_number,
                     part_number=PART_NUMBER,
-                    nomenclature=NOMENCLATURE,
                     engine_number=ENGINE_NO,
                     engine_hours=work_order.engine_hours,
                     component_hours=work_order.component_hours,

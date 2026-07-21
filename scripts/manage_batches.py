@@ -138,7 +138,6 @@ async def create_batch(
         work_order_number=cfg["wo"],
         part_number=cfg["pn"],
         engine_number=cfg["engine"],
-        nomenclature=cfg["nom"],
     ))
 
     # One blade record + measurement + slot + workflow log per blade
@@ -156,7 +155,6 @@ async def create_batch(
             work_order_number=cfg["wo"],
             shop_order_number=cfg["so"],
             part_number=cfg["pn"],
-            nomenclature=cfg["nom"],
             engine_number=cfg["engine"],
             batch_number=batch_num,
             engine_hours=str(random.randint(1200, 2800)),

@@ -195,8 +195,8 @@ async def dashboard_work_orders(
     Return one record per distinct work_order_number from active blades.
 
     Each record includes: work_order_number, shop_order_number, engine_number,
-    running_hours, part_number, nomenclature, and the count of active blades
-    for that work order.
+    running_hours, part_number, and the count of active blades for that
+    work order.
     """
     from app.models.blade import Blade
 
@@ -208,7 +208,6 @@ async def dashboard_work_orders(
                 Blade.engine_number,
                 Blade.running_hours,
                 Blade.part_number,
-                Blade.nomenclature,
                 func.count(Blade.id).label("blade_count"),
             )
             .where(
@@ -221,7 +220,6 @@ async def dashboard_work_orders(
                 Blade.engine_number,
                 Blade.running_hours,
                 Blade.part_number,
-                Blade.nomenclature,
             )
             .order_by(func.count(Blade.id).desc())
         )
@@ -234,7 +232,6 @@ async def dashboard_work_orders(
             "engine_number": row.engine_number,
             "running_hours": row.running_hours,
             "part_number": row.part_number,
-            "nomenclature": row.nomenclature,
             "blade_count": row.blade_count,
         }
         for row in rows
@@ -396,7 +393,6 @@ async def get_blade_timeline(
         BladeStatus.FINAL_VERIFICATION: "Final Verification",
         BladeStatus.COMPLETED: "Completed",
         BladeStatus.REJECTED: "Rejected",
-        BladeStatus.ON_HOLD: "On Hold",
         BladeStatus.REOPENED: "Reopened",
     }
 
@@ -444,7 +440,7 @@ async def get_blade_timeline(
 
     # Append special statuses if applicable
     special_status = None
-    if current_status in {BladeStatus.REJECTED, BladeStatus.ON_HOLD, BladeStatus.REOPENED}:
+    if current_status in {BladeStatus.REJECTED, BladeStatus.REOPENED}:
         special_log = status_to_log.get(current_status)
         special_status = {
             "status": current_status.value,

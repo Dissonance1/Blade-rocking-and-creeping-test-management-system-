@@ -31,7 +31,6 @@ async def _make_blade(db_session, oh_user: User, blade_type: BladeType, status: 
         melt_number="MELT-SLOT",
         work_order_number="WO-2024-SLOT",
         part_number="PT-4470",
-        nomenclature="Turbine Blade",
         blade_type=blade_type,
         status=status,
         created_by_id=oh_user.id,

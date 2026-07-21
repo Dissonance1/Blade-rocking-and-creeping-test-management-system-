@@ -54,7 +54,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     shop_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     part_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    nomenclature: Mapped[str | None] = mapped_column(String(128), nullable=True)
     engine_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     engine_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
     component_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)

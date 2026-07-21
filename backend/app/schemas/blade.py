@@ -49,7 +49,6 @@ class BladeUpdate(BaseSchema):
     work_order_number: str | None = Field(default=None, max_length=64)
     shop_order_number: str | None = Field(default=None, max_length=64)
     part_number: str | None = Field(default=None, max_length=64)
-    nomenclature: str | None = Field(default=None, max_length=128)
     engine_number: str | None = Field(default=None, max_length=64)
     running_hours: Decimal | None = Field(default=None, ge=0)
     engine_hours: str | None = Field(default=None, max_length=64)
@@ -162,7 +161,6 @@ class BladeListItem(BaseSchema):
     work_order_number: str | None = None
     shop_order_number: str | None = None
     part_number: str | None = None
-    nomenclature: str | None = None
     engine_number: str | None = None
     running_hours: float | None = None
     status: BladeStatus
@@ -186,7 +184,6 @@ class BladeResponse(BaseSchema):
     work_order_number: str | None = None
     shop_order_number: str | None = None
     part_number: str | None = None
-    nomenclature: str | None = None
     engine_number: str | None = None
     running_hours: Decimal | None = None
     engine_hours: str | None = None

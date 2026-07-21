@@ -53,7 +53,6 @@ const STATUS_CFG: Record<
   FINAL_VERIFICATION: { label: "Final Verification", variant: "bg-lime-500 text-white", dot: "bg-lime-500" },
   COMPLETED: { label: "Completed", variant: "bg-green-500 text-white", dot: "bg-green-500" },
   REJECTED: { label: "Rejected", variant: "bg-red-500 text-white", dot: "bg-red-500" },
-  ON_HOLD: { label: "On Hold", variant: "bg-slate-500 text-white", dot: "bg-slate-500" },
   REOPENED: { label: "Reopened", variant: "bg-amber-500 text-white", dot: "bg-amber-500" },
 };
 
@@ -253,7 +252,7 @@ export default function BladeDetailPage() {
                 )}
               </div>
               <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5 truncate">
-                {blade.nomenclature} · {blade.part_number}
+                {blade.part_number}
               </p>
             </div>
           </div>
@@ -350,7 +349,6 @@ export default function BladeDetailPage() {
                   <InfoField label="Work Order" value={blade.work_order_number} />
                   <InfoField label="Shop Order" value={blade.shop_order_number} />
                   <InfoField label="Part Number" value={blade.part_number} />
-                  <InfoField label="Nomenclature" value={blade.nomenclature} />
                   <InfoField label="Work Order Number" value={blade.work_order_number} />
                   <InfoField label="Engine Number" value={blade.engine_number} />
                   <InfoField label="Engine Hours" value={(blade as any).engine_hours} />

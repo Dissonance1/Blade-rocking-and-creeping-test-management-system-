@@ -248,7 +248,6 @@ export default function AssemblyVerificationPage() {
     work_order_number: "",
     shop_order_number: "",
     engine_number: "",
-    nomenclature: "",
     weight_grams: "",
     static_moment_gcm: "",
   });
@@ -276,7 +275,7 @@ export default function AssemblyVerificationPage() {
     setRejectReason("");
     setAcceptNotes("");
     setModRemarks("");
-    setModFields({ melt_number: "", part_number: "", work_order_number: "", shop_order_number: "", engine_number: "", nomenclature: "", weight_grams: "", static_moment_gcm: "" });
+    setModFields({ melt_number: "", part_number: "", work_order_number: "", shop_order_number: "", engine_number: "", weight_grams: "", static_moment_gcm: "" });
   }, []);
 
   // ── Data fetching ───────────────────────────────────────────────────────
@@ -412,7 +411,6 @@ export default function AssemblyVerificationPage() {
         work_order_number: selectedBlade.work_order_number ?? "",
         shop_order_number: selectedBlade.shop_order_number ?? "",
         engine_number: selectedBlade.engine_number ?? "",
-        nomenclature: selectedBlade.nomenclature ?? "",
         weight_grams: selectedBlade.weight_grams ?? null,
         static_moment_gcm: selectedBlade.static_moment_gcm ?? null,
       };
@@ -422,7 +420,6 @@ export default function AssemblyVerificationPage() {
         work_order_number: modFields.work_order_number || original.work_order_number,
         shop_order_number: modFields.shop_order_number || original.shop_order_number,
         engine_number: modFields.engine_number || original.engine_number,
-        nomenclature: modFields.nomenclature || original.nomenclature,
         weight_grams: modFields.weight_grams !== "" ? parseFloat(modFields.weight_grams) : original.weight_grams,
         static_moment_gcm: modFields.static_moment_gcm !== "" ? parseFloat(modFields.static_moment_gcm) : original.static_moment_gcm,
       };
@@ -619,9 +616,6 @@ export default function AssemblyVerificationPage() {
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            {selectedBlade.nomenclature}
-                          </p>
                         </div>
                       </div>
 
@@ -956,7 +950,6 @@ export default function AssemblyVerificationPage() {
                                 work_order_number: selectedBlade.work_order_number ?? "",
                                 shop_order_number: selectedBlade.shop_order_number ?? "",
                                 engine_number: selectedBlade.engine_number ?? "",
-                                nomenclature: selectedBlade.nomenclature ?? "",
                                 weight_grams: selectedBlade.weight_grams != null ? String(selectedBlade.weight_grams) : "",
                                 static_moment_gcm: selectedBlade.static_moment_gcm != null ? String(selectedBlade.static_moment_gcm) : "",
                               });
@@ -1023,10 +1016,10 @@ export default function AssemblyVerificationPage() {
                           Correct the blade's recorded values. After saving, you will re-verify with the updated data.
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                          {(["melt_number", "part_number", "work_order_number", "shop_order_number", "engine_number", "nomenclature"] as const).map((field) => (
+                          {(["melt_number", "part_number", "work_order_number", "shop_order_number", "engine_number"] as const).map((field) => (
                             <div key={field} className="space-y-1">
                               <label className="text-xs font-medium text-slate-600 dark:text-slate-400 block">
-                                {field === "melt_number" ? "Melt No." : field === "part_number" ? "Part No." : field === "work_order_number" ? "Work Order" : field === "shop_order_number" ? "Shop Order" : field === "engine_number" ? "Engine No." : "Nomenclature"}
+                                {field === "melt_number" ? "Melt No." : field === "part_number" ? "Part No." : field === "work_order_number" ? "Work Order" : field === "shop_order_number" ? "Shop Order" : "Engine No."}
                               </label>
                               <Input
                                 value={modFields[field]}

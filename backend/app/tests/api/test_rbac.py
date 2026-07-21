@@ -57,7 +57,7 @@ async def test_qa_viewer_cannot_update_blade(
     """QA_VIEWER → PUT /blades/{id} → 403."""
     resp = await client.put(
         f"{BASE}/blades/{sample_blade.id}",
-        json={"nomenclature": "Modified"},
+        json={"part_number": "Modified"},
         headers=qa_headers,
     )
     assert resp.status_code == 403

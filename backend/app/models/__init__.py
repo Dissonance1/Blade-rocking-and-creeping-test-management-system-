@@ -4,6 +4,7 @@ SQLAlchemy async models for Blade Rocking & Creep Test Management System.
 Import order matters for FK resolution — base tables first.
 """
 
+from app.models.audit_log import AuditLog
 from app.models.user import User, Role, Permission, UserRole
 from app.models.workflow import Station, RejectionReason, WorkflowLog
 from app.models.work_order import WorkOrder
@@ -20,6 +21,7 @@ from app.models.lptr_balancing_check import LptrBalancingCheck
 from app.models.lptr_manual_correction import LptrManualCorrection
 
 __all__ = [
+    "AuditLog",
     "User",
     "Role",
     "Permission",
