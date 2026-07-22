@@ -95,6 +95,8 @@ class BatchEventType(str, enum.Enum):
     SLOTS_ALLOCATED = "SLOTS_ALLOCATED"
     SET_MAKING = "SET_MAKING"
     BALANCED = "BALANCED"
+    RETURNED_TO_OH = "RETURNED_TO_OH"     # Assembly reports LPTR balancing task complete, sends blades back
+    ACCEPTED_BY_OH = "ACCEPTED_BY_OH"     # OH acknowledges + accepts the returned work order
 
 
 class AssemblyVerificationStatus(str, enum.Enum):

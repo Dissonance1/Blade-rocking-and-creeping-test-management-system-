@@ -7,6 +7,8 @@ POST /work-orders/{work_order_number}/send-to-assembly         — OH bulk-sends
 POST /work-orders/{work_order_number}/assign-slot               — bulk-assigns computed disc slots (LPTR algorithmic / HPTR explicit)
 POST /work-orders/{work_order_number}/complete-hptr-balancing   — mark a saved HPTR slot allocation balanced/complete
 POST /work-orders/{work_order_number}/complete-lptr-balancing   — mark a saved LPTR slot allocation balanced/complete
+POST /work-orders/{work_order_number}/return-to-oh              — Assembly reports LPTR balancing task complete, sends work order back to OH
+POST /work-orders/{work_order_number}/accept-return             — OH accepts a work order returned from Assembly
 POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
@@ -77,6 +79,8 @@ def _status_label(status_val: str) -> str:
         "SLOTS_ALLOCATED": "Slots Allocated",
         "SET_MAKING": "Set Making",
         "BALANCED": "Balanced",
+        "RETURNED_TO_OH": "Returned to OH",
+        "ACCEPTED_BY_OH": "Accepted by OH",
     }.get(status_val, status_val)
 
 
@@ -1661,6 +1665,201 @@ async def complete_lptr_balancing(
         "blades_completed": len(blades),
         "message": f"{len(blades)} LPTR blade(s) marked balanced.",
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/return-to-oh
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/return-to-oh",
+    status_code=status.HTTP_200_OK,
+    summary="Assembly reports the LPTR balancing task complete and sends the work order back to OH",
+)
+async def return_work_order_to_oh(
+    work_order_number: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Assembly formally reports this work order's task complete — transitions
+    every LPTR blade currently ``BALANCING_COMPLETED`` to ``RETURNED_TO_OH``
+    and logs a ``RETURNED_TO_OH`` batch event. This is a deliberate, separate
+    step from "Physical balancing confirmed?" (``complete-lptr-balancing``)
+    since the blades may not physically travel back to OH immediately.
+
+    Only applies to LPTR work orders — calling this on an HPTR work order
+    returns 422, since HPTR blades never leave OH (see state_machine.py).
+    """
+    from app.models.blade import Blade
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.blade_type != BladeType.LPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' is {work_order.blade_type.value} — "
+                "this endpoint only applies to LPTR work orders."
+            ),
+        )
+
+    remarks = (body or {}).get("remarks") or "Assembly task complete — sent back to OH"
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status == BladeStatus.BALANCING_COMPLETED,
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No balanced LPTR blades pending return-to-OH found for Work Order '{work_order_number}'",
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.RETURNED_TO_OH,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.RETURNED_TO_OH,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} LPTR blade(s) sent back to OH. {remarks}",
+        changes={"blades_returned": len(blades)},
+    ))
+    await db.commit()
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+
+    async def _notify_returned_to_oh(_wo: str, _count: int, _actor: str) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                await svc.notify_roles(
+                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Work Order {_wo} — returned from Assembly",
+                    body=(
+                        f"{_actor} sent Work Order {_wo} back to OH ({_count} blade(s)). "
+                        "Accept it in the OH Work Order Overview to continue."
+                    ),
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                    metadata={"work_order_number": _wo},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_returned_to_oh_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_returned_to_oh, work_order_number, len(blades), actor_name)
+
+    logger.info("work_order_returned_to_oh", work_order=work_order_number, blades=len(blades))
+    return {
+        "work_order_number": work_order_number,
+        "blades_returned": len(blades),
+        "message": f"{len(blades)} LPTR blade(s) sent back to OH.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/accept-return
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/accept-return",
+    status_code=status.HTTP_201_CREATED,
+    summary="OH accepts a work order returned from Assembly",
+)
+async def accept_returned_work_order(
+    work_order_number: str,
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """OH operator acknowledges and accepts a work order returned from Assembly."""
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+
+    remarks = (body or {}).get("remarks")
+
+    ev = WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.ACCEPTED_BY_OH,
+        action_by_id=current_user.id,
+        remarks=remarks,
+        changes=None,
+    )
+    db.add(ev)
+    await db.commit()
+    await db.refresh(ev)
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+
+    async def _notify_accepted_by_oh(_wo: str, _actor: str, _remarks: str | None) -> None:
+        from app.notifications.service import NotificationService
+        from app.models.notification import NotificationType
+        from app.db.session import AsyncSessionLocal
+        try:
+            async with AsyncSessionLocal() as _db:
+                svc = NotificationService(_db)
+                body_text = f"{_actor} accepted Work Order {_wo} back at OH."
+                if _remarks:
+                    body_text += f" Remarks: {_remarks}"
+                await svc.notify_roles(
+                    roles=["ASSEMBLY_OPERATOR", "SUPER_ADMIN"],
+                    title=f"Work Order {_wo} — accepted by OH",
+                    body=body_text,
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                    metadata={"work_order_number": _wo},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("notify_accepted_by_oh_failed", error=str(exc))
+
+    background_tasks.add_task(_notify_accepted_by_oh, work_order_number, actor_name, remarks)
+
+    logger.info("work_order_accepted_by_oh", work_order=work_order_number)
+    return _event_to_dict(ev)
 
 
 # ---------------------------------------------------------------------------

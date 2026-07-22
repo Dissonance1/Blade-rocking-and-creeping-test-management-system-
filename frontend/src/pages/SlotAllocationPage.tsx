@@ -1,8 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
-  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale,
+  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
@@ -142,9 +142,29 @@ export default function SlotAllocationPage() {
     staleTime: 30_000,
   });
   const eligibleBatches = useMemo(
-    () => batches.filter((b) => ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED"].includes(b.current_status)),
+    () => batches.filter((b) => ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED", "BALANCED"].includes(b.current_status)),
     [batches]
   );
+  // LPTR batches that already have at least one stage of slots saved but
+  // haven't been through "Physical balancing confirmed?" yet — i.e. someone
+  // needs to come back (maybe hours or a day later, once the physical
+  // balancing test is done) and save that confirmation.
+  const pendingBalancingBatches = useMemo(
+    () => batches.filter((b) => b.blade_type === "LPTR" && b.current_status === "SLOTS_ALLOCATED"),
+    [batches]
+  );
+  // LPTR batches marked balanced but not yet formally sent back to OH — a
+  // deliberate separate step, since the blades may not physically travel
+  // back to OH the moment balancing is confirmed.
+  const pendingSendBackBatches = useMemo(
+    () => batches.filter((b) => b.blade_type === "LPTR" && b.current_status === "BALANCED"),
+    [batches]
+  );
+  const selectedBatchInfo = useMemo(
+    () => batches.find((b) => b.work_order_number === selectedBatch),
+    [batches, selectedBatch]
+  );
+  const isBalanced = selectedBatchInfo?.current_status === "BALANCED";
 
   const { data: bladesData, isLoading: bladesLoading } = useQuery({
     queryKey: ["blades", "lptr-batch", selectedBatch],
@@ -266,16 +286,36 @@ export default function SlotAllocationPage() {
   });
 
   // ── Balancing ────────────────────────────────────────────────────────────
+  // Both mutations take an explicit work order number so they can fire
+  // directly from a summary card (no need to select the batch and drill
+  // into its Balancing tab first) as well as from within the tab itself.
   const completeBalancingMutation = useMutation({
-    mutationFn: () => batchService.completeLptrBalancing(selectedBatch),
+    mutationFn: (workOrderNumber: string) => batchService.completeLptrBalancing(workOrderNumber),
     onSuccess: (res) => {
       refresh();
       toast.success(res.message ?? "LPTR balancing marked complete");
-      setSelectedBatch("");
-      setActiveTab("empty-rotor");
+      // Stay on this batch/tab — the Balancing tab now shows "Send Back to
+      // OH" as the next deliberate step, so the user doesn't have to hunt
+      // for this same batch again later.
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to mark balancing complete";
+      toast.error(msg);
+    },
+  });
+
+  const returnToOhMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.returnToOh(workOrderNumber),
+    onSuccess: (res) => {
+      refresh();
+      toast.success(res.message ?? "Work order sent back to OH");
+      if (!res.work_order_number || res.work_order_number === selectedBatch) {
+        setSelectedBatch("");
+        setActiveTab("empty-rotor");
+      }
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to send work order back to OH";
       toast.error(msg);
     },
   });
@@ -311,6 +351,23 @@ export default function SlotAllocationPage() {
   );
 
   const isLoading = bladesLoading || slotsLoading;
+
+  // Jump to whichever tab matches this work order's actual progress: physical
+  // balancing may happen an hour or a day after slots are saved, so reopening
+  // an already-fully-slotted batch should land straight on Balancing instead
+  // of making the user click back through Empty Rotor → Stage 1 → Stage 2
+  // every time. Mirrors OHSlotAllocationPage's equivalent behavior for HPTR.
+  useEffect(() => {
+    if (!selectedBatch || isLoading || emptyRotorLoading) return;
+    if (stage2Slots.length > 0) {
+      setActiveTab("balancing");
+    } else if (stage1Slots.length > 0) {
+      setActiveTab("stage2");
+    } else if (emptyRotor) {
+      setActiveTab("stage1");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBatch, isLoading, emptyRotorLoading, stage2Slots.length, stage1Slots.length, emptyRotor]);
 
   return (
     <div className="h-full flex flex-col overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -368,6 +425,97 @@ export default function SlotAllocationPage() {
             </div>
           </CardContent>
         </Card>
+
+        {pendingBalancingBatches.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <ClipboardCheck className="w-3.5 h-3.5" />
+              Pending Physical Balancing ({pendingBalancingBatches.length})
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pendingBalancingBatches.map((b) => (
+                <div
+                  key={b.work_order_number}
+                  className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
+                >
+                  <div className="flex items-start justify-between mb-1.5">
+                    <div>
+                      <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
+                        {b.work_order_number}
+                      </span>
+                      {b.part_number && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
+                      )}
+                    </div>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                      {b.blade_count} blades
+                    </span>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="w-full text-xs h-8 mt-2 bg-amber-500 hover:bg-amber-400 text-white"
+                    onClick={() => completeBalancingMutation.mutate(b.work_order_number)}
+                    disabled={completeBalancingMutation.isPending && completeBalancingMutation.variables === b.work_order_number}
+                  >
+                    {completeBalancingMutation.isPending && completeBalancingMutation.variables === b.work_order_number ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Physical Balancing Confirmed
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {pendingSendBackBatches.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+              <Send className="w-3.5 h-3.5" />
+              Ready to Send Back to OH ({pendingSendBackBatches.length})
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pendingSendBackBatches.map((b) => (
+                <div
+                  key={b.work_order_number}
+                  className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
+                >
+                  <div className="flex items-start justify-between mb-1.5">
+                    <div>
+                      <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
+                        {b.work_order_number}
+                      </span>
+                      {b.part_number && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
+                      )}
+                    </div>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                      {b.blade_count}/{b.blade_count}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden mb-3">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: "100%" }} />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="w-full text-xs h-8 bg-teal-500 hover:bg-teal-400 text-white"
+                    onClick={() => returnToOhMutation.mutate(b.work_order_number)}
+                    disabled={returnToOhMutation.isPending && returnToOhMutation.variables === b.work_order_number}
+                  >
+                    {returnToOhMutation.isPending && returnToOhMutation.variables === b.work_order_number ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Send Back to OH
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {!selectedBatch && (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-slate-500 gap-3">
@@ -558,40 +706,69 @@ export default function SlotAllocationPage() {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Saved Slots ({stage1SavedRows.length + stage2SavedRows.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <SavedSlotsTable rows={[...stage1SavedRows, ...stage2SavedRows]} />
-                    </CardContent>
-                  </Card>
+                  {!isBalanced && (
+                    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base">Saved Slots ({stage1SavedRows.length + stage2SavedRows.length})</CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-0">
+                        <SavedSlotsTable rows={[...stage1SavedRows, ...stage2SavedRows]} />
+                      </CardContent>
+                    </Card>
+                  )}
 
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                          Physical balancing confirmed?
-                        </p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                          Save to mark this work order's LPTR balancing complete. It stops showing up
-                          in the accepted-batches selector above once saved.
-                        </p>
-                      </div>
-                      <Button
-                        onClick={() => completeBalancingMutation.mutate()}
-                        disabled={completeBalancingMutation.isPending}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white shrink-0"
-                      >
-                        {completeBalancingMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
-                        ) : (
-                          <Save className="w-4 h-4 mr-1.5" />
-                        )}
-                        Save
-                      </Button>
-                    </CardContent>
-                  </Card>
+                  {isBalanced ? (
+                    <Card className="bg-white dark:bg-background border-teal-200 dark:border-teal-700/50">
+                      <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-teal-700 dark:text-teal-300">
+                            Balancing confirmed — send back to OH?
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            Report this work order's task complete and hand it back to OH. It stops
+                            showing up in the accepted-batches selector above once sent.
+                          </p>
+                        </div>
+                        <Button
+                          onClick={() => returnToOhMutation.mutate(selectedBatch)}
+                          disabled={returnToOhMutation.isPending}
+                          className="bg-teal-500 hover:bg-teal-600 text-white shrink-0"
+                        >
+                          {returnToOhMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                          ) : (
+                            <Send className="w-4 h-4 mr-1.5" />
+                          )}
+                          Send Back to OH
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+                      <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                            Physical balancing confirmed?
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            Save to mark this work order's LPTR balancing complete, then send it back to OH.
+                          </p>
+                        </div>
+                        <Button
+                          onClick={() => completeBalancingMutation.mutate(selectedBatch)}
+                          disabled={completeBalancingMutation.isPending}
+                          className="bg-emerald-500 hover:bg-emerald-600 text-white shrink-0"
+                        >
+                          {completeBalancingMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                          ) : (
+                            <Save className="w-4 h-4 mr-1.5" />
+                          )}
+                          Save
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               )}
             </TabsContent>

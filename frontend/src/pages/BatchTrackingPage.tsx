@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { toast } from "sonner";
 import {
@@ -18,6 +18,7 @@ import {
   ClipboardCheck,
   SlidersHorizontal,
   Scale,
+  Undo2,
 } from "lucide-react";
 import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
@@ -112,6 +113,16 @@ const STATUS_CONFIG: Record<
     label: "Modified",
     cls: "bg-amber-500 text-white",
     icon: <Wrench className="w-3 h-3" />,
+  },
+  RETURNED_TO_OH: {
+    label: "Returned to OH",
+    cls: "bg-orange-500 text-white",
+    icon: <Undo2 className="w-3 h-3" />,
+  },
+  ACCEPTED_BY_OH: {
+    label: "Accepted by OH",
+    cls: "bg-emerald-600 text-white",
+    icon: <CheckCircle2 className="w-3 h-3" />,
   },
 };
 
@@ -488,17 +499,35 @@ function BatchTable({
 
 export default function BatchTrackingPage() {
   const hasRole = useAuthStore((s) => s.hasRole);
+  const qc = useQueryClient();
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<string | null>(null);
 
   // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) work order view.
   // Assembly Operator sees only work orders that have been sent/received at assembly.
   const isOHView = hasRole(["OH_OPERATOR", "QA_VIEWER", "SUPER_ADMIN"]);
   const isAssemblyView = hasRole(["ASSEMBLY_OPERATOR"]) && !hasRole(["SUPER_ADMIN"]);
+  const canAcceptReturn = hasRole(["OH_OPERATOR", "SUPER_ADMIN"]);
 
   const { data: batches = [], isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["batches"],
     queryFn: () => batchService.list(),
     refetchInterval: 30_000,
+  });
+
+  const returnedBatches = batches.filter(
+    (b) => b.blade_type === "LPTR" && b.current_status === "RETURNED_TO_OH"
+  );
+
+  const acceptReturnMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.acceptReturn(workOrderNumber),
+    onSuccess: (_res, workOrderNumber) => {
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      toast.success(`Work Order ${workOrderNumber} accepted`);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to accept work order";
+      toast.error(msg);
+    },
   });
 
   async function handleRefresh() {
@@ -516,6 +545,8 @@ export default function BatchTrackingPage() {
     SLOTS_ALLOCATED: 6,
     SET_MAKING: 7,
     BALANCED: 8,
+    RETURNED_TO_OH: 9,
+    ACCEPTED_BY_OH: 10,
   };
 
   const ASSEMBLY_STATUSES: BatchStatus[] = [
@@ -577,6 +608,47 @@ export default function BatchTrackingPage() {
       </div>
 
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-3 overflow-hidden">
+        {canAcceptReturn && returnedBatches.length > 0 && (
+          <Card className="shrink-0 bg-orange-50/60 dark:bg-orange-900/10 border-orange-200 dark:border-orange-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-orange-800 dark:text-orange-300">
+                <Undo2 className="w-4 h-4 shrink-0" />
+                Returned from Assembly — Needs Acceptance
+                <span className="text-xs font-normal text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/40 px-2 py-0.5 rounded-full">
+                  {returnedBatches.length}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col divide-y divide-orange-200/70 dark:divide-orange-700/40">
+                {returnedBatches.map((b) => (
+                  <div
+                    key={b.work_order_number}
+                    className="flex items-center justify-between gap-3 py-2.5"
+                  >
+                    <span className="font-mono text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      {b.work_order_number}
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => acceptReturnMutation.mutate(b.work_order_number)}
+                      disabled={acceptReturnMutation.isPending}
+                      className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                    >
+                      {acceptReturnMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Accept
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {isLoading ? (
           <div className="flex items-center justify-center min-h-[12rem]">
             <Loader2 className="w-6 h-6 animate-spin text-slate-400 dark:text-slate-500" />

@@ -12,7 +12,9 @@ export interface BatchEvent {
     | "MODIFIED"
     | "SLOTS_ALLOCATED"
     | "SET_MAKING"
-    | "BALANCED";
+    | "BALANCED"
+    | "RETURNED_TO_OH"
+    | "ACCEPTED_BY_OH";
   action_by: { id: string; username: string; full_name: string } | null;
   remarks: string | null;
   changes: Record<string, unknown> | null;
@@ -28,7 +30,9 @@ export type BatchStatus =
   | "MODIFIED"
   | "SLOTS_ALLOCATED"
   | "SET_MAKING"
-  | "BALANCED";
+  | "BALANCED"
+  | "RETURNED_TO_OH"
+  | "ACCEPTED_BY_OH";
 
 export interface BatchSummary {
   work_order_number: string;
@@ -249,6 +253,28 @@ export const batchService = {
     remarks?: string
   ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
     const { data } = await api.post(`/work-orders/${batchNumber}/complete-lptr-balancing`, { remarks });
+    return data;
+  },
+
+  /**
+   * Assembly formally reports the LPTR balancing task complete and sends
+   * the work order back to OH — a deliberate, separate step from
+   * completeLptrBalancing since the blades may not physically travel back
+   * to OH immediately.
+   */
+  returnToOh: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_returned: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/return-to-oh`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH acknowledges and accepts a work order returned from Assembly.
+   */
+  acceptReturn: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
+    const { data } = await api.post<BatchEvent>(`/work-orders/${batchNumber}/accept-return`, { remarks });
     return data;
   },
 

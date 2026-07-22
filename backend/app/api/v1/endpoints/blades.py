@@ -508,6 +508,7 @@ async def send_to_assembly(
 )
 async def return_to_oh(
     blade_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     remarks: str | None = None,
     current_user: Any = Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN")),
     db: AsyncSession = Depends(get_db),
@@ -605,6 +606,7 @@ async def return_to_oh(
 )
 async def complete_blade(
     blade_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     remarks: str | None = None,
     current_user: Any = Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN")),
     db: AsyncSession = Depends(get_db),
