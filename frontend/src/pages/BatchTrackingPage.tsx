@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, parseISO } from "date-fns";
@@ -19,6 +19,10 @@ import {
   SlidersHorizontal,
   Scale,
   Undo2,
+  Download,
+  X,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
@@ -27,7 +31,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import KTIcon from "@/components/common/KTIcon";
 
-import { batchService, type BatchSummary, type BatchStatus, type BatchEvent } from "@/services/batchService";
+import {
+  batchService,
+  type BatchSummary,
+  type BatchStatus,
+  type BatchEvent,
+  type BladeRockingCreepEntry,
+} from "@/services/batchService";
+import { reportService } from "@/services/reportService";
+import { extractApiError } from "@/services/api";
 import { cn } from "@/utils/cn";
 
 const REFRESH_TOAST_DURATION = 3000;
@@ -495,12 +507,160 @@ function BatchTable({
   );
 }
 
+// ─── Final report row (accepted-return summary + preview + download) ──────────
+
+function sortByPreviewSlot(entries: BladeRockingCreepEntry[]): BladeRockingCreepEntry[] {
+  return [...entries].sort((a, b) => {
+    if (!a.slot_number || !b.slot_number) return (a.slot_number ? -1 : 0) - (b.slot_number ? -1 : 0);
+    const na = parseInt(a.slot_number, 10), nb = parseInt(b.slot_number, 10);
+    return isNaN(na) || isNaN(nb) ? a.slot_number.localeCompare(b.slot_number) : na - nb;
+  });
+}
+
+function FinalReportRow({
+  summary,
+  onDismiss,
+}: {
+  summary: BatchSummary;
+  onDismiss: () => void;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const isLptr = summary.blade_type === "LPTR";
+
+  const {
+    data: previewEntries = [],
+    isLoading: previewLoading,
+    isError: previewIsError,
+  } = useQuery({
+    queryKey: ["batch-preview", summary.work_order_number],
+    queryFn: () => batchService.getRockingCreep(summary.work_order_number),
+    enabled: previewOpen,
+    staleTime: 30_000,
+  });
+
+  const sortedPreview = useMemo(() => sortByPreviewSlot(previewEntries), [previewEntries]);
+
+  const downloadMutation = useMutation({
+    mutationFn: () => reportService.exportBatchReport(summary.work_order_number, "excel"),
+    onError: (err: unknown) => toast.error(extractApiError(err)),
+  });
+
+  return (
+    <div className="py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <span className="font-mono text-sm font-semibold text-slate-700 dark:text-slate-200 block">
+            {summary.work_order_number}
+          </span>
+          <span className="text-xs text-slate-500 dark:text-slate-400 truncate block">
+            {summary.blade_count} {summary.blade_type ?? ""} blade(s) • Part {summary.part_number ?? "—"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setPreviewOpen((v) => !v)}
+            className="border-emerald-300 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+          >
+            {previewOpen ? (
+              <ChevronUp className="w-3.5 h-3.5 mr-1.5" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 mr-1.5" />
+            )}
+            Preview
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => downloadMutation.mutate()}
+            disabled={downloadMutation.isPending}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+          >
+            {downloadMutation.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+            )}
+            Download Final Report
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onDismiss}
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 px-2"
+          >
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {previewOpen && (
+        <div className="mt-2 rounded-lg border border-emerald-200 dark:border-emerald-700/40 overflow-hidden">
+          {previewLoading ? (
+            <div className="flex items-center justify-center py-4 text-slate-400 dark:text-slate-500 text-sm gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading preview…
+            </div>
+          ) : previewIsError ? (
+            <div className="py-4 text-center text-sm text-red-500 dark:text-red-400">
+              Failed to load preview
+            </div>
+          ) : sortedPreview.length === 0 ? (
+            <div className="py-4 text-center text-sm text-slate-400 dark:text-slate-500">
+              No blade data found for this work order
+            </div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto">
+              <table className="w-full text-xs whitespace-nowrap">
+                <thead className="bg-slate-800 dark:bg-background sticky top-0">
+                  <tr>
+                    {[
+                      "Slot No.",
+                      "Serial No.",
+                      "Melt No.",
+                      "Weight (g)",
+                      "Static Moment",
+                      "Rocking",
+                      ...(isLptr ? ["Creep"] : []),
+                    ].map((h) => (
+                      <th
+                        key={h}
+                        className="text-left px-3 py-2 text-slate-100 font-semibold text-[10px] uppercase tracking-wide"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-emerald-100 dark:divide-emerald-800/30">
+                  {sortedPreview.map((e) => (
+                    <tr key={e.blade_id}>
+                      <td className="px-3 py-1.5">{e.slot_number ?? "—"}</td>
+                      <td className="px-3 py-1.5 font-mono">{e.serial_number}</td>
+                      <td className="px-3 py-1.5 font-mono">{e.melt_number}</td>
+                      <td className="px-3 py-1.5">{e.weight_grams ?? "—"}</td>
+                      <td className="px-3 py-1.5">{e.static_moment_gcm ?? "—"}</td>
+                      <td className="px-3 py-1.5">{e.rocking_value ?? "—"}</td>
+                      {isLptr && <td className="px-3 py-1.5">{e.creep_value ?? "—"}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BatchTrackingPage() {
   const hasRole = useAuthStore((s) => s.hasRole);
   const qc = useQueryClient();
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<string | null>(null);
+  const [acceptedSummaries, setAcceptedSummaries] = useState<Record<string, BatchSummary>>({});
 
   // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) work order view.
   // Assembly Operator sees only work orders that have been sent/received at assembly.
@@ -521,6 +681,10 @@ export default function BatchTrackingPage() {
   const acceptReturnMutation = useMutation({
     mutationFn: (workOrderNumber: string) => batchService.acceptReturn(workOrderNumber),
     onSuccess: (_res, workOrderNumber) => {
+      const summary = returnedBatches.find((b) => b.work_order_number === workOrderNumber);
+      if (summary) {
+        setAcceptedSummaries((prev) => ({ ...prev, [workOrderNumber]: summary }));
+      }
       qc.invalidateQueries({ queryKey: ["batches"] });
       toast.success(`Work Order ${workOrderNumber} accepted`);
     },
@@ -529,6 +693,14 @@ export default function BatchTrackingPage() {
       toast.error(msg);
     },
   });
+
+  function dismissAcceptedSummary(workOrderNumber: string) {
+    setAcceptedSummaries((prev) => {
+      const next = { ...prev };
+      delete next[workOrderNumber];
+      return next;
+    });
+  }
 
   async function handleRefresh() {
     await refetch();
@@ -643,6 +815,28 @@ export default function BatchTrackingPage() {
                       Accept
                     </Button>
                   </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {Object.keys(acceptedSummaries).length > 0 && (
+          <Card className="shrink-0 bg-emerald-50/60 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-emerald-800 dark:text-emerald-300">
+                <Download className="w-4 h-4 shrink-0" />
+                Final Report Ready
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col divide-y divide-emerald-200/70 dark:divide-emerald-700/40">
+                {Object.values(acceptedSummaries).map((s) => (
+                  <FinalReportRow
+                    key={s.work_order_number}
+                    summary={s}
+                    onDismiss={() => dismissAcceptedSummary(s.work_order_number)}
+                  />
                 ))}
               </div>
             </CardContent>

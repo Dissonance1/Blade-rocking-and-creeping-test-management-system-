@@ -45,6 +45,8 @@ export interface BatchSummary {
   hptr_count: number;
   hptr_slotted_count: number;
   hptr_balanced_count: number;
+  /** LPTR blades with an active slot allocation (either stage) — 90 once both Stage 1 and Stage 2 are saved. */
+  lptr_slotted_count: number;
   current_status: BatchStatus;
   current_status_label: string;
   first_blade_at: string | null;
@@ -54,6 +56,8 @@ export interface BatchSummary {
   engine_number: string | null;
   /** True only once all 90 rows have Melt Number + Weight and Complete has been run. */
   is_entry_complete: boolean;
+  /** True once every blade has Rocking (and Creep, for LPTR) recorded — independent of slot allocation. */
+  rocking_creep_complete: boolean;
 }
 
 export interface BatchDetail extends BatchSummary {
@@ -226,6 +230,19 @@ export const batchService = {
     const { data } = await api.get<BladeRockingCreepEntry[]>(
       `/work-orders/${batchNumber}/rocking-creep`
     );
+    return data;
+  },
+
+  /**
+   * Confirms every blade in the work order has its required Rocking (and
+   * Creep, for LPTR) value recorded — this explicit confirmation, not
+   * auto-detection, is what drops the work order out of the Rocking & Creep
+   * picker.
+   */
+  completeRockingCreep: async (
+    batchNumber: string
+  ): Promise<{ work_order_number: string; is_rocking_creep_complete: boolean; completed_at: string | null }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-rocking-creep`, {});
     return data;
   },
 

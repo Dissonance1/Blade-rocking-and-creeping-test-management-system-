@@ -178,6 +178,23 @@ export function computeLptrStage2(
   return entries;
 }
 
+/**
+ * Manual balancing swap: exchange which blade occupies each of two slots.
+ * Slot numbers themselves never change, only the blade assigned to them.
+ * Mirrors `hptrBalancing.ts`'s `swapBladesBetweenSlots` — same entry shape.
+ */
+export function swapBladesBetweenSlots(
+  entries: LptrAllocationEntry[],
+  slotA: number,
+  slotB: number
+): LptrAllocationEntry[] {
+  return entries.map((entry) => {
+    if (entry.slot === slotA) return { ...entry, slot: slotB };
+    if (entry.slot === slotB) return { ...entry, slot: slotA };
+    return entry;
+  });
+}
+
 /** Whether a measured unbalance value is within the acceptable limit. */
 export function isLptrBalancingPass(
   measuredUnbalance: number,

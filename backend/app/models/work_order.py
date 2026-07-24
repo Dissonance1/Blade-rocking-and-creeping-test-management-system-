@@ -49,6 +49,19 @@ class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+
+    is_rocking_creep_complete: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    rocking_creep_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rocking_creep_completed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_by_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -72,6 +85,11 @@ class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     entry_completed_by: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
         "User",
         foreign_keys=[entry_completed_by_id],
+        lazy="selectin",
+    )
+    rocking_creep_completed_by: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
+        "User",
+        foreign_keys=[rocking_creep_completed_by_id],
         lazy="selectin",
     )
 

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
-  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send,
+  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send, ArrowLeftRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
@@ -22,7 +22,7 @@ import type { BladeListItem, SlotAllocation } from "@/types";
 import { cn } from "@/utils/cn";
 import {
   LPTR_TOTAL_SLOTS, LPTR_STAGE1_COUNT, LPTR_STAGE2_COUNT,
-  computeLptrStage1, computeLptrStage2,
+  computeLptrStage1, computeLptrStage2, swapBladesBetweenSlots,
   type LptrAllocationEntry, type LptrStage1Result,
 } from "@/utils/lptrBalancing";
 
@@ -136,21 +136,40 @@ export default function SlotAllocationPage() {
   const [stage1Preview, setStage1Preview] = useState<LptrStage1Result | null>(null);
   const [stage2Preview, setStage2Preview] = useState<LptrAllocationEntry[] | null>(null);
 
+  const [swapA1, setSwapA1] = useState("");
+  const [swapB1, setSwapB1] = useState("");
+  const [swapA2, setSwapA2] = useState("");
+  const [swapB2, setSwapB2] = useState("");
+
   const { data: batches = [] } = useQuery({
     queryKey: ["batches"],
     queryFn: () => batchService.list(),
     staleTime: 30_000,
   });
   const eligibleBatches = useMemo(
-    () => batches.filter((b) => ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED", "BALANCED"].includes(b.current_status)),
+    () =>
+      batches.filter(
+        (b) =>
+          b.blade_type === "LPTR" &&
+          ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED", "BALANCED"].includes(b.current_status)
+      ),
     [batches]
   );
-  // LPTR batches that already have at least one stage of slots saved but
-  // haven't been through "Physical balancing confirmed?" yet — i.e. someone
-  // needs to come back (maybe hours or a day later, once the physical
-  // balancing test is done) and save that confirmation.
+  // LPTR batches that have BOTH stages saved (lptr_slotted_count reaches the
+  // full 90-blade count — 46 from Stage 1 + 44 from Stage 2) but haven't been
+  // through "Physical balancing confirmed?" yet — i.e. someone needs to come
+  // back (maybe hours or a day later, once the physical balancing test is
+  // done) and save that confirmation. Stage-1-only work orders deliberately
+  // do NOT show here — the backend rejects confirming balancing before
+  // Stage 2 is saved too.
   const pendingBalancingBatches = useMemo(
-    () => batches.filter((b) => b.blade_type === "LPTR" && b.current_status === "SLOTS_ALLOCATED"),
+    () =>
+      batches.filter(
+        (b) =>
+          b.blade_type === "LPTR" &&
+          b.current_status === "SLOTS_ALLOCATED" &&
+          b.lptr_slotted_count >= b.blade_count
+      ),
     [batches]
   );
   // LPTR batches marked balanced but not yet formally sent back to OH — a
@@ -234,6 +253,15 @@ export default function SlotAllocationPage() {
     setStage1Preview(computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS));
   }
 
+  function handleSwapStage1() {
+    const a = parseInt(swapA1, 10);
+    const b = parseInt(swapB1, 10);
+    if (!stage1Preview || !a || !b || a === b) return;
+    setStage1Preview({ ...stage1Preview, entries: swapBladesBetweenSlots(stage1Preview.entries, a, b) });
+    setSwapA1("");
+    setSwapB1("");
+  }
+
   const saveStage1Mutation = useMutation({
     mutationFn: () => {
       if (!stage1Preview || !unbalanceSlot) throw new Error("No stage 1 allocation to save");
@@ -266,6 +294,15 @@ export default function SlotAllocationPage() {
       return;
     }
     setStage2Preview(computeLptrStage2(eligibleBlades, unbalanceSlot, LPTR_TOTAL_SLOTS));
+  }
+
+  function handleSwapStage2() {
+    const a = parseInt(swapA2, 10);
+    const b = parseInt(swapB2, 10);
+    if (!stage2Preview || !a || !b || a === b) return;
+    setStage2Preview(swapBladesBetweenSlots(stage2Preview, a, b));
+    setSwapA2("");
+    setSwapB2("");
   }
 
   const saveStage2Mutation = useMutation({
@@ -638,6 +675,32 @@ export default function SlotAllocationPage() {
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
                       </p>
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
+                          <Input
+                            type="number"
+                            value={swapA1}
+                            onChange={(e) => setSwapA1(e.target.value)}
+                            placeholder="e.g. 12"
+                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
+                          <Input
+                            type="number"
+                            value={swapB1}
+                            onChange={(e) => setSwapB1(e.target.value)}
+                            placeholder="e.g. 68"
+                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <Button variant="outline" onClick={handleSwapStage1} disabled={!swapA1 || !swapB1 || swapA1 === swapB1}>
+                          <ArrowLeftRight className="w-4 h-4 mr-1.5" />
+                          Swap
+                        </Button>
+                      </div>
                       <AllocationTable entries={stage1Preview.entries} />
                     </CardContent>
                   </Card>
@@ -689,7 +752,33 @@ export default function SlotAllocationPage() {
                         </Button>
                       </div>
                     </CardHeader>
-                    <CardContent className="pt-0">
+                    <CardContent className="pt-0 space-y-2">
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
+                          <Input
+                            type="number"
+                            value={swapA2}
+                            onChange={(e) => setSwapA2(e.target.value)}
+                            placeholder="e.g. 12"
+                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
+                          <Input
+                            type="number"
+                            value={swapB2}
+                            onChange={(e) => setSwapB2(e.target.value)}
+                            placeholder="e.g. 68"
+                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <Button variant="outline" onClick={handleSwapStage2} disabled={!swapA2 || !swapB2 || swapA2 === swapB2}>
+                          <ArrowLeftRight className="w-4 h-4 mr-1.5" />
+                          Swap
+                        </Button>
+                      </div>
                       <AllocationTable entries={stage2Preview} />
                     </CardContent>
                   </Card>

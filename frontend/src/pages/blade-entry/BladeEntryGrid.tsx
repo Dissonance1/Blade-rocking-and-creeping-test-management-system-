@@ -133,8 +133,11 @@ export default function BladeEntryGrid() {
   //    camera for the next row (manual capture — no autoCapture) ────────────
   const handleLockWeight = useCallback(
     (rowIndex: number) => {
-      lockRowWeight(rowIndex);
+      // Save BEFORE locking — saveRow() reads the row fresh from the store
+      // and bails out early if it's already locked, so locking first would
+      // silently skip the save entirely.
       scheduleSave(rowIndex, true);
+      lockRowWeight(rowIndex);
       clearReading();
       const nextRow = Math.min(rowIndex + 1, rows.length - 1);
       focusCell(nextRow, "melt_number");

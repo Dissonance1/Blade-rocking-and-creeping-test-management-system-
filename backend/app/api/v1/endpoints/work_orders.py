@@ -11,6 +11,7 @@ POST /work-orders/{work_order_number}/return-to-oh              — Assembly rep
 POST /work-orders/{work_order_number}/accept-return             — OH accepts a work order returned from Assembly
 POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
+POST /work-orders/{work_order_number}/complete-rocking-creep    — confirm Rocking & Creep entry complete for a work order
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
 POST /work-orders/{work_order_number}/accept                    — Assembly accepts work order
 POST /work-orders/{work_order_number}/modify                    — Assembly corrects blade-level fields
@@ -389,6 +390,32 @@ async def list_work_orders(
         ).all()
         hptr_balanced_map = {r.work_order_number: r.hptr_balanced_count for r in hptr_balanced_rows}
 
+    # ── LPTR blades already slot-allocated per work order (active allocations,
+    # either stage) — used to tell "Stage 1 only" apart from "both stages
+    # done" (blade_count is always 90 for a full LPTR work order: 46 + 44). ──
+    lptr_work_order_numbers = [
+        wn for wn in work_order_numbers
+        if wo_map.get(wn) is not None and wo_map[wn].blade_type == BladeType.LPTR
+    ]
+
+    lptr_slotted_map: dict[str, int] = {}
+    if lptr_work_order_numbers:
+        lptr_slotted_rows = (
+            await db.execute(
+                select(
+                    Blade.work_order_number,
+                    func.count(SlotAllocation.id).label("lptr_slotted_count"),
+                )
+                .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+                .where(
+                    Blade.work_order_number.in_(lptr_work_order_numbers),
+                    SlotAllocation.is_active.is_(True),
+                )
+                .group_by(Blade.work_order_number)
+            )
+        ).all()
+        lptr_slotted_map = {r.work_order_number: r.lptr_slotted_count for r in lptr_slotted_rows}
+
     # ── Assemble response ──────────────────────────────────────────────────
     result = []
     for row in blade_rows:
@@ -412,6 +439,7 @@ async def list_work_orders(
             "hptr_count": hptr_count,
             "hptr_slotted_count": hptr_slotted_map.get(wn, 0),
             "hptr_balanced_count": hptr_balanced_map.get(wn, 0),
+            "lptr_slotted_count": lptr_slotted_map.get(wn, 0),
             "current_status": cur_status,
             "current_status_label": _status_label(cur_status),
             "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
@@ -421,6 +449,7 @@ async def list_work_orders(
             "part_number": wo.part_number if wo else None,
             "engine_number": wo.engine_number if wo else None,
             "is_entry_complete": wo.is_entry_complete if wo else False,
+            "rocking_creep_complete": wo.is_rocking_creep_complete if wo else False,
         })
     return result
 
@@ -1536,14 +1565,15 @@ async def complete_lptr_balancing(
 ) -> dict:
     """
     Physical balancing testing confirmed the set is balanced — transition
-    every LPTR blade in the work order's active slot allocation (whichever
-    stage(s) have been saved so far — stage 1's 46, stage 2's 44, or both)
-    from ``SLOT_ASSIGNED``/``BALANCING_IN_PROGRESS`` to
-    ``BALANCING_COMPLETED`` and mark each slot allocation as balanced.
+    every LPTR blade in the work order's active slot allocation (both
+    Stage 1's 46 and Stage 2's 44 must already be saved — see the
+    ``still_awaiting_slot`` guard below) from
+    ``SLOT_ASSIGNED``/``BALANCING_IN_PROGRESS`` to ``BALANCING_COMPLETED``
+    and mark each slot allocation as balanced.
 
-    Mirrors ``complete_hptr_balancing`` exactly, except this runs at
-    Assembly (720 Hanger) rather than OH, since that's where LPTR slot
-    allocation and balancing happen.
+    Mirrors ``complete_hptr_balancing`` (which has no stages to gate on),
+    except this runs at Assembly (720 Hanger) rather than OH, since that's
+    where LPTR slot allocation and balancing happen.
 
     Only applies to LPTR work orders — calling this on an HPTR work order
     returns 422.
@@ -1574,6 +1604,33 @@ async def complete_lptr_balancing(
         )
 
     remarks = (body or {}).get("remarks") or "Physical balancing testing confirmed — set balanced"
+
+    # Both stages must be saved before balancing can be confirmed — otherwise
+    # this would mark the work order BALANCED (and ready to send back to OH)
+    # after only Stage 1's 46 blades, silently skipping Stage 2 entirely.
+    still_awaiting_slot = (
+        await db.execute(
+            select(func.count(Blade.id)).where(
+                Blade.work_order_number == work_order_number,
+                Blade.blade_type == BladeType.LPTR,
+                Blade.deleted_at.is_(None),
+                Blade.status.in_([
+                    BladeStatus.SENT_TO_ASSEMBLY,
+                    BladeStatus.ASSEMBLY_RECEIVED,
+                    BladeStatus.ASSEMBLY_VERIFIED,
+                ]),
+            )
+        )
+    ).scalar_one()
+    if still_awaiting_slot > 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"{still_awaiting_slot} LPTR blade(s) in Work Order '{work_order_number}' are still "
+                "awaiting slot assignment — both Stage 1 and Stage 2 must be saved before "
+                "confirming physical balancing."
+            ),
+        )
 
     blades = (
         await db.execute(
@@ -1806,9 +1863,15 @@ async def accept_returned_work_order(
     current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    """OH operator acknowledges and accepts a work order returned from Assembly."""
+    """
+    OH operator acknowledges and accepts a work order returned from Assembly —
+    transitions every blade currently ``RETURNED_TO_OH`` to
+    ``FINAL_VERIFICATION`` and logs an ``ACCEPTED_BY_OH`` batch event.
+    """
+    from app.models.blade import Blade
     from app.models.work_order import WorkOrder
     from app.models.work_order_event import WorkOrderEvent
+    from app.workflows.state_machine import WorkflowEngine
 
     work_order = (
         await db.execute(
@@ -1821,14 +1884,42 @@ async def accept_returned_work_order(
             detail=f"Work Order '{work_order_number}' not found",
         )
 
-    remarks = (body or {}).get("remarks")
+    remarks = (body or {}).get("remarks") or "OH accepted return from Assembly"
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status == BladeStatus.RETURNED_TO_OH,
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No blades pending OH acceptance found for Work Order '{work_order_number}'",
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.FINAL_VERIFICATION,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
 
     ev = WorkOrderEvent(
         work_order_number=work_order_number,
         event_type=BatchEventType.ACCEPTED_BY_OH,
         action_by_id=current_user.id,
         remarks=remarks,
-        changes=None,
+        changes={"blades_accepted": len(blades)},
     )
     db.add(ev)
     await db.commit()
@@ -2089,6 +2180,122 @@ async def get_work_order_rocking_creep(
             "creep_value": meas.get("creep_value"),
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/complete-rocking-creep
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/complete-rocking-creep",
+    status_code=status.HTTP_200_OK,
+    summary="Confirm Rocking & Creep entry is complete for a work order",
+)
+async def complete_rocking_creep(
+    work_order_number: str,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    OH operator confirms every blade in *work_order_number* has its required
+    Rocking (and Creep, for LPTR) value recorded. Marking this explicitly —
+    rather than auto-detecting it — is what drops the work order out of the
+    Rocking & Creep picker; idempotent if already marked complete.
+    """
+    from datetime import datetime, timezone
+
+    from app.models.blade import Blade
+    from app.models.measurement import Measurement
+    from app.models.work_order import WorkOrder
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+
+    if work_order.is_rocking_creep_complete:
+        return {
+            "work_order_number": work_order_number,
+            "is_rocking_creep_complete": True,
+            "completed_at": (
+                work_order.rocking_creep_completed_at.isoformat()
+                if work_order.rocking_creep_completed_at else None
+            ),
+        }
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' has no blades",
+        )
+
+    blade_ids = [b.id for b in blades]
+    meas_rows = (
+        await db.execute(
+            select(Measurement.blade_id, Measurement.rocking_value, Measurement.creep_value)
+            .where(
+                Measurement.blade_id.in_(blade_ids),
+                Measurement.measurement_type == MeasurementType.INITIAL,
+            )
+        )
+    ).all()
+    meas_map = {r.blade_id: r for r in meas_rows}
+
+    missing_serials: list[str] = []
+    any_lptr = False
+    for blade in blades:
+        meas = meas_map.get(blade.id)
+        has_rocking = meas is not None and meas.rocking_value is not None
+        needs_creep = blade.blade_type == BladeType.LPTR
+        any_lptr = any_lptr or needs_creep
+        has_creep = meas is not None and meas.creep_value is not None
+        if not has_rocking or (needs_creep and not has_creep):
+            missing_serials.append(blade.serial_number)
+
+    if missing_serials:
+        missing_serials.sort()
+        preview = ", ".join(missing_serials[:10])
+        more = f" (+{len(missing_serials) - 10} more)" if len(missing_serials) > 10 else ""
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"{len(missing_serials)} blade(s) still missing Rocking"
+                f"{' or Creep' if any_lptr else ''} value(s): {preview}{more}"
+            ),
+        )
+
+    work_order.is_rocking_creep_complete = True
+    work_order.rocking_creep_completed_at = datetime.now(timezone.utc)
+    work_order.rocking_creep_completed_by_id = current_user.id
+    db.add(work_order)
+    await db.commit()
+    await db.refresh(work_order)
+
+    logger.info(
+        "work_order_rocking_creep_completed",
+        work_order=work_order_number,
+        blades=len(blades),
+    )
+    return {
+        "work_order_number": work_order_number,
+        "is_rocking_creep_complete": True,
+        "completed_at": work_order.rocking_creep_completed_at.isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
