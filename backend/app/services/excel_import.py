@@ -73,6 +73,73 @@ def _clean_cell(value: object) -> object:
     return value
 
 
+def _find_column(row: tuple, start: int, end: int, aliases: set[str]) -> int | None:
+    """First column index in row[start:end] whose normalized header is in aliases."""
+    for c in range(start, end):
+        if _normalize_header(row[c]) in aliases:
+            return c
+    return None
+
+
+def _find_column_kinds(row: tuple, s_no_col: int, block_end: int) -> tuple[int | None, int | None, int | None]:
+    """Scan [s_no_col, block_end) once for melt/weight-tier1/weight-tier2 columns."""
+    melt_col = weight_tier1_col = weight_tier2_col = None
+    for c in range(s_no_col, block_end):
+        normalized = _normalize_header(row[c])
+        if not normalized:
+            continue
+        if melt_col is None and normalized in _MELT_ALIASES:
+            melt_col = c
+        if weight_tier1_col is None and normalized in _RAW_WEIGHT_TIER1:
+            weight_tier1_col = c
+        if weight_tier2_col is None and normalized in _RAW_WEIGHT_TIER2:
+            weight_tier2_col = c
+    return melt_col, weight_tier1_col, weight_tier2_col
+
+
+def _find_block_columns(row: tuple, s_no_col: int, block_end: int) -> dict[str, int] | None:
+    """
+    Locate Melt Number / raw Weight columns within one block's column range
+    (see module docstring for the tier-1-over-tier-2 weight-column rule).
+    Returns None if neither melt nor weight was found in this range.
+    """
+    melt_col, weight_tier1_col, weight_tier2_col = _find_column_kinds(row, s_no_col, block_end)
+    weight_col = weight_tier1_col if weight_tier1_col is not None else weight_tier2_col
+    if melt_col is None and weight_col is None:
+        return None
+
+    block: dict[str, int] = {"s_no": s_no_col}
+    if melt_col is not None:
+        block["melt_number"] = melt_col
+    if weight_col is not None:
+        block["raw_weight"] = weight_col
+    return block
+
+
+def _find_blocks_in_row(row: tuple) -> list[dict[str, int]]:
+    """Scan one row for every repeated S.No/Melt/Weight block it contains."""
+    blocks: list[dict[str, int]] = []
+    n = len(row)
+    col = 0
+    while col < n:
+        s_no_col = _find_column(row, col, n, _S_NO_ALIASES)
+        if s_no_col is None:
+            break
+
+        # This block's columns end at the next S.No column (start of the
+        # next repeated block) or the end of the row.
+        block_end = _find_column(row, s_no_col + 1, n, _S_NO_ALIASES)
+        if block_end is None:
+            block_end = n
+
+        block = _find_block_columns(row, s_no_col, block_end)
+        if block is not None:
+            blocks.append(block)
+
+        col = block_end
+    return blocks
+
+
 def _find_header_blocks(rows_data: list[tuple]) -> tuple[int, list[dict[str, int]]] | None:
     """
     Scan the first few rows for one containing S.No plus at least one of
@@ -82,52 +149,82 @@ def _find_header_blocks(rows_data: list[tuple]) -> tuple[int, list[dict[str, int
     header row was found.
     """
     for row_index, row in enumerate(rows_data[:_MAX_HEADER_SCAN_ROWS]):
-        blocks: list[dict[str, int]] = []
-        n = len(row)
-        col = 0
-        while col < n:
-            s_no_col: int | None = None
-            for c in range(col, n):
-                if _normalize_header(row[c]) in _S_NO_ALIASES:
-                    s_no_col = c
-                    break
-            if s_no_col is None:
-                break
-
-            # This block's columns end at the next S.No column (start of the
-            # next repeated block) or the end of the row.
-            block_end = n
-            for c in range(s_no_col + 1, n):
-                if _normalize_header(row[c]) in _S_NO_ALIASES:
-                    block_end = c
-                    break
-
-            melt_col = weight_tier1_col = weight_tier2_col = None
-            for c in range(s_no_col, block_end):
-                normalized = _normalize_header(row[c])
-                if not normalized:
-                    continue
-                if melt_col is None and normalized in _MELT_ALIASES:
-                    melt_col = c
-                if weight_tier1_col is None and normalized in _RAW_WEIGHT_TIER1:
-                    weight_tier1_col = c
-                if weight_tier2_col is None and normalized in _RAW_WEIGHT_TIER2:
-                    weight_tier2_col = c
-
-            weight_col = weight_tier1_col if weight_tier1_col is not None else weight_tier2_col
-            if melt_col is not None or weight_col is not None:
-                block: dict[str, int] = {"s_no": s_no_col}
-                if melt_col is not None:
-                    block["melt_number"] = melt_col
-                if weight_col is not None:
-                    block["raw_weight"] = weight_col
-                blocks.append(block)
-
-            col = block_end
-
+        blocks = _find_blocks_in_row(row)
         if blocks:
             return row_index, blocks
     return None
+
+
+def _parse_raw_weight(
+    weight_cell: object, row_num: int, s_no: int, block_label: str, result: ParsedImport
+) -> tuple[float | None, bool]:
+    """Returns (raw_weight, ok) — ``ok=False`` means an error was appended and the row should be skipped."""
+    if weight_cell is None or not str(weight_cell).strip():
+        return None, True
+    try:
+        raw_weight = float(weight_cell)
+    except (TypeError, ValueError):
+        result.errors.append(
+            ImportRowError(row=row_num, message=f"Weight '{weight_cell}' on S.No {s_no} is not a number{block_label}")
+        )
+        return None, False
+    if raw_weight < 0:
+        result.errors.append(
+            ImportRowError(row=row_num, message=f"Weight on S.No {s_no} must not be negative{block_label}")
+        )
+        return None, False
+    return raw_weight, True
+
+
+def _parse_row(
+    row: tuple,
+    row_num: int,
+    s_no_col: int,
+    melt_col: int | None,
+    weight_col: int | None,
+    seen_s_nos: set[int],
+    block_label: str,
+    result: ParsedImport,
+) -> None:
+    """Validate and append (or error-out) one data row. Mutates ``result`` and ``seen_s_nos``."""
+    s_no_cell = row[s_no_col] if s_no_col < len(row) else None
+    melt_cell = row[melt_col] if melt_col is not None and melt_col < len(row) else None
+    weight_cell = row[weight_col] if weight_col is not None and weight_col < len(row) else None
+
+    if s_no_cell is None and melt_cell is None and weight_cell is None:
+        return  # fully blank row — skip silently
+
+    if s_no_cell is None:
+        result.errors.append(ImportRowError(row=row_num, message=f"Missing S.No{block_label}"))
+        return
+
+    try:
+        s_no = int(float(s_no_cell))
+    except (TypeError, ValueError):
+        result.errors.append(ImportRowError(row=row_num, message=f"S.No '{s_no_cell}' is not a number{block_label}"))
+        return
+
+    if not 1 <= s_no <= BLADES_PER_WORK_ORDER:
+        result.errors.append(
+            ImportRowError(
+                row=row_num,
+                message=f"S.No {s_no} out of range (must be 1-{BLADES_PER_WORK_ORDER}){block_label}",
+            )
+        )
+        return
+
+    if s_no in seen_s_nos:
+        result.errors.append(ImportRowError(row=row_num, message=f"Duplicate S.No {s_no}{block_label}"))
+        return
+
+    melt_number = str(melt_cell).strip() if melt_cell is not None and str(melt_cell).strip() else None
+
+    raw_weight, ok = _parse_raw_weight(weight_cell, row_num, s_no, block_label, result)
+    if not ok:
+        return
+
+    seen_s_nos.add(s_no)
+    result.rows.append((s_no, WorkOrderRowUpdate(melt_number=melt_number, raw_weight=raw_weight)))
 
 
 def _parse_block(
@@ -144,55 +241,7 @@ def _parse_block(
 
     for offset, row in enumerate(rows_data[header_row_index + 1 :]):
         row_num = header_row_index + 2 + offset  # 1-based file row number, for error messages
-        s_no_cell = row[s_no_col] if s_no_col < len(row) else None
-        melt_cell = row[melt_col] if melt_col is not None and melt_col < len(row) else None
-        weight_cell = row[weight_col] if weight_col is not None and weight_col < len(row) else None
-
-        if s_no_cell is None and melt_cell is None and weight_cell is None:
-            continue  # fully blank row — skip silently
-
-        if s_no_cell is None:
-            result.errors.append(ImportRowError(row=row_num, message=f"Missing S.No{block_label}"))
-            continue
-
-        try:
-            s_no = int(float(s_no_cell))
-        except (TypeError, ValueError):
-            result.errors.append(ImportRowError(row=row_num, message=f"S.No '{s_no_cell}' is not a number{block_label}"))
-            continue
-
-        if not 1 <= s_no <= BLADES_PER_WORK_ORDER:
-            result.errors.append(
-                ImportRowError(
-                    row=row_num,
-                    message=f"S.No {s_no} out of range (must be 1-{BLADES_PER_WORK_ORDER}){block_label}",
-                )
-            )
-            continue
-
-        if s_no in seen_s_nos:
-            result.errors.append(ImportRowError(row=row_num, message=f"Duplicate S.No {s_no}{block_label}"))
-            continue
-
-        melt_number = str(melt_cell).strip() if melt_cell is not None and str(melt_cell).strip() else None
-
-        raw_weight: float | None = None
-        if weight_cell is not None and str(weight_cell).strip():
-            try:
-                raw_weight = float(weight_cell)
-            except (TypeError, ValueError):
-                result.errors.append(
-                    ImportRowError(row=row_num, message=f"Weight '{weight_cell}' on S.No {s_no} is not a number{block_label}")
-                )
-                continue
-            if raw_weight < 0:
-                result.errors.append(
-                    ImportRowError(row=row_num, message=f"Weight on S.No {s_no} must not be negative{block_label}")
-                )
-                continue
-
-        seen_s_nos.add(s_no)
-        result.rows.append((s_no, WorkOrderRowUpdate(melt_number=melt_number, raw_weight=raw_weight)))
+        _parse_row(row, row_num, s_no_col, melt_col, weight_col, seen_s_nos, block_label, result)
 
 
 def parse_work_order_rows(file_bytes: bytes) -> ParsedImport:

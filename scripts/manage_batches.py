@@ -55,16 +55,18 @@ BATCHES_TO_DELETE = ["2", "3", "4", "5", "6", "7", "8",
 #  7  LPTR  88 blades  (partial)
 #  8  HPTR  74 blades  (partial)
 
+_LPT_S3_NOM = "LPT Stage 3 Rotor Blade"
+
 BATCH_CONFIGS = [
     dict(number="2", count=90, blade_type=BladeType.LPTR,
          engine="CF6-80C2-SN20002", wo="WO-2024-CF6-002", so="SO-720-2024-002",
-         pn="PN-LPT-S3-002", nom="LPT Stage 3 Rotor Blade"),
+         pn="PN-LPT-S3-002", nom=_LPT_S3_NOM),
     dict(number="3", count=90, blade_type=BladeType.HPTR,
          engine="CFM56-7B-SN20003", wo="WO-2024-CFM-003", so="SO-720-2024-003",
          pn="PN-HPT-S1-003", nom="HPT Stage 1 Rotor Blade"),
     dict(number="4", count=90, blade_type=BladeType.LPTR,
          engine="CF6-80C2-SN20004", wo="WO-2024-CF6-004", so="SO-720-2024-004",
-         pn="PN-LPT-S3-004", nom="LPT Stage 3 Rotor Blade"),
+         pn="PN-LPT-S3-004", nom=_LPT_S3_NOM),
     dict(number="5", count=90, blade_type=BladeType.HPTR,
          engine="PW4000-SN20005",   wo="WO-2024-PW4-005", so="SO-720-2024-005",
          pn="PN-HPT-S2-005", nom="HPT Stage 2 Rotor Blade"),
@@ -73,7 +75,7 @@ BATCH_CONFIGS = [
          pn="PN-LPT-S4-006", nom="LPT Stage 4 Rotor Blade"),
     dict(number="7", count=88, blade_type=BladeType.LPTR,
          engine="CF6-80C2-SN20007", wo="WO-2024-CF6-007", so="SO-720-2024-007",
-         pn="PN-LPT-S3-007", nom="LPT Stage 3 Rotor Blade"),
+         pn="PN-LPT-S3-007", nom=_LPT_S3_NOM),
     dict(number="8", count=74, blade_type=BladeType.HPTR,
          engine="PW4000-SN20008",   wo="WO-2024-PW4-008", so="SO-720-2024-008",
          pn="PN-HPT-S1-008", nom="HPT Stage 1 Rotor Blade"),

@@ -180,6 +180,34 @@ async def push_dti(body: DtiReading, request: Request) -> dict[str, Any]:
 
 # ─── WS /ws ───────────────────────────────────────────────────────────────────
 
+async def _replay_buffered_readings(websocket: WebSocket, redis_client, station: str) -> None:
+    """Catch the client up on readings captured for this station before it
+    connected (server restart, WS reconnect gap, page navigation)."""
+    buffered = await redis_client.hgetall(_CYCLE_KEY_FMT.format(station=station))
+    for position in sorted(buffered, key=lambda p: int(p[1:])):
+        await websocket.send_json({"type": "dti", "position": position, "value": float(buffered[position])})
+
+
+async def _dti_send_readings(websocket: WebSocket, pubsub) -> None:
+    async for message in pubsub.listen():
+        if message["type"] != "message":
+            continue
+        reading = json.loads(message["data"])
+        await websocket.send_json({"type": "dti", **reading})
+
+
+async def _dti_ping(websocket: WebSocket) -> None:
+    while True:
+        await asyncio.sleep(30)
+        await websocket.send_json({"type": "ping"})
+
+
+async def _dti_receive(websocket: WebSocket) -> None:
+    while True:
+        await websocket.receive_text()
+    # WebSocketDisconnect propagates — gather cancels send_readings and ping
+
+
 @router.websocket("/ws")
 async def dti_ws(websocket: WebSocket) -> None:
     """
@@ -228,33 +256,14 @@ async def dti_ws(websocket: WebSocket) -> None:
     # would be lost since the pub/sub channel only reaches subscribers listening
     # at publish time. Skipped when replay=false (single-shot capture flows).
     if replay:
-        buffered = await redis_client.hgetall(_CYCLE_KEY_FMT.format(station=station))
-        for position in sorted(buffered, key=lambda p: int(p[1:])):
-            await websocket.send_json({"type": "dti", "position": position, "value": float(buffered[position])})
+        await _replay_buffered_readings(websocket, redis_client, station)
 
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(_CHANNEL_FMT.format(station=station))
 
-    async def _send_readings() -> None:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            reading = json.loads(message["data"])
-            await websocket.send_json({"type": "dti", **reading})
-
-    async def _ping() -> None:
-        while True:
-            await asyncio.sleep(30)
-            await websocket.send_json({"type": "ping"})
-
-    async def _receive() -> None:
-        while True:
-            await websocket.receive_text()
-        # WebSocketDisconnect propagates — gather cancels send_readings and ping
-
     try:
         await asyncio.gather(
-            _send_readings(), _ping(), _receive(),
+            _dti_send_readings(websocket, pubsub), _dti_ping(websocket), _dti_receive(websocket),
         )
     except WebSocketDisconnect:
         pass

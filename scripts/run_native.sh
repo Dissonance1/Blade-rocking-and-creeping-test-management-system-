@@ -22,15 +22,27 @@ BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 RUN_DIR="$ROOT_DIR/.native-run"
 LOG_DIR="$ROOT_DIR/logs/native"
+SECRETS_DIR="$RUN_DIR/secrets"
+
+mkdir -p "$RUN_DIR" "$SECRETS_DIR" "$LOG_DIR" "$ROOT_DIR/uploads" "$ROOT_DIR/reports" "$ROOT_DIR/logs/backend" "$ROOT_DIR/logs/celery"
+
+# Local-only credentials, generated once and persisted under .native-run/secrets
+# (gitignored) instead of hardcoded in source — reused on every re-run so the
+# Postgres role/DB and Redis requirepass stay consistent across restarts.
+_get_or_create_secret() {
+  local file="$SECRETS_DIR/$1"
+  if [ ! -f "$file" ]; then
+    (umask 177 && openssl rand -base64 24 | tr -d '\n=/+' > "$file")
+  fi
+  cat "$file"
+}
 
 PG_DB="blade_rocking"
 PG_USER="blade_user"
-PG_PASSWORD="BladeRock@2024"
-REDIS_PASSWORD="RedisRock@2024"
+PG_PASSWORD="$(_get_or_create_secret pg_password)"
+REDIS_PASSWORD="$(_get_or_create_secret redis_password)"
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
-
-mkdir -p "$RUN_DIR" "$LOG_DIR" "$ROOT_DIR/uploads" "$ROOT_DIR/reports" "$ROOT_DIR/logs/backend" "$ROOT_DIR/logs/celery"
 
 echo "=============================================="
 echo " Blade Rocking & Creep — Native Run (no Docker)"

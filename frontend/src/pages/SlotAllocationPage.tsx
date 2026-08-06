@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import { bladeService } from "@/services/bladeService";
-import { batchService, type LptrSlotAssignment } from "@/services/batchService";
+import { batchService, type LptrSlotAssignment, type BatchSummary } from "@/services/batchService";
 import { slotService } from "@/services/slotService";
 import { lptrService } from "@/services/lptrService";
 import { reportService } from "@/services/reportService";
@@ -27,6 +27,97 @@ import {
 } from "@/utils/lptrBalancing";
 
 const ELIGIBLE_FOR_SLOT_STATUSES = new Set(["SENT_TO_ASSEMBLY", "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED"]);
+
+function isEligibleLptrBatch(b: BatchSummary): boolean {
+  return (
+    b.blade_type === "LPTR" &&
+    ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED", "BALANCED"].includes(b.current_status)
+  );
+}
+
+// LPTR batches that have BOTH stages saved (lptr_slotted_count reaches the
+// full 90-blade count — 46 from Stage 1 + 44 from Stage 2) but haven't been
+// through "Physical balancing confirmed?" yet — i.e. someone needs to come
+// back (maybe hours or a day later, once the physical balancing test is
+// done) and save that confirmation. Stage-1-only work orders deliberately
+// do NOT show here — the backend rejects confirming balancing before
+// Stage 2 is saved too.
+function isPendingBalancingBatch(b: BatchSummary): boolean {
+  return (
+    b.blade_type === "LPTR" &&
+    b.current_status === "SLOTS_ALLOCATED" &&
+    b.lptr_slotted_count >= b.blade_count
+  );
+}
+
+// LPTR batches marked balanced but not yet formally sent back to OH — a
+// deliberate separate step, since the blades may not physically travel
+// back to OH the moment balancing is confirmed.
+function isPendingSendBackBatch(b: BatchSummary): boolean {
+  return b.blade_type === "LPTR" && b.current_status === "BALANCED";
+}
+
+function runStage1(
+  eligibleBlades: BladeListItem[],
+  unbalanceSlot: number | undefined,
+  unbalanceValue: number | undefined
+): LptrStage1Result | null {
+  if (!unbalanceSlot || unbalanceValue == null) {
+    toast.error("Record the empty rotor reading first");
+    return null;
+  }
+  if (eligibleBlades.length < LPTR_STAGE1_COUNT) {
+    toast.error(`Need at least ${LPTR_STAGE1_COUNT} eligible blades, found ${eligibleBlades.length}`);
+    return null;
+  }
+  return computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS);
+}
+
+function swapStage1Preview(preview: LptrStage1Result | null, swapA: string, swapB: string): LptrStage1Result | null {
+  const a = parseInt(swapA, 10);
+  const b = parseInt(swapB, 10);
+  if (!preview || !a || !b || a === b) return null;
+  return { ...preview, entries: swapBladesBetweenSlots(preview.entries, a, b) };
+}
+
+function runStage2(
+  eligibleBlades: BladeListItem[],
+  unbalanceSlot: number | undefined,
+  stage1SlotsCount: number
+): LptrAllocationEntry[] | null {
+  if (!unbalanceSlot) {
+    toast.error("Record the empty rotor reading first");
+    return null;
+  }
+  if (stage1SlotsCount === 0) {
+    toast.error("Save Stage 1 first");
+    return null;
+  }
+  if (eligibleBlades.length < LPTR_STAGE2_COUNT) {
+    toast.error(`Need ${LPTR_STAGE2_COUNT} remaining eligible blades, found ${eligibleBlades.length}`);
+    return null;
+  }
+  return computeLptrStage2(eligibleBlades, unbalanceSlot, LPTR_TOTAL_SLOTS);
+}
+
+function swapStage2Preview(
+  preview: LptrAllocationEntry[] | null,
+  swapA: string,
+  swapB: string
+): LptrAllocationEntry[] | null {
+  const a = parseInt(swapA, 10);
+  const b = parseInt(swapB, 10);
+  if (!preview || !a || !b || a === b) return null;
+  return swapBladesBetweenSlots(preview, a, b);
+}
+
+/** Jump to whichever tab matches this work order's actual progress — see caller for why. */
+function determineTabForProgress(stage2Count: number, stage1Count: number, hasEmptyRotor: boolean): string | null {
+  if (stage2Count > 0) return "balancing";
+  if (stage1Count > 0) return "stage2";
+  if (hasEmptyRotor) return "stage1";
+  return null;
+}
 
 // ─── Shared: W1/W2 half-split allocation tables ─────────────────────────────
 
@@ -123,6 +214,569 @@ function SavedSlotsTable({ rows }: { rows: SavedRow[] }) {
   );
 }
 
+// ─── Batch selector card ──────────────────────────────────────────────────
+
+function BatchSelectorCard({
+  selectedBatch,
+  eligibleBatches,
+  onBatchChange,
+  showExport,
+  onExport,
+  exporting,
+}: {
+  selectedBatch: string;
+  eligibleBatches: BatchSummary[];
+  onBatchChange: (bn: string) => void;
+  showExport: boolean;
+  onExport: () => void;
+  exporting: boolean;
+}) {
+  return (
+    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+      <CardContent className="pt-5 pb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
+              Select Batch <span className="text-xs font-normal text-slate-400">(accepted batches only)</span>
+            </Label>
+            <select
+              value={selectedBatch}
+              onChange={(e) => onBatchChange(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+            >
+              <option value="">— Select an accepted batch —</option>
+              {eligibleBatches.map((b) => (
+                <option key={b.work_order_number} value={b.work_order_number}>
+                  {b.work_order_number}{` · ${b.current_status_label}`}
+                </option>
+              ))}
+            </select>
+            {eligibleBatches.length === 0 && (
+              <p className="text-xs text-amber-500 mt-1.5">
+                No accepted batches found. Batches must be accepted by Assembly before slot assignment.
+              </p>
+            )}
+          </div>
+          {showExport && (
+            <Button variant="outline" size="sm" onClick={onExport} disabled={exporting} className="border-slate-300 dark:border-slate-600 shrink-0">
+              {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
+              Export Excel
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Summary card sections (pending balancing / pending send-back) ────────
+
+function PendingBalancingSection({
+  batches,
+  onConfirm,
+  isPending,
+  pendingWorkOrder,
+}: {
+  batches: BatchSummary[];
+  onConfirm: (workOrderNumber: string) => void;
+  isPending: boolean;
+  pendingWorkOrder: string | undefined;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <ClipboardCheck className="w-3.5 h-3.5" />
+        Pending Physical Balancing ({batches.length})
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {batches.map((b) => {
+          const thisPending = isPending && pendingWorkOrder === b.work_order_number;
+          return (
+            <div
+              key={b.work_order_number}
+              className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
+            >
+              <div className="flex items-start justify-between mb-1.5">
+                <div>
+                  <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
+                    {b.work_order_number}
+                  </span>
+                  {b.part_number && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
+                  )}
+                </div>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                  {b.blade_count} blades
+                </span>
+              </div>
+              <Button
+                size="sm"
+                className="w-full text-xs h-8 mt-2 bg-amber-500 hover:bg-amber-400 text-white"
+                onClick={() => onConfirm(b.work_order_number)}
+                disabled={thisPending}
+              >
+                {thisPending ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                Physical Balancing Confirmed
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PendingSendBackSection({
+  batches,
+  onSend,
+  isPending,
+  pendingWorkOrder,
+}: {
+  batches: BatchSummary[];
+  onSend: (workOrderNumber: string) => void;
+  isPending: boolean;
+  pendingWorkOrder: string | undefined;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <Send className="w-3.5 h-3.5" />
+        Ready to Send Back to OH ({batches.length})
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {batches.map((b) => {
+          const thisPending = isPending && pendingWorkOrder === b.work_order_number;
+          return (
+            <div
+              key={b.work_order_number}
+              className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
+            >
+              <div className="flex items-start justify-between mb-1.5">
+                <div>
+                  <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
+                    {b.work_order_number}
+                  </span>
+                  {b.part_number && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
+                  )}
+                </div>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                  {b.blade_count}/{b.blade_count}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden mb-3">
+                <div className="h-full rounded-full bg-emerald-500" style={{ width: "100%" }} />
+              </div>
+              <Button
+                size="sm"
+                className="w-full text-xs h-8 bg-teal-500 hover:bg-teal-400 text-white"
+                onClick={() => onSend(b.work_order_number)}
+                disabled={thisPending}
+              >
+                {thisPending ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                Send Back to OH
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab contents ──────────────────────────────────────────────────────────
+
+function EmptyRotorTabContent({
+  emptyRotor,
+  unbalanceSlotInput,
+  setUnbalanceSlotInput,
+  unbalanceValueInput,
+  setUnbalanceValueInput,
+  onSave,
+  isSaving,
+}: {
+  emptyRotor: { unbalance_slot: number; unbalance_value: number | string } | null | undefined;
+  unbalanceSlotInput: string;
+  setUnbalanceSlotInput: (v: string) => void;
+  unbalanceValueInput: string;
+  setUnbalanceValueInput: (v: string) => void;
+  onSave: () => void;
+  isSaving: boolean;
+}) {
+  return (
+    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Empty Rotor Balancing Reading</CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Before any blades are installed, the empty rotor is balanced. Enter the reported
+          unbalance position (the first of the two adjacent slots) and value.
+        </p>
+        {emptyRotor && (
+          <div className="rounded-lg border border-emerald-200 dark:border-emerald-700/50 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+            Saved: unbalance between slots {emptyRotor.unbalance_slot} and {(emptyRotor.unbalance_slot % LPTR_TOTAL_SLOTS) + 1}, {Number(emptyRotor.unbalance_value).toFixed(2)} g
+          </div>
+        )}
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-1">
+            <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Slot</Label>
+            <Input
+              type="number" min={1} max={LPTR_TOTAL_SLOTS}
+              value={unbalanceSlotInput || String(emptyRotor?.unbalance_slot ?? "")}
+              onChange={(e) => setUnbalanceSlotInput(e.target.value)}
+              placeholder="e.g. 35"
+              className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Value (g)</Label>
+            <Input
+              type="number" min={0} step="0.1"
+              value={unbalanceValueInput || String(emptyRotor?.unbalance_value ?? "")}
+              onChange={(e) => setUnbalanceValueInput(e.target.value)}
+              placeholder="e.g. 6.8"
+              className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
+            />
+          </div>
+          <Button
+            onClick={onSave}
+            disabled={isSaving || (!unbalanceSlotInput && !emptyRotor) || (!unbalanceValueInput && !emptyRotor)}
+            className="bg-orange-500 hover:bg-orange-400 text-white"
+          >
+            {isSaving ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
+            Save Reading
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stage1TabContent({
+  stage1Slots,
+  stage1SavedRows,
+  emptyRotor,
+  eligibleBlades,
+  blades,
+  onRunStage1,
+  stage1Preview,
+  onSaveStage1,
+  isSavingStage1,
+  onSwapStage1,
+  swapA1,
+  setSwapA1,
+  swapB1,
+  setSwapB1,
+}: {
+  stage1Slots: unknown[];
+  stage1SavedRows: SavedRow[];
+  emptyRotor: unknown;
+  eligibleBlades: BladeListItem[];
+  blades: BladeListItem[];
+  onRunStage1: () => void;
+  stage1Preview: LptrStage1Result | null;
+  onSaveStage1: () => void;
+  isSavingStage1: boolean;
+  onSwapStage1: () => void;
+  swapA1: string;
+  setSwapA1: (v: string) => void;
+  swapB1: string;
+  setSwapB1: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      {stage1Slots.length > 0 ? (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Saved Stage 1 Slots ({stage1SavedRows.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <SavedSlotsTable rows={stage1SavedRows} />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardContent className="py-10 flex flex-col items-center gap-4">
+            {!emptyRotor ? (
+              <p className="text-sm text-slate-400 dark:text-slate-500">Record the Empty Rotor reading first.</p>
+            ) : (
+              <>
+                <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
+                  {eligibleBlades.length} of {blades.length} LPTR blades ready. Stage 1 requires exactly {LPTR_STAGE1_COUNT}.
+                </p>
+                <Button onClick={onRunStage1} disabled={eligibleBlades.length < LPTR_STAGE1_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
+                  <Play className="w-4 h-4 mr-1.5" />Run Stage 1 Allocation
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {stage1Preview && stage1Slots.length === 0 && (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-base">
+              Stage 1 Preview
+              <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+            </CardTitle>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={onSaveStage1} disabled={isSavingStage1} className="bg-emerald-500 hover:bg-emerald-600 text-white">
+                {isSavingStage1 ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                Save Stage 1
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
+                <Input
+                  type="number"
+                  value={swapA1}
+                  onChange={(e) => setSwapA1(e.target.value)}
+                  placeholder="e.g. 12"
+                  className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
+                <Input
+                  type="number"
+                  value={swapB1}
+                  onChange={(e) => setSwapB1(e.target.value)}
+                  placeholder="e.g. 68"
+                  className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                />
+              </div>
+              <Button variant="outline" onClick={onSwapStage1} disabled={!swapA1 || !swapB1 || swapA1 === swapB1}>
+                <ArrowLeftRight className="w-4 h-4 mr-1.5" />
+                Swap
+              </Button>
+            </div>
+            <AllocationTable entries={stage1Preview.entries} />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function Stage2TabContent({
+  stage1Slots,
+  stage2Slots,
+  stage2SavedRows,
+  eligibleBlades,
+  onRunStage2,
+  stage2Preview,
+  onSaveStage2,
+  isSavingStage2,
+  onSwapStage2,
+  swapA2,
+  setSwapA2,
+  swapB2,
+  setSwapB2,
+}: {
+  stage1Slots: unknown[];
+  stage2Slots: unknown[];
+  stage2SavedRows: SavedRow[];
+  eligibleBlades: BladeListItem[];
+  onRunStage2: () => void;
+  stage2Preview: LptrAllocationEntry[] | null;
+  onSaveStage2: () => void;
+  isSavingStage2: boolean;
+  onSwapStage2: () => void;
+  swapA2: string;
+  setSwapA2: (v: string) => void;
+  swapB2: string;
+  setSwapB2: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      {stage1Slots.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
+          <Scale className="w-10 h-10 opacity-30" />
+          <p className="text-sm">Save Stage 1 first.</p>
+        </div>
+      ) : stage2Slots.length > 0 ? (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Saved Stage 2 Slots ({stage2SavedRows.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <SavedSlotsTable rows={stage2SavedRows} />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardContent className="py-10 flex flex-col items-center gap-4">
+            <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
+              {eligibleBlades.length} blade{eligibleBlades.length !== 1 ? "s" : ""} remaining. Stage 2 requires exactly {LPTR_STAGE2_COUNT}.
+            </p>
+            <Button onClick={onRunStage2} disabled={eligibleBlades.length < LPTR_STAGE2_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
+              <Play className="w-4 h-4 mr-1.5" />Run Stage 2 Allocation
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {stage2Preview && stage2Slots.length === 0 && (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-base">
+              Stage 2 Preview
+              <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+            </CardTitle>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={onSaveStage2} disabled={isSavingStage2} className="bg-emerald-500 hover:bg-emerald-600 text-white">
+                {isSavingStage2 ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                Save Stage 2
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
+                <Input
+                  type="number"
+                  value={swapA2}
+                  onChange={(e) => setSwapA2(e.target.value)}
+                  placeholder="e.g. 12"
+                  className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
+                <Input
+                  type="number"
+                  value={swapB2}
+                  onChange={(e) => setSwapB2(e.target.value)}
+                  placeholder="e.g. 68"
+                  className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
+                />
+              </div>
+              <Button variant="outline" onClick={onSwapStage2} disabled={!swapA2 || !swapB2 || swapA2 === swapB2}>
+                <ArrowLeftRight className="w-4 h-4 mr-1.5" />
+                Swap
+              </Button>
+            </div>
+            <AllocationTable entries={stage2Preview} />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function BalancingTabContent({
+  stage2Slots,
+  isBalanced,
+  stage1SavedRows,
+  stage2SavedRows,
+  onReturnToOh,
+  isReturning,
+  onCompleteBalancing,
+  isCompleting,
+}: {
+  stage2Slots: unknown[];
+  isBalanced: boolean;
+  stage1SavedRows: SavedRow[];
+  stage2SavedRows: SavedRow[];
+  onReturnToOh: () => void;
+  isReturning: boolean;
+  onCompleteBalancing: () => void;
+  isCompleting: boolean;
+}) {
+  if (stage2Slots.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
+        <Scale className="w-10 h-10 opacity-30" />
+        <p className="text-sm">Save Stage 1 and Stage 2 first to track physical balancing here.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-5">
+      {!isBalanced && (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Saved Slots ({stage1SavedRows.length + stage2SavedRows.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <SavedSlotsTable rows={[...stage1SavedRows, ...stage2SavedRows]} />
+          </CardContent>
+        </Card>
+      )}
+
+      {isBalanced ? (
+        <Card className="bg-white dark:bg-background border-teal-200 dark:border-teal-700/50">
+          <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-teal-700 dark:text-teal-300">
+                Balancing confirmed — send back to OH?
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Report this work order's task complete and hand it back to OH. It stops
+                showing up in the accepted-batches selector above once sent.
+              </p>
+            </div>
+            <Button
+              onClick={onReturnToOh}
+              disabled={isReturning}
+              className="bg-teal-500 hover:bg-teal-600 text-white shrink-0"
+            >
+              {isReturning ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+              ) : (
+                <Send className="w-4 h-4 mr-1.5" />
+              )}
+              Send Back to OH
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
+          <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                Physical balancing confirmed?
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Save to mark this work order's LPTR balancing complete, then send it back to OH.
+              </p>
+            </div>
+            <Button
+              onClick={onCompleteBalancing}
+              disabled={isCompleting}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white shrink-0"
+            >
+              {isCompleting ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+              ) : (
+                <Save className="w-4 h-4 mr-1.5" />
+              )}
+              Save
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function SlotAllocationPage() {
@@ -146,39 +800,9 @@ export default function SlotAllocationPage() {
     queryFn: () => batchService.list(),
     staleTime: 30_000,
   });
-  const eligibleBatches = useMemo(
-    () =>
-      batches.filter(
-        (b) =>
-          b.blade_type === "LPTR" &&
-          ["ACCEPTED", "MODIFIED", "SLOTS_ALLOCATED", "BALANCED"].includes(b.current_status)
-      ),
-    [batches]
-  );
-  // LPTR batches that have BOTH stages saved (lptr_slotted_count reaches the
-  // full 90-blade count — 46 from Stage 1 + 44 from Stage 2) but haven't been
-  // through "Physical balancing confirmed?" yet — i.e. someone needs to come
-  // back (maybe hours or a day later, once the physical balancing test is
-  // done) and save that confirmation. Stage-1-only work orders deliberately
-  // do NOT show here — the backend rejects confirming balancing before
-  // Stage 2 is saved too.
-  const pendingBalancingBatches = useMemo(
-    () =>
-      batches.filter(
-        (b) =>
-          b.blade_type === "LPTR" &&
-          b.current_status === "SLOTS_ALLOCATED" &&
-          b.lptr_slotted_count >= b.blade_count
-      ),
-    [batches]
-  );
-  // LPTR batches marked balanced but not yet formally sent back to OH — a
-  // deliberate separate step, since the blades may not physically travel
-  // back to OH the moment balancing is confirmed.
-  const pendingSendBackBatches = useMemo(
-    () => batches.filter((b) => b.blade_type === "LPTR" && b.current_status === "BALANCED"),
-    [batches]
-  );
+  const eligibleBatches = useMemo(() => batches.filter(isEligibleLptrBatch), [batches]);
+  const pendingBalancingBatches = useMemo(() => batches.filter(isPendingBalancingBatch), [batches]);
+  const pendingSendBackBatches = useMemo(() => batches.filter(isPendingSendBackBatch), [batches]);
   const selectedBatchInfo = useMemo(
     () => batches.find((b) => b.work_order_number === selectedBatch),
     [batches, selectedBatch]
@@ -242,22 +866,14 @@ export default function SlotAllocationPage() {
 
   // ── Stage 1 ──────────────────────────────────────────────────────────────
   function handleRunStage1() {
-    if (!unbalanceSlot || unbalanceValue == null) {
-      toast.error("Record the empty rotor reading first");
-      return;
-    }
-    if (eligibleBlades.length < LPTR_STAGE1_COUNT) {
-      toast.error(`Need at least ${LPTR_STAGE1_COUNT} eligible blades, found ${eligibleBlades.length}`);
-      return;
-    }
-    setStage1Preview(computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS));
+    const result = runStage1(eligibleBlades, unbalanceSlot, unbalanceValue);
+    if (result) setStage1Preview(result);
   }
 
   function handleSwapStage1() {
-    const a = parseInt(swapA1, 10);
-    const b = parseInt(swapB1, 10);
-    if (!stage1Preview || !a || !b || a === b) return;
-    setStage1Preview({ ...stage1Preview, entries: swapBladesBetweenSlots(stage1Preview.entries, a, b) });
+    const result = swapStage1Preview(stage1Preview, swapA1, swapB1);
+    if (!result) return;
+    setStage1Preview(result);
     setSwapA1("");
     setSwapB1("");
   }
@@ -281,26 +897,14 @@ export default function SlotAllocationPage() {
 
   // ── Stage 2 ──────────────────────────────────────────────────────────────
   function handleRunStage2() {
-    if (!unbalanceSlot) {
-      toast.error("Record the empty rotor reading first");
-      return;
-    }
-    if (stage1Slots.length === 0) {
-      toast.error("Save Stage 1 first");
-      return;
-    }
-    if (eligibleBlades.length < LPTR_STAGE2_COUNT) {
-      toast.error(`Need ${LPTR_STAGE2_COUNT} remaining eligible blades, found ${eligibleBlades.length}`);
-      return;
-    }
-    setStage2Preview(computeLptrStage2(eligibleBlades, unbalanceSlot, LPTR_TOTAL_SLOTS));
+    const result = runStage2(eligibleBlades, unbalanceSlot, stage1Slots.length);
+    if (result) setStage2Preview(result);
   }
 
   function handleSwapStage2() {
-    const a = parseInt(swapA2, 10);
-    const b = parseInt(swapB2, 10);
-    if (!stage2Preview || !a || !b || a === b) return;
-    setStage2Preview(swapBladesBetweenSlots(stage2Preview, a, b));
+    const result = swapStage2Preview(stage2Preview, swapA2, swapB2);
+    if (!result) return;
+    setStage2Preview(result);
     setSwapA2("");
     setSwapB2("");
   }
@@ -396,13 +1000,8 @@ export default function SlotAllocationPage() {
   // every time. Mirrors OHSlotAllocationPage's equivalent behavior for HPTR.
   useEffect(() => {
     if (!selectedBatch || isLoading || emptyRotorLoading) return;
-    if (stage2Slots.length > 0) {
-      setActiveTab("balancing");
-    } else if (stage1Slots.length > 0) {
-      setActiveTab("stage2");
-    } else if (emptyRotor) {
-      setActiveTab("stage1");
-    }
+    const tab = determineTabForProgress(stage2Slots.length, stage1Slots.length, !!emptyRotor);
+    if (tab) setActiveTab(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBatch, isLoading, emptyRotorLoading, stage2Slots.length, stage1Slots.length, emptyRotor]);
 
@@ -428,130 +1027,31 @@ export default function SlotAllocationPage() {
       </div>
 
       <div className="flex-1 min-h-0 w-full px-4 sm:px-6 pt-5 pb-16 flex flex-col gap-5">
-        <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
-                  Select Batch <span className="text-xs font-normal text-slate-400">(accepted batches only)</span>
-                </Label>
-                <select
-                  value={selectedBatch}
-                  onChange={(e) => handleBatchChange(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                >
-                  <option value="">— Select an accepted batch —</option>
-                  {eligibleBatches.map((b) => (
-                    <option key={b.work_order_number} value={b.work_order_number}>
-                      {b.work_order_number}{` · ${b.current_status_label}`}
-                    </option>
-                  ))}
-                </select>
-                {eligibleBatches.length === 0 && (
-                  <p className="text-xs text-amber-500 mt-1.5">
-                    No accepted batches found. Batches must be accepted by Assembly before slot assignment.
-                  </p>
-                )}
-              </div>
-              {selectedBatch && stage1Slots.length > 0 && (
-                <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting} className="border-slate-300 dark:border-slate-600 shrink-0">
-                  {exporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
-                  Export Excel
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <BatchSelectorCard
+          selectedBatch={selectedBatch}
+          eligibleBatches={eligibleBatches}
+          onBatchChange={handleBatchChange}
+          showExport={!!selectedBatch && stage1Slots.length > 0}
+          onExport={handleExport}
+          exporting={exporting}
+        />
 
         {pendingBalancingBatches.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-              <ClipboardCheck className="w-3.5 h-3.5" />
-              Pending Physical Balancing ({pendingBalancingBatches.length})
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {pendingBalancingBatches.map((b) => (
-                <div
-                  key={b.work_order_number}
-                  className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
-                >
-                  <div className="flex items-start justify-between mb-1.5">
-                    <div>
-                      <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
-                        {b.work_order_number}
-                      </span>
-                      {b.part_number && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
-                      )}
-                    </div>
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                      {b.blade_count} blades
-                    </span>
-                  </div>
-                  <Button
-                    size="sm"
-                    className="w-full text-xs h-8 mt-2 bg-amber-500 hover:bg-amber-400 text-white"
-                    onClick={() => completeBalancingMutation.mutate(b.work_order_number)}
-                    disabled={completeBalancingMutation.isPending && completeBalancingMutation.variables === b.work_order_number}
-                  >
-                    {completeBalancingMutation.isPending && completeBalancingMutation.variables === b.work_order_number ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Save className="w-3.5 h-3.5 mr-1.5" />
-                    )}
-                    Physical Balancing Confirmed
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
+          <PendingBalancingSection
+            batches={pendingBalancingBatches}
+            onConfirm={(wo) => completeBalancingMutation.mutate(wo)}
+            isPending={completeBalancingMutation.isPending}
+            pendingWorkOrder={completeBalancingMutation.variables}
+          />
         )}
 
         {pendingSendBackBatches.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-              <Send className="w-3.5 h-3.5" />
-              Ready to Send Back to OH ({pendingSendBackBatches.length})
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {pendingSendBackBatches.map((b) => (
-                <div
-                  key={b.work_order_number}
-                  className="rounded-xl border shadow-sm p-4 bg-white dark:bg-background border-slate-200 dark:border-slate-700/60"
-                >
-                  <div className="flex items-start justify-between mb-1.5">
-                    <div>
-                      <span className="font-mono font-semibold text-orange-500 dark:text-orange-400 text-sm">
-                        {b.work_order_number}
-                      </span>
-                      {b.part_number && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{b.part_number}</p>
-                      )}
-                    </div>
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
-                      {b.blade_count}/{b.blade_count}
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-slate-200 dark:bg-background overflow-hidden mb-3">
-                    <div className="h-full rounded-full bg-emerald-500" style={{ width: "100%" }} />
-                  </div>
-                  <Button
-                    size="sm"
-                    className="w-full text-xs h-8 bg-teal-500 hover:bg-teal-400 text-white"
-                    onClick={() => returnToOhMutation.mutate(b.work_order_number)}
-                    disabled={returnToOhMutation.isPending && returnToOhMutation.variables === b.work_order_number}
-                  >
-                    {returnToOhMutation.isPending && returnToOhMutation.variables === b.work_order_number ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Send className="w-3.5 h-3.5 mr-1.5" />
-                    )}
-                    Send Back to OH
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </div>
+          <PendingSendBackSection
+            batches={pendingSendBackBatches}
+            onSend={(wo) => returnToOhMutation.mutate(wo)}
+            isPending={returnToOhMutation.isPending}
+            pendingWorkOrder={returnToOhMutation.variables}
+          />
         )}
 
         {!selectedBatch && (
@@ -576,290 +1076,66 @@ export default function SlotAllocationPage() {
               <TabsTrigger value="balancing" disabled={stage2Slots.length === 0}>Balancing</TabsTrigger>
             </TabsList>
 
-            {/* ── Empty Rotor tab ────────────────────────────────────────── */}
             <TabsContent value="empty-rotor">
-              <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Empty Rotor Balancing Reading</CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0 space-y-4">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Before any blades are installed, the empty rotor is balanced. Enter the reported
-                    unbalance position (the first of the two adjacent slots) and value.
-                  </p>
-                  {emptyRotor && (
-                    <div className="rounded-lg border border-emerald-200 dark:border-emerald-700/50 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
-                      Saved: unbalance between slots {emptyRotor.unbalance_slot} and {(emptyRotor.unbalance_slot % LPTR_TOTAL_SLOTS) + 1}, {Number(emptyRotor.unbalance_value).toFixed(2)} g
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-end gap-4">
-                    <div className="space-y-1">
-                      <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Slot</Label>
-                      <Input
-                        type="number" min={1} max={LPTR_TOTAL_SLOTS}
-                        value={unbalanceSlotInput || String(emptyRotor?.unbalance_slot ?? "")}
-                        onChange={(e) => setUnbalanceSlotInput(e.target.value)}
-                        placeholder="e.g. 35"
-                        className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">Unbalance Value (g)</Label>
-                      <Input
-                        type="number" min={0} step="0.1"
-                        value={unbalanceValueInput || String(emptyRotor?.unbalance_value ?? "")}
-                        onChange={(e) => setUnbalanceValueInput(e.target.value)}
-                        placeholder="e.g. 6.8"
-                        className="w-32 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600"
-                      />
-                    </div>
-                    <Button
-                      onClick={() => saveEmptyRotorMutation.mutate()}
-                      disabled={saveEmptyRotorMutation.isPending || (!unbalanceSlotInput && !emptyRotor) || (!unbalanceValueInput && !emptyRotor)}
-                      className="bg-orange-500 hover:bg-orange-400 text-white"
-                    >
-                      {saveEmptyRotorMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
-                      Save Reading
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              <EmptyRotorTabContent
+                emptyRotor={emptyRotor}
+                unbalanceSlotInput={unbalanceSlotInput}
+                setUnbalanceSlotInput={setUnbalanceSlotInput}
+                unbalanceValueInput={unbalanceValueInput}
+                setUnbalanceValueInput={setUnbalanceValueInput}
+                onSave={() => saveEmptyRotorMutation.mutate()}
+                isSaving={saveEmptyRotorMutation.isPending}
+              />
             </TabsContent>
 
-            {/* ── Stage 1 tab ────────────────────────────────────────────── */}
             <TabsContent value="stage1">
-              <div className="space-y-5">
-                {stage1Slots.length > 0 ? (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Saved Stage 1 Slots ({stage1SavedRows.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <SavedSlotsTable rows={stage1SavedRows} />
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardContent className="py-10 flex flex-col items-center gap-4">
-                      {!emptyRotor ? (
-                        <p className="text-sm text-slate-400 dark:text-slate-500">Record the Empty Rotor reading first.</p>
-                      ) : (
-                        <>
-                          <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
-                            {eligibleBlades.length} of {blades.length} LPTR blades ready. Stage 1 requires exactly {LPTR_STAGE1_COUNT}.
-                          </p>
-                          <Button onClick={handleRunStage1} disabled={eligibleBlades.length < LPTR_STAGE1_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
-                            <Play className="w-4 h-4 mr-1.5" />Run Stage 1 Allocation
-                          </Button>
-                        </>
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
-
-                {stage1Preview && stage1Slots.length === 0 && (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
-                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                      <CardTitle className="text-base">
-                        Stage 1 Preview
-                        <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
-                      </CardTitle>
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => saveStage1Mutation.mutate()} disabled={saveStage1Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
-                          {saveStage1Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
-                          Save Stage 1
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-0 space-y-2">
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
-                      </p>
-                      <div className="flex flex-wrap items-end gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
-                          <Input
-                            type="number"
-                            value={swapA1}
-                            onChange={(e) => setSwapA1(e.target.value)}
-                            placeholder="e.g. 12"
-                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
-                          <Input
-                            type="number"
-                            value={swapB1}
-                            onChange={(e) => setSwapB1(e.target.value)}
-                            placeholder="e.g. 68"
-                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
-                          />
-                        </div>
-                        <Button variant="outline" onClick={handleSwapStage1} disabled={!swapA1 || !swapB1 || swapA1 === swapB1}>
-                          <ArrowLeftRight className="w-4 h-4 mr-1.5" />
-                          Swap
-                        </Button>
-                      </div>
-                      <AllocationTable entries={stage1Preview.entries} />
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
+              <Stage1TabContent
+                stage1Slots={stage1Slots}
+                stage1SavedRows={stage1SavedRows}
+                emptyRotor={emptyRotor}
+                eligibleBlades={eligibleBlades}
+                blades={blades}
+                onRunStage1={handleRunStage1}
+                stage1Preview={stage1Preview}
+                onSaveStage1={() => saveStage1Mutation.mutate()}
+                isSavingStage1={saveStage1Mutation.isPending}
+                onSwapStage1={handleSwapStage1}
+                swapA1={swapA1}
+                setSwapA1={setSwapA1}
+                swapB1={swapB1}
+                setSwapB1={setSwapB1}
+              />
             </TabsContent>
 
-            {/* ── Stage 2 tab ────────────────────────────────────────────── */}
             <TabsContent value="stage2">
-              <div className="space-y-5">
-                {stage1Slots.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
-                    <Scale className="w-10 h-10 opacity-30" />
-                    <p className="text-sm">Save Stage 1 first.</p>
-                  </div>
-                ) : stage2Slots.length > 0 ? (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Saved Stage 2 Slots ({stage2SavedRows.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <SavedSlotsTable rows={stage2SavedRows} />
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                    <CardContent className="py-10 flex flex-col items-center gap-4">
-                      <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
-                        {eligibleBlades.length} blade{eligibleBlades.length !== 1 ? "s" : ""} remaining. Stage 2 requires exactly {LPTR_STAGE2_COUNT}.
-                      </p>
-                      <Button onClick={handleRunStage2} disabled={eligibleBlades.length < LPTR_STAGE2_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
-                        <Play className="w-4 h-4 mr-1.5" />Run Stage 2 Allocation
-                      </Button>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {stage2Preview && stage2Slots.length === 0 && (
-                  <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60 shadow-sm">
-                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                      <CardTitle className="text-base">
-                        Stage 2 Preview
-                        <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
-                      </CardTitle>
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => saveStage2Mutation.mutate()} disabled={saveStage2Mutation.isPending} className="bg-emerald-500 hover:bg-emerald-600 text-white">
-                          {saveStage2Mutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1.5" />}
-                          Save Stage 2
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-0 space-y-2">
-                      <div className="flex flex-wrap items-end gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot A</Label>
-                          <Input
-                            type="number"
-                            value={swapA2}
-                            onChange={(e) => setSwapA2(e.target.value)}
-                            placeholder="e.g. 12"
-                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-slate-600 dark:text-slate-300 text-xs font-medium">Slot B</Label>
-                          <Input
-                            type="number"
-                            value={swapB2}
-                            onChange={(e) => setSwapB2(e.target.value)}
-                            placeholder="e.g. 68"
-                            className="w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white"
-                          />
-                        </div>
-                        <Button variant="outline" onClick={handleSwapStage2} disabled={!swapA2 || !swapB2 || swapA2 === swapB2}>
-                          <ArrowLeftRight className="w-4 h-4 mr-1.5" />
-                          Swap
-                        </Button>
-                      </div>
-                      <AllocationTable entries={stage2Preview} />
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
+              <Stage2TabContent
+                stage1Slots={stage1Slots}
+                stage2Slots={stage2Slots}
+                stage2SavedRows={stage2SavedRows}
+                eligibleBlades={eligibleBlades}
+                onRunStage2={handleRunStage2}
+                stage2Preview={stage2Preview}
+                onSaveStage2={() => saveStage2Mutation.mutate()}
+                isSavingStage2={saveStage2Mutation.isPending}
+                onSwapStage2={handleSwapStage2}
+                swapA2={swapA2}
+                setSwapA2={setSwapA2}
+                swapB2={swapB2}
+                setSwapB2={setSwapB2}
+              />
             </TabsContent>
 
-            {/* ── Balancing tab ────────────────────────────────────────────── */}
             <TabsContent value="balancing">
-              {stage2Slots.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500 gap-3">
-                  <Scale className="w-10 h-10 opacity-30" />
-                  <p className="text-sm">Save Stage 1 and Stage 2 first to track physical balancing here.</p>
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {!isBalanced && (
-                    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-base">Saved Slots ({stage1SavedRows.length + stage2SavedRows.length})</CardTitle>
-                      </CardHeader>
-                      <CardContent className="pt-0">
-                        <SavedSlotsTable rows={[...stage1SavedRows, ...stage2SavedRows]} />
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  {isBalanced ? (
-                    <Card className="bg-white dark:bg-background border-teal-200 dark:border-teal-700/50">
-                      <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                          <p className="text-sm font-semibold text-teal-700 dark:text-teal-300">
-                            Balancing confirmed — send back to OH?
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            Report this work order's task complete and hand it back to OH. It stops
-                            showing up in the accepted-batches selector above once sent.
-                          </p>
-                        </div>
-                        <Button
-                          onClick={() => returnToOhMutation.mutate(selectedBatch)}
-                          disabled={returnToOhMutation.isPending}
-                          className="bg-teal-500 hover:bg-teal-600 text-white shrink-0"
-                        >
-                          {returnToOhMutation.isPending ? (
-                            <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
-                          ) : (
-                            <Send className="w-4 h-4 mr-1.5" />
-                          )}
-                          Send Back to OH
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  ) : (
-                    <Card className="bg-white dark:bg-background border-slate-200 dark:border-slate-700/60">
-                      <CardContent className="pt-5 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                            Physical balancing confirmed?
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            Save to mark this work order's LPTR balancing complete, then send it back to OH.
-                          </p>
-                        </div>
-                        <Button
-                          onClick={() => completeBalancingMutation.mutate(selectedBatch)}
-                          disabled={completeBalancingMutation.isPending}
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white shrink-0"
-                        >
-                          {completeBalancingMutation.isPending ? (
-                            <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
-                          ) : (
-                            <Save className="w-4 h-4 mr-1.5" />
-                          )}
-                          Save
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
-              )}
+              <BalancingTabContent
+                stage2Slots={stage2Slots}
+                isBalanced={isBalanced}
+                stage1SavedRows={stage1SavedRows}
+                stage2SavedRows={stage2SavedRows}
+                onReturnToOh={() => returnToOhMutation.mutate(selectedBatch)}
+                isReturning={returnToOhMutation.isPending}
+                onCompleteBalancing={() => completeBalancingMutation.mutate(selectedBatch)}
+                isCompleting={completeBalancingMutation.isPending}
+              />
             </TabsContent>
           </Tabs>
         )}

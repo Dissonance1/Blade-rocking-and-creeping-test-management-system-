@@ -7,6 +7,7 @@ Run: python3 /home/amit/src/blead_rocking/scripts/seed_demo_data.py
 import urllib.request, urllib.error, json, time, random, math
 
 BASE = "http://localhost"
+LOGIN_PATH = "/api/v1/auth/login"
 
 # ─── API helper ───────────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ def api(method, path, body=None, token=None):
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
         try: return e.code, json.loads(raw)
-        except: return e.code, {"_raw": raw[:200]}
+        except json.JSONDecodeError: return e.code, {"_raw": raw[:200]}
 
 def log(msg): print(f"  {msg}")
 def section(title): print(f"\n{'━'*55}\n  {title}\n{'━'*55}")
@@ -32,13 +33,13 @@ def section(title): print(f"\n{'━'*55}\n  {title}\n{'━'*55}")
 # ─── Login ────────────────────────────────────────────────────────────────────
 
 section("AUTHENTICATION")
-sc, d = api("POST", "/api/v1/auth/login", {"email":"admin@bladerocking.com","password":"Admin@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"admin@bladerocking.com","password":"Admin@123"})
 ADMIN = d["access_token"]; log("Admin logged in")
 time.sleep(0.5)
-sc, d = api("POST", "/api/v1/auth/login", {"email":"oh.operator@bladerocking.com","password":"Test@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"oh.operator@bladerocking.com","password":"Test@123"})
 OH = d["access_token"]; log("OH Operator logged in")
 time.sleep(0.5)
-sc, d = api("POST", "/api/v1/auth/login", {"email":"assembly@bladerocking.com","password":"Test@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"assembly@bladerocking.com","password":"Test@123"})
 ASM = d["access_token"]; log("Assembly Operator logged in")
 
 # ─── Engine / WO configurations ───────────────────────────────────────────────

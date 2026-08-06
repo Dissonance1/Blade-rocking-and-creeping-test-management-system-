@@ -53,11 +53,12 @@ PARSED_JSON = Path(__file__).resolve().parent.parent / "hptr_16_96_317_parsed.js
 # Placeholder fields not present in the spreadsheet — the sheet only has
 # per-blade Sl.No/Melt No./Weight/Static Moment/Rocking. Set to the batch
 # name itself per explicit instruction, flagged here and in printed output.
-WORK_ORDER_NUMBER = "HPTR 16-96-317"
-SHOP_ORDER_NUMBER = "HPTR 16-96-317"
-PART_NUMBER = "HPTR 16-96-317"
-ENGINE_NUMBER = "HPTR 16-96-317"
-ENGINE_HOURS = "HPTR 16-96-317"
+_PLACEHOLDER = "HPTR 16-96-317"
+WORK_ORDER_NUMBER = _PLACEHOLDER
+SHOP_ORDER_NUMBER = _PLACEHOLDER
+PART_NUMBER = _PLACEHOLDER
+ENGINE_NUMBER = _PLACEHOLDER
+ENGINE_HOURS = _PLACEHOLDER
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"

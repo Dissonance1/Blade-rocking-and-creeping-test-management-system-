@@ -58,7 +58,7 @@ _CONFIDENCE_QR: float = 0.99
 
 def _pick(pool: list[str], image_bytes: bytes) -> str:
     """Deterministically pick a value from *pool* based on a hash of *image_bytes*."""
-    digest = int(hashlib.md5(image_bytes).hexdigest(), 16)  # noqa: S324 (MD5 OK for non-crypto)
+    digest = int(hashlib.md5(image_bytes, usedforsecurity=False).hexdigest(), 16)
     return pool[digest % len(pool)]
 
 

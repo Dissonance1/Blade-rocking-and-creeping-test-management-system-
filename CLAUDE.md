@@ -12,9 +12,9 @@ See `docs/TECHNICAL_DESIGN.md` for the full technical design document.
 backend/app/
   main.py              FastAPI app factory
   core/config.py       All env vars (Pydantic Settings)
-  models/              SQLAlchemy ORM (20 files)
-  schemas/             Pydantic I/O schemas (10 files)
-  api/v1/endpoints/    REST handlers (16 files: assembly, auth, batches, blades, dti, measurements, notifications, ocr, reports, slots, stations, sync, users, weighing, workflows, audit_logs)
+  models/              SQLAlchemy ORM (incl. work_order.py, lptr_balancing_check.py)
+  schemas/             Pydantic I/O schemas (incl. work_order.py, lptr_balancing.py)
+  api/v1/endpoints/    REST handlers (17 files: assembly, auth, blades, dti, lptr_balancing, measurements, notifications, ocr, reports, slots, stations, sync, users, weighing, work_orders, workflows, audit_logs)
   repositories/        DB queries (5 files)
   services/            Business logic
   workflows/state_machine.py   Blade status transitions
@@ -30,9 +30,13 @@ frontend/src/
   stores/              Zustand state
 
 scripts/
-  weighing_bridge.py   iScale i-04 RS-232 → backend WebSocket bridge
-  dti_bridge.py        Sylvac BT DTI RS-232 → backend WebSocket bridge
-  seed_data.py         Dev data seeder
+  weighing_bridge.py        iScale i-04 RS-232 → backend WebSocket bridge
+  dti_bridge.py             Sylvac BT DTI RS-232 → backend WebSocket bridge
+  oak1_camera_service.py    Luxonis OAK-1 Flask companion (port 8089)
+  register_bridge_tasks.ps1 Register bridges as Windows Scheduled Tasks (run once as Admin)
+  run_native.sh             Start full stack natively without Docker
+  stop_native.sh            Stop native stack
+  seed_data.py              Dev data seeder
 ```
 
 ---
@@ -78,15 +82,23 @@ make test            # Full test suite
 
 ## Blade Status Flow
 
+**14 states** (ON_HOLD removed). LPTR and HPTR follow different paths:
+
 ```
+# LPTR (full path through Assembly)
 CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
-  → SLOT_ASSIGNED → BALANCING_IN_PROGRESS → BALANCING_COMPLETED
+  → ASSEMBLY_RECEIVED → ASSEMBLY_VERIFIED → SLOT_ASSIGNED
+  → BALANCING_IN_PROGRESS → BALANCING_COMPLETED
   → RETURNED_TO_OH → FINAL_VERIFICATION → COMPLETED
+
+# HPTR (stays at OH — extra edges via EXTRA_TRANSITIONS_BY_TYPE)
+CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SLOT_ASSIGNED
+  → BALANCING_IN_PROGRESS → BALANCING_COMPLETED → FINAL_VERIFICATION → COMPLETED
 
 Any active state → REJECTED  (SUPER_ADMIN can → REOPENED → OH_INSPECTION)
 ```
 
-State transitions are enforced by `WorkflowEngine` in `backend/app/workflows/state_machine.py`. Never update `blade.status` directly — always go through `engine.transition()`.
+State transitions are enforced by `WorkflowEngine` in `backend/app/workflows/state_machine.py`. Never update `blade.status` directly — always go through `engine.transition()`. HPTR extra edges are in `EXTRA_TRANSITIONS_BY_TYPE`.
 
 ---
 
@@ -125,11 +137,12 @@ OCR_PROVIDER=mock
 - **Async throughout:** asyncpg driver, SQLAlchemy async sessions, aiofiles. Never use sync DB calls in endpoint handlers.
 - **Repository pattern:** All DB queries go through `backend/app/repositories/`. Services call repositories, never query the ORM directly.
 - **Notifications:** `NotificationManager` holds WebSocket connections in memory. On server restart, in-flight connections drop; clients should reconnect. Persisted notifications in DB survive restarts.
-- **Reports are async:** POST to `/reports/` returns immediately with `status=PENDING`. Poll `GET /reports/{id}` or wait for WebSocket push when `status=READY`.
-- **OCR provider:** Controlled by `OCR_PROVIDER` env var. Default is `mock` — safe for dev. Switch to `tesseract` or `paddleocr` only on servers with those system packages installed.
-- **Two-station deployment:** OH PC (701 Hanger) hosts the database. Assembly PC (720 Hanger) sets `DATABASE_URL` to point at the OH PC's PostgreSQL over LAN. No central server.
-- **Batch size:** 90 LPTR + 90 HPTR = 180 blades per batch. Enforced per blade type via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`.
-- **Hardware bridges:** `scripts/weighing_bridge.py` (iScale i-04) and `scripts/dti_bridge.py` (Sylvac BT) are standalone processes, not part of the Docker Compose stack. Run on the workstation connected to the instruments.
+- **Work Orders replace Batches:** Blades are created 90 at a time via a Work Order. `serial_number` is a positional S.No (01–90), unique per work order — not globally. `batches` endpoint is gone; use `work-orders`.
+- **Reports are async:** POST to `/reports/` returns immediately with `status=PENDING`. Poll `GET /reports/{id}` or wait for WebSocket push when `status=READY`. Four sync export endpoints (`/reports/export/...`) return files directly.
+- **OCR provider:** Controlled by `OCR_PROVIDER` env var. Default is `paddleocr`. Use `mock` for dev without PaddleOCR installed.
+- **Two-station deployment:** OH PC (701 Hanger) hosts the database. Assembly PC (720 Hanger) sets `DATABASE_URL` to point at the OH PC's PostgreSQL over LAN. No central server. `STATION_ROLE` (not `STATION_TYPE`) controls sync behaviour.
+- **Work Order size:** 90 blades per Work Order, one blade type only (LPTR or HPTR). Constant: `BLADES_PER_WORK_ORDER = 90`.
+- **Hardware bridges:** `weighing_bridge.py`, `dti_bridge.py`, and `oak1_camera_service.py` are standalone processes outside Docker Compose. Register as Windows Scheduled Tasks via `scripts/register_bridge_tasks.ps1`.
 - **Soft deletes:** `User` and `Blade` use `deleted_at` timestamp. Always filter `WHERE deleted_at IS NULL` — SQLAlchemy mixins in `models/base.py` handle this automatically.
 - **Migrations:** Alembic autogenerate is used. After any model change, run `alembic revision --autogenerate` and review the generated script before applying.
 

@@ -28,6 +28,19 @@ from app.db.session import get_db
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
+# Canonical mime-type <-> file-extension mapping for accepted image uploads —
+# single source of truth so the allow-list, extension lookup, and reverse
+# media-type lookup below can't drift out of sync with each other.
+_MIME_TO_EXT: dict[str, str] = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/tiff": "tiff",
+    "image/bmp": "bmp",
+    "image/webp": "webp",
+}
+_EXT_TO_MIME: dict[str, str] = {ext: mime for mime, ext in _MIME_TO_EXT.items()}
+_DEFAULT_MIME = "image/jpeg"
+
 
 # ---------------------------------------------------------------------------
 # OCR provider import helper
@@ -52,23 +65,16 @@ def _validate_upload(file: UploadFile, content: bytes) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Image exceeds maximum size of {settings.MAX_FILE_SIZE_MB} MB",
         )
-    allowed_mime = {"image/jpeg", "image/png", "image/tiff", "image/bmp", "image/webp"}
     content_type = (file.content_type or "").lower()
-    if content_type and content_type not in allowed_mime:
+    if content_type and content_type not in _MIME_TO_EXT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported image type '{content_type}'. Allowed: {', '.join(sorted(allowed_mime))}",
+            detail=f"Unsupported image type '{content_type}'. Allowed: {', '.join(sorted(_MIME_TO_EXT))}",
         )
 
 
 def _ext_for_mime(content_type: str) -> str:
-    return {
-        "image/jpeg": "jpg",
-        "image/png": "png",
-        "image/tiff": "tiff",
-        "image/bmp": "bmp",
-        "image/webp": "webp",
-    }.get(content_type.lower(), "jpg")
+    return _MIME_TO_EXT.get(content_type.lower(), "jpg")
 
 
 async def _save_scan_image(content: bytes, content_type: str) -> tuple[str, str]:
@@ -121,7 +127,7 @@ async def scan_blade_serial(
     content = await image.read()
     _validate_upload(image, content)
 
-    scan_id, _ = await _save_scan_image(content, image.content_type or "image/jpeg")
+    scan_id, _ = await _save_scan_image(content, image.content_type or _DEFAULT_MIME)
 
     provider = _get_ocr_provider()
     result = await provider.extract_serial_number(content)
@@ -169,7 +175,7 @@ async def scan_melt_number(
     content = await image.read()
     _validate_upload(image, content)
 
-    scan_id, _ = await _save_scan_image(content, image.content_type or "image/jpeg")
+    scan_id, _ = await _save_scan_image(content, image.content_type or _DEFAULT_MIME)
 
     provider = _get_ocr_provider()
     result = await provider.extract_melt_number(content)
@@ -270,17 +276,10 @@ async def get_scan_image(
         HTTP 404 — scan image not found.
     """
     scan_dir = Path(settings.ocr_scan_dir)
-    for ext in ("jpg", "png", "tiff", "bmp", "webp"):
+    for ext in _EXT_TO_MIME:
         candidate = scan_dir / f"{scan_id}.{ext}"
         if candidate.exists():
-            media_type = {
-                "jpg": "image/jpeg",
-                "png": "image/png",
-                "tiff": "image/tiff",
-                "bmp": "image/bmp",
-                "webp": "image/webp",
-            }.get(ext, "image/jpeg")
-            return FileResponse(str(candidate), media_type=media_type)
+            return FileResponse(str(candidate), media_type=_EXT_TO_MIME.get(ext, _DEFAULT_MIME))
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,

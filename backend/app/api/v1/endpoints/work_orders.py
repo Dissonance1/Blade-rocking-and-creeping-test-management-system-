@@ -105,6 +105,21 @@ def _event_to_dict(ev: Any) -> dict:
     }
 
 
+def _format_modified_blade_changes(changes: dict) -> str:
+    """Render the ' Modified blade(s): ... [serial: field: before -> after, ...]' suffix."""
+    blade_serials = list(changes.keys())
+    text = f" Modified blade(s): {', '.join(blade_serials)}."
+    for sn, blade_changes in changes.items():
+        field_parts = [
+            f"{field}: {diff['before']} → {diff['after']}"
+            for field, diff in blade_changes.items()
+            if isinstance(diff, dict) and "before" in diff and "after" in diff
+        ]
+        if field_parts:
+            text += f" [{sn}: {', '.join(field_parts)}]"
+    return text
+
+
 async def _notify_oh_operators(
     work_order_number: str,
     event_type: BatchEventType,
@@ -133,15 +148,7 @@ async def _notify_oh_operators(
         body += f" Remarks: {remarks}"
 
     if event_type == BatchEventType.MODIFIED and changes:
-        blade_serials = list(changes.keys())
-        body += f" Modified blade(s): {', '.join(blade_serials)}."
-        for sn, blade_changes in changes.items():
-            field_parts = []
-            for field, diff in blade_changes.items():
-                if isinstance(diff, dict) and "before" in diff and "after" in diff:
-                    field_parts.append(f"{field}: {diff['before']} → {diff['after']}")
-            if field_parts:
-                body += f" [{sn}: {', '.join(field_parts)}]"
+        body += _format_modified_blade_changes(changes)
 
     body += f" (by {actor_username})"
 
@@ -184,46 +191,21 @@ async def _notify_oh_operators(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", status_code=status.HTTP_200_OK, summary="List all work orders with current status")
-async def list_work_orders(
-    current_user: Annotated[Any, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    has_slot_allocations: bool = False,
-) -> list:
-    """
-    Return a summary of every work order known to the system, ordered by most
-    recently created.  The ``current_status`` field reflects:
-    - The latest explicit Assembly action (RECEIVED/ACCEPTED/MODIFIED), or
-    - ``SENT_TO_ASSEMBLY`` if any blades have been sent, or
-    - ``CREATED`` otherwise.
-
-    A Work Order is always exactly one ``blade_type`` (LPTR or HPTR), so the
-    per-work-order LPTR/HPTR split is read directly off ``WorkOrder.blade_type``
-    rather than re-derived from a mixed blade population.
-    """
+async def _fetch_blade_count_rows(db: AsyncSession, has_slot_allocations: bool) -> list:
+    """Per-work-order blade counts, optionally filtered to work orders with an active slot allocation."""
     from app.models.blade import Blade
-    from app.models.measurement import Measurement
-    from app.models.work_order import WorkOrder
-    from app.models.work_order_event import WorkOrderEvent
-    from app.models.workflow import WorkflowLog
+    from app.models.slot_allocation import SlotAllocation
 
-    # ── Blade counts per work order ────────────────────────────────────────
     blade_rows = (
         await db.execute(
             select(
                 Blade.work_order_number,
                 func.count(Blade.id).label("blade_count"),
                 func.sum(
-                    case(
-                        (Blade.status.in_(list(_ASSEMBLY_STATUSES)), 1),
-                        else_=0,
-                    )
+                    case((Blade.status.in_(list(_ASSEMBLY_STATUSES)), 1), else_=0)
                 ).label("blades_in_assembly_statuses"),
                 func.sum(
-                    case(
-                        (Blade.status == BladeStatus.COMPLETED, 1),
-                        else_=0,
-                    )
+                    case((Blade.status == BladeStatus.COMPLETED, 1), else_=0)
                 ).label("blades_completed"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
@@ -233,35 +215,33 @@ async def list_work_orders(
         )
     ).all()
 
-    if not blade_rows:
-        return []
+    if not blade_rows or not has_slot_allocations:
+        return blade_rows
 
-    # If caller only wants work orders with at least one active slot allocation, filter here
-    if has_slot_allocations:
-        from app.models.slot_allocation import SlotAllocation
-        slotted = set(
-            (
-                await db.execute(
-                    select(Blade.work_order_number)
-                    .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
-                    .where(
-                        SlotAllocation.is_active.is_(True),
-                        Blade.deleted_at.is_(None),
-                        Blade.work_order_number.isnot(None),
-                    )
-                    .distinct()
+    slotted = set(
+        (
+            await db.execute(
+                select(Blade.work_order_number)
+                .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+                .where(
+                    SlotAllocation.is_active.is_(True),
+                    Blade.deleted_at.is_(None),
+                    Blade.work_order_number.isnot(None),
                 )
-            ).scalars().all()
-        )
-        blade_rows = [r for r in blade_rows if r.work_order_number in slotted]
-        if not blade_rows:
-            return []
+                .distinct()
+            )
+        ).scalars().all()
+    )
+    return [r for r in blade_rows if r.work_order_number in slotted]
 
-    work_order_numbers = [r.work_order_number for r in blade_rows]
 
-    # ── Rows actually entered (Melt Number + Weight both present) per work
-    # order — NOT the same as blade_count, which is the fixed 90-row scaffold
-    # created up front and is nonzero from the moment a Work Order starts. ──
+async def _fetch_rows_complete_map(db: AsyncSession, work_order_numbers: list) -> dict[str, int]:
+    """Rows actually entered (Melt Number + Weight both present) per work order —
+    NOT the same as blade_count, which is the fixed 90-row scaffold created up
+    front and is nonzero from the moment a Work Order starts."""
+    from app.models.blade import Blade
+    from app.models.measurement import Measurement
+
     complete_rows = (
         await db.execute(
             select(
@@ -283,11 +263,12 @@ async def list_work_orders(
             .group_by(Blade.work_order_number)
         )
     ).all()
-    rows_complete_map: dict[str, int] = {
-        r.work_order_number: r.rows_complete_count for r in complete_rows
-    }
+    return {r.work_order_number: r.rows_complete_count for r in complete_rows}
 
-    # ── Latest event per work order ────────────────────────────────────────
+
+async def _fetch_latest_event_map(db: AsyncSession, work_order_numbers: list) -> dict[str, Any]:
+    from app.models.work_order_event import WorkOrderEvent
+
     latest_evt_subq = (
         select(
             WorkOrderEvent,
@@ -310,9 +291,13 @@ async def list_work_orders(
             )
         )
     ).scalars().all()
-    latest_event_map: dict[str, Any] = {ev.work_order_number: ev for ev in latest_events_rows}
+    return {ev.work_order_number: ev for ev in latest_events_rows}
 
-    # ── First SENT timestamp per work order ────────────────────────────────
+
+async def _fetch_sent_at_map(db: AsyncSession, work_order_numbers: list) -> dict:
+    from app.models.blade import Blade
+    from app.models.workflow import WorkflowLog
+
     sent_rows = (
         await db.execute(
             select(
@@ -327,131 +312,194 @@ async def list_work_orders(
             .group_by(Blade.work_order_number)
         )
     ).all()
-    sent_at_map = {r.work_order_number: r.first_sent_at for r in sent_rows}
+    return {r.work_order_number: r.first_sent_at for r in sent_rows}
 
-    # ── WorkOrder header metadata (replaces the old BatchGroup autofill cache) ──
+
+async def _fetch_work_order_map(db: AsyncSession, work_order_numbers: list) -> dict[str, Any]:
+    """WorkOrder header metadata (replaces the old BatchGroup autofill cache)."""
+    from app.models.work_order import WorkOrder
+
     wo_rows = (
         await db.execute(
             select(WorkOrder).where(WorkOrder.work_order_number.in_(work_order_numbers))
         )
     ).scalars().all()
-    wo_map: dict[str, Any] = {wo.work_order_number: wo for wo in wo_rows}
+    return {wo.work_order_number: wo for wo in wo_rows}
 
-    # ── HPTR blades already slot-allocated per work order (active allocations).
-    # A Work Order is always exactly one blade_type, so this only ever
-    # produces rows for work orders whose header is HPTR — computed by
-    # scoping the queries to HPTR work order numbers up front. ──
+
+async def _fetch_hptr_slot_maps(
+    db: AsyncSession, work_order_numbers: list, wo_map: dict
+) -> tuple[dict[str, int], dict[str, int]]:
+    """HPTR blades already slot-allocated / already-balanced per work order.
+
+    A Work Order is always exactly one blade_type, so this only ever produces
+    rows for work orders whose header is HPTR — computed by scoping the
+    queries to HPTR work order numbers up front.
+    """
+    from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
 
     hptr_work_order_numbers = [
         wn for wn in work_order_numbers
         if wo_map.get(wn) is not None and wo_map[wn].blade_type == BladeType.HPTR
     ]
+    if not hptr_work_order_numbers:
+        return {}, {}
 
-    hptr_slotted_map: dict[str, int] = {}
-    hptr_balanced_map: dict[str, int] = {}
-    if hptr_work_order_numbers:
-        hptr_slotted_rows = (
-            await db.execute(
-                select(
-                    Blade.work_order_number,
-                    func.count(SlotAllocation.id).label("hptr_slotted_count"),
-                )
-                .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
-                .where(
-                    Blade.work_order_number.in_(hptr_work_order_numbers),
-                    SlotAllocation.is_active.is_(True),
-                )
-                .group_by(Blade.work_order_number)
+    hptr_slotted_rows = (
+        await db.execute(
+            select(
+                Blade.work_order_number,
+                func.count(SlotAllocation.id).label("hptr_slotted_count"),
             )
-        ).all()
-        hptr_slotted_map = {r.work_order_number: r.hptr_slotted_count for r in hptr_slotted_rows}
-
-        # ── HPTR blades that have finished balancing (or moved beyond it) ──
-        _HPTR_BALANCED_STATUSES = [
-            BladeStatus.BALANCING_COMPLETED,
-            BladeStatus.RETURNED_TO_OH,
-            BladeStatus.FINAL_VERIFICATION,
-            BladeStatus.COMPLETED,
-        ]
-        hptr_balanced_rows = (
-            await db.execute(
-                select(
-                    Blade.work_order_number,
-                    func.count(Blade.id).label("hptr_balanced_count"),
-                )
-                .where(
-                    Blade.work_order_number.in_(hptr_work_order_numbers),
-                    Blade.deleted_at.is_(None),
-                    Blade.status.in_(_HPTR_BALANCED_STATUSES),
-                )
-                .group_by(Blade.work_order_number)
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.work_order_number.in_(hptr_work_order_numbers),
+                SlotAllocation.is_active.is_(True),
             )
-        ).all()
-        hptr_balanced_map = {r.work_order_number: r.hptr_balanced_count for r in hptr_balanced_rows}
+            .group_by(Blade.work_order_number)
+        )
+    ).all()
+    hptr_slotted_map = {r.work_order_number: r.hptr_slotted_count for r in hptr_slotted_rows}
 
-    # ── LPTR blades already slot-allocated per work order (active allocations,
-    # either stage) — used to tell "Stage 1 only" apart from "both stages
-    # done" (blade_count is always 90 for a full LPTR work order: 46 + 44). ──
+    # HPTR blades that have finished balancing (or moved beyond it)
+    hptr_balanced_statuses = [
+        BladeStatus.BALANCING_COMPLETED,
+        BladeStatus.RETURNED_TO_OH,
+        BladeStatus.FINAL_VERIFICATION,
+        BladeStatus.COMPLETED,
+    ]
+    hptr_balanced_rows = (
+        await db.execute(
+            select(
+                Blade.work_order_number,
+                func.count(Blade.id).label("hptr_balanced_count"),
+            )
+            .where(
+                Blade.work_order_number.in_(hptr_work_order_numbers),
+                Blade.deleted_at.is_(None),
+                Blade.status.in_(hptr_balanced_statuses),
+            )
+            .group_by(Blade.work_order_number)
+        )
+    ).all()
+    hptr_balanced_map = {r.work_order_number: r.hptr_balanced_count for r in hptr_balanced_rows}
+
+    return hptr_slotted_map, hptr_balanced_map
+
+
+async def _fetch_lptr_slotted_map(db: AsyncSession, work_order_numbers: list, wo_map: dict) -> dict[str, int]:
+    """LPTR blades already slot-allocated per work order (active allocations,
+    either stage) — used to tell "Stage 1 only" apart from "both stages done"
+    (blade_count is always 90 for a full LPTR work order: 46 + 44)."""
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+
     lptr_work_order_numbers = [
         wn for wn in work_order_numbers
         if wo_map.get(wn) is not None and wo_map[wn].blade_type == BladeType.LPTR
     ]
+    if not lptr_work_order_numbers:
+        return {}
 
-    lptr_slotted_map: dict[str, int] = {}
-    if lptr_work_order_numbers:
-        lptr_slotted_rows = (
-            await db.execute(
-                select(
-                    Blade.work_order_number,
-                    func.count(SlotAllocation.id).label("lptr_slotted_count"),
-                )
-                .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
-                .where(
-                    Blade.work_order_number.in_(lptr_work_order_numbers),
-                    SlotAllocation.is_active.is_(True),
-                )
-                .group_by(Blade.work_order_number)
+    lptr_slotted_rows = (
+        await db.execute(
+            select(
+                Blade.work_order_number,
+                func.count(SlotAllocation.id).label("lptr_slotted_count"),
             )
-        ).all()
-        lptr_slotted_map = {r.work_order_number: r.lptr_slotted_count for r in lptr_slotted_rows}
+            .join(SlotAllocation, SlotAllocation.blade_id == Blade.id)
+            .where(
+                Blade.work_order_number.in_(lptr_work_order_numbers),
+                SlotAllocation.is_active.is_(True),
+            )
+            .group_by(Blade.work_order_number)
+        )
+    ).all()
+    return {r.work_order_number: r.lptr_slotted_count for r in lptr_slotted_rows}
 
-    # ── Assemble response ──────────────────────────────────────────────────
-    result = []
-    for row in blade_rows:
-        wn = row.work_order_number
-        latest_ev = latest_event_map.get(wn)
-        wo = wo_map.get(wn)
-        blade_type = wo.blade_type if wo is not None else None
-        # blades_sent / hptr_count collapse to a direct read of
-        # WorkOrder.blade_type now that one work order is one blade type —
-        # no more per-row blade_type case-summation needed.
-        blades_sent = (row.blades_in_assembly_statuses or 0) if blade_type == BladeType.LPTR else 0
-        hptr_count = row.blade_count if blade_type == BladeType.HPTR else 0
-        cur_status = _derive_status(latest_ev.event_type if latest_ev else None, blades_sent)
-        result.append({
-            "work_order_number": wn,
-            "blade_type": blade_type.value if blade_type else None,
-            "blade_count": row.blade_count,
-            "rows_complete_count": rows_complete_map.get(wn, 0),
-            "blades_sent": blades_sent,
-            "blades_completed": row.blades_completed or 0,
-            "hptr_count": hptr_count,
-            "hptr_slotted_count": hptr_slotted_map.get(wn, 0),
-            "hptr_balanced_count": hptr_balanced_map.get(wn, 0),
-            "lptr_slotted_count": lptr_slotted_map.get(wn, 0),
-            "current_status": cur_status,
-            "current_status_label": _status_label(cur_status),
-            "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
-            "first_sent_at": sent_at_map.get(wn, None) and sent_at_map[wn].isoformat(),
-            "last_event": _event_to_dict(latest_ev) if latest_ev else None,
-            "shop_order_number": wo.shop_order_number if wo else None,
-            "part_number": wo.part_number if wo else None,
-            "engine_number": wo.engine_number if wo else None,
-            "is_entry_complete": wo.is_entry_complete if wo else False,
-            "rocking_creep_complete": wo.is_rocking_creep_complete if wo else False,
-        })
-    return result
+
+def _build_work_order_summary(
+    row,
+    wo_map: dict,
+    latest_event_map: dict,
+    rows_complete_map: dict,
+    hptr_slotted_map: dict,
+    hptr_balanced_map: dict,
+    lptr_slotted_map: dict,
+    sent_at_map: dict,
+) -> dict:
+    wn = row.work_order_number
+    latest_ev = latest_event_map.get(wn)
+    wo = wo_map.get(wn)
+    blade_type = wo.blade_type if wo is not None else None
+    # blades_sent / hptr_count collapse to a direct read of WorkOrder.blade_type
+    # now that one work order is one blade type — no more per-row
+    # blade_type case-summation needed.
+    blades_sent = (row.blades_in_assembly_statuses or 0) if blade_type == BladeType.LPTR else 0
+    hptr_count = row.blade_count if blade_type == BladeType.HPTR else 0
+    cur_status = _derive_status(latest_ev.event_type if latest_ev else None, blades_sent)
+    return {
+        "work_order_number": wn,
+        "blade_type": blade_type.value if blade_type else None,
+        "blade_count": row.blade_count,
+        "rows_complete_count": rows_complete_map.get(wn, 0),
+        "blades_sent": blades_sent,
+        "blades_completed": row.blades_completed or 0,
+        "hptr_count": hptr_count,
+        "hptr_slotted_count": hptr_slotted_map.get(wn, 0),
+        "hptr_balanced_count": hptr_balanced_map.get(wn, 0),
+        "lptr_slotted_count": lptr_slotted_map.get(wn, 0),
+        "current_status": cur_status,
+        "current_status_label": _status_label(cur_status),
+        "first_blade_at": row.first_blade_at.isoformat() if row.first_blade_at else None,
+        "first_sent_at": sent_at_map.get(wn, None) and sent_at_map[wn].isoformat(),
+        "last_event": _event_to_dict(latest_ev) if latest_ev else None,
+        "shop_order_number": wo.shop_order_number if wo else None,
+        "part_number": wo.part_number if wo else None,
+        "engine_number": wo.engine_number if wo else None,
+        "is_entry_complete": wo.is_entry_complete if wo else False,
+        "rocking_creep_complete": wo.is_rocking_creep_complete if wo else False,
+    }
+
+
+@router.get("/", status_code=status.HTTP_200_OK, summary="List all work orders with current status")
+async def list_work_orders(
+    current_user: Annotated[Any, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    has_slot_allocations: bool = False,
+) -> list:
+    """
+    Return a summary of every work order known to the system, ordered by most
+    recently created.  The ``current_status`` field reflects:
+    - The latest explicit Assembly action (RECEIVED/ACCEPTED/MODIFIED), or
+    - ``SENT_TO_ASSEMBLY`` if any blades have been sent, or
+    - ``CREATED`` otherwise.
+
+    A Work Order is always exactly one ``blade_type`` (LPTR or HPTR), so the
+    per-work-order LPTR/HPTR split is read directly off ``WorkOrder.blade_type``
+    rather than re-derived from a mixed blade population.
+    """
+    blade_rows = await _fetch_blade_count_rows(db, has_slot_allocations)
+    if not blade_rows:
+        return []
+
+    work_order_numbers = [r.work_order_number for r in blade_rows]
+
+    rows_complete_map = await _fetch_rows_complete_map(db, work_order_numbers)
+    latest_event_map = await _fetch_latest_event_map(db, work_order_numbers)
+    sent_at_map = await _fetch_sent_at_map(db, work_order_numbers)
+    wo_map = await _fetch_work_order_map(db, work_order_numbers)
+    hptr_slotted_map, hptr_balanced_map = await _fetch_hptr_slot_maps(db, work_order_numbers, wo_map)
+    lptr_slotted_map = await _fetch_lptr_slotted_map(db, work_order_numbers, wo_map)
+
+    return [
+        _build_work_order_summary(
+            row, wo_map, latest_event_map, rows_complete_map,
+            hptr_slotted_map, hptr_balanced_map, lptr_slotted_map, sent_at_map,
+        )
+        for row in blade_rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +687,69 @@ _OH_ELIGIBLE_STATUSES = {
 }
 
 
+def _transition_eligible_blades_to_assembly(blades: list, current_user: Any, remarks: str, db: AsyncSession) -> tuple[int, int]:
+    """Move every OH-eligible blade to SENT_TO_ASSEMBLY, logging a WorkflowLog
+    row for each. Returns (sent_count, skipped_count)."""
+    from app.models.workflow import WorkflowLog
+
+    sent_count = 0
+    skipped_count = 0
+    for blade in blades:
+        if blade.status.value not in _OH_ELIGIBLE_STATUSES:
+            skipped_count += 1
+            continue
+        prev_status = blade.status
+        blade.status = BladeStatus.SENT_TO_ASSEMBLY
+        db.add(WorkflowLog(
+            blade_id=blade.id,
+            from_status=prev_status,
+            to_status=BladeStatus.SENT_TO_ASSEMBLY,
+            action_by_id=current_user.id,
+            remarks=remarks,
+        ))
+        sent_count += 1
+    return sent_count, skipped_count
+
+
+async def _notify_assembly_operators(
+    work_order_number: str, actor_name: str, sent_count: int, skipped_count: int
+) -> None:
+    """Notify assembly operators — uses a fresh session (request session closes before BG task runs)."""
+    from app.models.user import User, UserRole as UserRoleModel, Role
+    from app.notifications.service import NotificationService
+    from app.db.session import AsyncSessionLocal
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(User)
+                .join(UserRoleModel, UserRoleModel.user_id == User.id)
+                .join(Role, Role.id == UserRoleModel.role_id)
+                .where(
+                    Role.name.in_(["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]),
+                    User.is_active.is_(True),
+                    User.deleted_at.is_(None),
+                )
+                .distinct()
+            )
+            target_users = list(result.scalars().all())
+            svc = NotificationService(db)
+            skipped_note = f" {skipped_count} blade(s) skipped." if skipped_count else ""
+            for user in target_users:
+                await svc.create_notification(
+                    user_id=user.id,
+                    title=f"Work Order {work_order_number} ready for Assembly",
+                    body=(
+                        f"OH ({actor_name}) has sent {sent_count} blade(s) from Work Order "
+                        f"{work_order_number} to Assembly.{skipped_note}"
+                    ),
+                    notification_type=NotificationType.WORKFLOW_UPDATED,
+                )
+        logger.info("work_order_send_notification_sent", work_order=work_order_number, recipients=len(target_users))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("work_order_send_notification_failed", error=str(exc))
+
+
 @router.post(
     "/{work_order_number}/send-to-assembly",
     status_code=status.HTTP_200_OK,
@@ -666,8 +777,6 @@ async def send_work_order_to_assembly(
     from app.models.blade import Blade
     from app.models.work_order import WorkOrder
     from app.models.work_order_event import WorkOrderEvent
-    from app.models.workflow import WorkflowLog
-    from app.notifications.service import NotificationService
 
     work_order = (
         await db.execute(
@@ -707,24 +816,7 @@ async def send_work_order_to_assembly(
             detail=f"Work Order '{work_order_number}' not found",
         )
 
-    sent_count = 0
-    skipped_count = 0
-
-    for blade in blades:
-        if blade.status.value in _OH_ELIGIBLE_STATUSES:
-            prev_status = blade.status
-            blade.status = BladeStatus.SENT_TO_ASSEMBLY
-            log = WorkflowLog(
-                blade_id=blade.id,
-                from_status=prev_status,
-                to_status=BladeStatus.SENT_TO_ASSEMBLY,
-                action_by_id=current_user.id,
-                remarks=remarks,
-            )
-            db.add(log)
-            sent_count += 1
-        else:
-            skipped_count += 1
+    sent_count, skipped_count = _transition_eligible_blades_to_assembly(blades, current_user, remarks, db)
 
     if sent_count == 0:
         raise HTTPException(
@@ -752,43 +844,7 @@ async def send_work_order_to_assembly(
     await db.commit()
 
     actor_name = getattr(current_user, "username", str(current_user.id))
-
-    # Notify assembly operators — use a fresh session (request session closes before BG task runs)
-    async def _notify_assembly(
-        _work_order_number: str, _actor_name: str, _sent_count: int, _skipped_count: int
-    ) -> None:
-        try:
-            from app.models.user import User, UserRole as UserRoleModel, Role
-            from app.db.session import AsyncSessionLocal
-            async with AsyncSessionLocal() as _db:
-                result = await _db.execute(
-                    select(User)
-                    .join(UserRoleModel, UserRoleModel.user_id == User.id)
-                    .join(Role, Role.id == UserRoleModel.role_id)
-                    .where(
-                        Role.name.in_(["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]),
-                        User.is_active.is_(True),
-                        User.deleted_at.is_(None),
-                    )
-                    .distinct()
-                )
-                target_users = list(result.scalars().all())
-                svc = NotificationService(_db)
-                for user in target_users:
-                    await svc.create_notification(
-                        user_id=user.id,
-                        title=f"Work Order {_work_order_number} ready for Assembly",
-                        body=(
-                            f"OH ({_actor_name}) has sent {_sent_count} blade(s) from Work Order {_work_order_number} to Assembly."
-                            + (f" {_skipped_count} blade(s) skipped." if _skipped_count else "")
-                        ),
-                        notification_type=NotificationType.WORKFLOW_UPDATED,
-                    )
-            logger.info("work_order_send_notification_sent", work_order=_work_order_number, recipients=len(target_users))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("work_order_send_notification_failed", error=str(exc))
-
-    background_tasks.add_task(_notify_assembly, work_order_number, actor_name, sent_count, skipped_count)
+    background_tasks.add_task(_notify_assembly_operators, work_order_number, actor_name, sent_count, skipped_count)
 
     logger.info(
         "work_order_sent_to_assembly",
@@ -863,39 +919,13 @@ async def assign_work_order_slot(
     return await _assign_hptr_work_order_slot(work_order_number, body, current_user, db)
 
 
-async def _assign_lptr_work_order_slot(
-    work_order_number: str,
-    body: dict,
-    current_user: Any,
-    db: AsyncSession,
-    background_tasks: BackgroundTasks,
-) -> dict:
+def _parse_lptr_slot_body(body: dict, stage1_count: int, stage2_count: int) -> tuple[int, int, int, dict[uuid.UUID, int]]:
+    """Parse and validate the raw request body for LPTR slot assignment.
+
+    Returns (stage, unbalance_slot, total_slots, slot_by_blade_id) or raises
+    HTTPException 422 with a message identifying which part of the payload
+    is invalid.
     """
-    Persists the operator-confirmed LPTR two-stage blade-to-slot mapping.
-
-    LPTR slot allocation happens in two physical stages: 46 blades are
-    installed and balancing-checked first, then physically removed, then
-    the remaining 44 blades fill the slots stage 1 left empty and are
-    balancing-checked again. The allocation itself (weight sort, anchor
-    placement at the reported unbalance position, target-weight matching
-    for the opposite slots, alternating-gap fill) is computed client-side
-    in frontend/src/utils/lptrBalancing.ts — like HPTR's set-making swaps,
-    this endpoint only validates and persists whatever final
-    ``assignments`` the frontend submits for the given ``stage``, it does
-    not run the allocation algorithm itself.
-
-    Requires ASSEMBLY_OPERATOR/SUPER_ADMIN (checked by the caller). The
-    work order must already be ACCEPTED/MODIFIED by Assembly. Stage 2
-    additionally requires a stage-1 allocation to already exist — it
-    physically cannot happen before those 46 blades are installed and
-    removed.
-    """
-    from app.core.constants import LPTR_STAGE1_BLADE_COUNT, LPTR_STAGE2_BLADE_COUNT
-    from app.models.blade import Blade
-    from app.models.work_order_event import WorkOrderEvent
-    from app.models.slot_allocation import SlotAllocation
-    from app.workflows.state_machine import WorkflowEngine
-
     try:
         stage: int = int(body["stage"])
     except (KeyError, TypeError, ValueError):
@@ -965,14 +995,20 @@ async def _assign_lptr_work_order_slot(
             detail=f"All slot_number values must be between 1 and {total_slots}",
         )
 
-    expected_count = LPTR_STAGE1_BLADE_COUNT if stage == 1 else LPTR_STAGE2_BLADE_COUNT
+    expected_count = stage1_count if stage == 1 else stage2_count
     if len(slot_by_blade_id) != expected_count:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Stage {stage} requires exactly {expected_count} assignments, received {len(slot_by_blade_id)}",
         )
 
-    # Gate: work order must have been accepted by Assembly before slots can be assigned
+    return stage, unbalance_slot, total_slots, slot_by_blade_id
+
+
+async def _check_work_order_accepted_for_slots(db: AsyncSession, work_order_number: str) -> None:
+    """Gate: work order must have been accepted by Assembly before slots can be assigned."""
+    from app.models.work_order_event import WorkOrderEvent
+
     latest_event = (
         await db.execute(
             select(WorkOrderEvent)
@@ -985,12 +1021,12 @@ async def _assign_lptr_work_order_slot(
     work_order_status = latest_event.event_type.value if latest_event else "CREATED"
     # SLOTS_ALLOCATED is included so stage 2 (submitted after stage 1's own
     # SLOTS_ALLOCATED event) isn't blocked by its own prior event.
-    _ACCEPTED_STATUSES = {
+    accepted_statuses = {
         BatchEventType.ACCEPTED.value,
         BatchEventType.MODIFIED.value,
         BatchEventType.SLOTS_ALLOCATED.value,
     }
-    if work_order_status not in _ACCEPTED_STATUSES:
+    if work_order_status not in accepted_statuses:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
@@ -1000,45 +1036,55 @@ async def _assign_lptr_work_order_slot(
             ),
         )
 
-    # Stage 2 physically cannot happen before stage 1's blades are installed
-    # and balancing-checked. Do not additionally require a passing check —
-    # the operator may proceed via documented manual corrections/manufacturer
-    # replacement even when balancing can't be perfected; the software must
-    # never gate on or silently override that judgment call.
-    if stage == 2:
-        existing_stage1 = (
-            await db.execute(
-                select(SlotAllocation.id)
-                .join(Blade, Blade.id == SlotAllocation.blade_id)
-                .where(
-                    Blade.work_order_number == work_order_number,
-                    Blade.blade_type == BladeType.LPTR,
-                    SlotAllocation.stage == 1,
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if existing_stage1 is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Work Order '{work_order_number}' has no stage-1 LPTR slot allocation yet. "
-                    "Stage 1 must be installed and balancing-checked before stage 2."
-                ),
-            )
 
-    _ELIGIBLE_FOR_SLOT = [
+async def _check_lptr_stage2_prerequisite(db: AsyncSession, work_order_number: str, stage: int) -> None:
+    """Stage 2 physically cannot happen before stage 1's blades are installed
+    and balancing-checked. Do not additionally require a passing check — the
+    operator may proceed via documented manual corrections/manufacturer
+    replacement even when balancing can't be perfected; the software must
+    never gate on or silently override that judgment call."""
+    if stage != 2:
+        return
+
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+
+    existing_stage1 = (
+        await db.execute(
+            select(SlotAllocation.id)
+            .join(Blade, Blade.id == SlotAllocation.blade_id)
+            .where(
+                Blade.work_order_number == work_order_number,
+                Blade.blade_type == BladeType.LPTR,
+                SlotAllocation.stage == 1,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_stage1 is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' has no stage-1 LPTR slot allocation yet. "
+                "Stage 1 must be installed and balancing-checked before stage 2."
+            ),
+        )
+
+
+async def _fetch_eligible_lptr_blades(db: AsyncSession, work_order_number: str) -> list:
+    from app.models.blade import Blade
+
+    eligible_statuses = [
         BladeStatus.SENT_TO_ASSEMBLY,
         BladeStatus.ASSEMBLY_RECEIVED,
         BladeStatus.ASSEMBLY_VERIFIED,
     ]
-
     blades = (
         await db.execute(
             select(Blade).where(
                 Blade.work_order_number == work_order_number,
                 Blade.blade_type == BladeType.LPTR,
-                Blade.status.in_(_ELIGIBLE_FOR_SLOT),
+                Blade.status.in_(eligible_statuses),
                 Blade.deleted_at.is_(None),
             )
         )
@@ -1049,22 +1095,20 @@ async def _assign_lptr_work_order_slot(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No eligible LPTR blades found in Work Order '{work_order_number}' — all blades may already have slots assigned.",
         )
+    return blades
 
-    # Stage 1 assigns 46 of the currently-eligible pool (the other 44 stay
-    # eligible, for stage 2) — unlike HPTR's single-shot assignment, this is
-    # deliberately a subset, not an exact match to the full eligible set.
-    # Every referenced blade must still be currently eligible, though.
-    eligible_ids = {b.id for b in blades}
-    if not set(slot_by_blade_id.keys()) <= eligible_ids:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "assignments reference blade(s) that are not currently eligible "
-                f"for LPTR slot assignment in Work Order '{work_order_number}'."
-            ),
-        )
 
-    assigned_blades = [b for b in blades if b.id in slot_by_blade_id]
+async def _apply_lptr_slot_assignments(
+    db: AsyncSession,
+    assigned_blades: list,
+    slot_by_blade_id: dict,
+    stage: int,
+    unbalance_slot: int,
+    total_slots: int,
+    current_user: Any,
+) -> None:
+    from app.models.slot_allocation import SlotAllocation
+    from app.workflows.state_machine import WorkflowEngine
 
     for blade in assigned_blades:
         slot_number = str(slot_by_blade_id[blade.id])
@@ -1083,13 +1127,12 @@ async def _assign_lptr_work_order_slot(
             existing.previous_slot_number = existing.slot_number
 
         # Create new allocation
-        alloc = SlotAllocation(
+        db.add(SlotAllocation(
             blade_id=blade.id,
             slot_number=slot_number,
             stage=stage,
             allocated_by_id=current_user.id,
-        )
-        db.add(alloc)
+        ))
 
         # Transition blade status
         await WorkflowEngine(db).transition(
@@ -1102,6 +1145,85 @@ async def _assign_lptr_work_order_slot(
                 f"(unbalance at slot {unbalance_slot}, disc has {total_slots} slots)"
             ),
         )
+
+
+async def _notify_lptr_slots_assigned(work_order_number: str, blade_count: int, stage: int) -> None:
+    """Notify OH that this stage's slots are now assigned."""
+    from app.notifications.service import NotificationService
+    from app.models.notification import NotificationType
+    from app.db.session import AsyncSessionLocal
+
+    try:
+        async with AsyncSessionLocal() as db:
+            svc = NotificationService(db)
+            await svc.notify_roles(
+                roles=["OH_OPERATOR", "SUPER_ADMIN"],
+                title=f"Work Order {work_order_number} — LPTR stage {stage} slots assigned",
+                body=f"Assembly has assigned disc slots to {blade_count} blade(s) for LPTR stage {stage} in Work Order {work_order_number}.",
+                notification_type=NotificationType.SLOT_PENDING,
+                metadata={"work_order_number": work_order_number, "stage": stage, "blades_assigned": blade_count},
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("notify_slots_assigned_failed", error=str(exc))
+
+
+async def _assign_lptr_work_order_slot(
+    work_order_number: str,
+    body: dict,
+    current_user: Any,
+    db: AsyncSession,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """
+    Persists the operator-confirmed LPTR two-stage blade-to-slot mapping.
+
+    LPTR slot allocation happens in two physical stages: 46 blades are
+    installed and balancing-checked first, then physically removed, then
+    the remaining 44 blades fill the slots stage 1 left empty and are
+    balancing-checked again. The allocation itself (weight sort, anchor
+    placement at the reported unbalance position, target-weight matching
+    for the opposite slots, alternating-gap fill) is computed client-side
+    in frontend/src/utils/lptrBalancing.ts — like HPTR's set-making swaps,
+    this endpoint only validates and persists whatever final
+    ``assignments`` the frontend submits for the given ``stage``, it does
+    not run the allocation algorithm itself.
+
+    Requires ASSEMBLY_OPERATOR/SUPER_ADMIN (checked by the caller). The
+    work order must already be ACCEPTED/MODIFIED by Assembly. Stage 2
+    additionally requires a stage-1 allocation to already exist — it
+    physically cannot happen before those 46 blades are installed and
+    removed.
+    """
+    from app.core.constants import LPTR_STAGE1_BLADE_COUNT, LPTR_STAGE2_BLADE_COUNT
+    from app.models.work_order_event import WorkOrderEvent
+
+    stage, unbalance_slot, total_slots, slot_by_blade_id = _parse_lptr_slot_body(
+        body, LPTR_STAGE1_BLADE_COUNT, LPTR_STAGE2_BLADE_COUNT
+    )
+
+    await _check_work_order_accepted_for_slots(db, work_order_number)
+    await _check_lptr_stage2_prerequisite(db, work_order_number, stage)
+
+    blades = await _fetch_eligible_lptr_blades(db, work_order_number)
+
+    # Stage 1 assigns 46 of the currently-eligible pool (the other 44 stay
+    # eligible, for stage 2) — unlike HPTR's single-shot assignment, this is
+    # deliberately a subset, not an exact match to the full eligible set.
+    # Every referenced blade must still be currently eligible, though.
+    eligible_ids = {b.id for b in blades}
+    if not set(slot_by_blade_id.keys()) <= eligible_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "assignments reference blade(s) that are not currently eligible "
+                f"for LPTR slot assignment in Work Order '{work_order_number}'."
+            ),
+        )
+
+    assigned_blades = [b for b in blades if b.id in slot_by_blade_id]
+    await _apply_lptr_slot_assignments(
+        db, assigned_blades, slot_by_blade_id, stage, unbalance_slot, total_slots, current_user
+    )
 
     await db.commit()
 
@@ -1122,27 +1244,8 @@ async def _assign_lptr_work_order_slot(
     db.add(ev)
     await db.commit()
 
-    # Notify OH that this stage's slots are now assigned.
-    blade_count_assigned = len(assigned_blades)
-    async def _notify_slots_assigned(_work_order: str, _count: int, _stage: int) -> None:
-        from app.notifications.service import NotificationService
-        from app.models.notification import NotificationType
-        from app.db.session import AsyncSessionLocal
-        try:
-            async with AsyncSessionLocal() as _db:
-                svc = NotificationService(_db)
-                await svc.notify_roles(
-                    roles=["OH_OPERATOR", "SUPER_ADMIN"],
-                    title=f"Work Order {_work_order} — LPTR stage {_stage} slots assigned",
-                    body=f"Assembly has assigned disc slots to {_count} blade(s) for LPTR stage {_stage} in Work Order {_work_order}.",
-                    notification_type=NotificationType.SLOT_PENDING,
-                    metadata={"work_order_number": _work_order, "stage": _stage, "blades_assigned": _count},
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("notify_slots_assigned_failed", error=str(exc))
-
     background_tasks.add_task(
-        _notify_slots_assigned, work_order_number, blade_count_assigned, stage
+        _notify_lptr_slots_assigned, work_order_number, len(assigned_blades), stage
     )
 
     logger.info(
@@ -1165,39 +1268,12 @@ async def _assign_lptr_work_order_slot(
     }
 
 
-async def _assign_hptr_work_order_slot(
-    work_order_number: str,
-    body: dict,
-    current_user: Any,
-    db: AsyncSession,
-) -> dict:
+def _parse_hptr_slot_body(body: dict) -> tuple[int, int, Any, dict[uuid.UUID, int]]:
+    """Parse and validate the raw request body for HPTR slot assignment.
+
+    Returns (start_slot, total_slots, unbalance_value, slot_by_blade_id) or
+    raises HTTPException 422 identifying which part of the payload is invalid.
     """
-    Persists the operator-confirmed HPTR blade-to-slot mapping.
-
-    Unlike LPTR, HPTR slot allocation is NOT purely algorithmic: the OH
-    Slot Allocation tab computes an initial mapping client-side (sort by
-    weight descending, pair heaviest with ``start_slot`` and lightest with
-    its opposite slot 45 positions away on the 90-slot rotor, alternating
-    inward), then the Set Making tab lets the operator manually swap blades
-    between the two halves (W1 = slots 1-45, W2 = slots 46-90) until the
-    half containing ``start_slot`` is heavier by 1.5-2.0 g. Because those
-    swaps are manual and un-recomputable server-side, this endpoint simply
-    validates and persists whatever final ``assignments`` the frontend
-    submits — it does not run the allocation algorithm itself.
-
-    Requires OH_OPERATOR/SUPER_ADMIN (checked by the caller). HPTR never
-    leaves OH, so there is no Assembly-acceptance gate. Eligible blades are
-    those at MEASUREMENTS_RECORDED. Logs both a SLOTS_ALLOCATED and a
-    SET_MAKING WorkOrderEvent — this single call is the only backend
-    touchpoint for both steps (Set Making's manual W1/W2 swaps happen
-    client-side and are only persisted once confirmed here).
-    """
-    from app.models.blade import Blade
-    from app.models.measurement import Measurement
-    from app.models.slot_allocation import SlotAllocation
-    from app.models.work_order_event import WorkOrderEvent
-    from app.workflows.state_machine import WorkflowEngine
-
     try:
         start_slot = int(body["start_slot"])
     except (KeyError, TypeError, ValueError):
@@ -1249,6 +1325,15 @@ async def _assign_hptr_work_order_slot(
             detail=f"All slot_number values must be between 1 and {total_slots}",
         )
 
+    return start_slot, total_slots, unbalance_value, slot_by_blade_id
+
+
+async def _fetch_eligible_hptr_blades(db: AsyncSession, work_order_number: str, slot_by_blade_id: dict) -> list:
+    """Fetch this work order's MEASUREMENTS_RECORDED HPTR blades and check the
+    submitted assignments cover exactly that set (HPTR is single-shot: every
+    eligible blade must get a slot, unlike LPTR's two-stage subset)."""
+    from app.models.blade import Blade
+
     blades = (
         await db.execute(
             select(Blade).where(
@@ -1275,13 +1360,15 @@ async def _assign_hptr_work_order_slot(
                 f"({len(eligible_ids)} expected, {len(slot_by_blade_id)} received)."
             ),
         )
+    return blades
 
-    # Fetch latest INITIAL weight_grams per blade, purely to report the W1/W2
-    # split back to the caller for audit/confirmation — the swap decision
-    # itself already happened client-side before this call.
+
+async def _fetch_latest_weight_map(db: AsyncSession, blade_ids: list) -> dict:
+    """Latest INITIAL weight_grams per blade id, purely to report the W1/W2
+    split back to the caller for audit/confirmation."""
+    from app.models.measurement import Measurement
     from sqlalchemy import func as sa_func
 
-    blade_ids = list(eligible_ids)
     subq = (
         select(
             Measurement.blade_id,
@@ -1304,9 +1391,10 @@ async def _assign_hptr_work_order_slot(
             )
         )
     ).all()
-    weight_map: dict = {row.blade_id: float(row.weight_grams or 0) for row in meas_rows}
+    return {row.blade_id: float(row.weight_grams or 0) for row in meas_rows}
 
-    half = total_slots // 2  # W1 = 1..half, W2 = half+1..total_slots
+
+def _compute_hptr_half_totals(blades: list, slot_by_blade_id: dict, weight_map: dict, half: int) -> tuple[float, float]:
     w1_total = 0.0
     w2_total = 0.0
     for blade in blades:
@@ -1316,7 +1404,21 @@ async def _assign_hptr_work_order_slot(
             w1_total += weight
         else:
             w2_total += weight
+    return w1_total, w2_total
 
+
+async def _apply_hptr_slot_assignments(
+    db: AsyncSession,
+    blades: list,
+    slot_by_blade_id: dict,
+    start_slot: int,
+    unbalance_value: Any,
+    current_user: Any,
+) -> None:
+    from app.models.slot_allocation import SlotAllocation
+    from app.workflows.state_machine import WorkflowEngine
+
+    unbalance_note = f", unbalance {unbalance_value} g" if unbalance_value is not None else ""
     for blade in blades:
         slot_number = str(slot_by_blade_id[blade.id])
 
@@ -1332,25 +1434,62 @@ async def _assign_hptr_work_order_slot(
             existing.is_active = False
             existing.previous_slot_number = existing.slot_number
 
-        alloc = SlotAllocation(
+        db.add(SlotAllocation(
             blade_id=blade.id,
             slot_number=slot_number,
             allocated_by_id=current_user.id,
-        )
-        db.add(alloc)
+        ))
 
         await WorkflowEngine(db).transition(
             blade=blade,
             to_status=BladeStatus.SLOT_ASSIGNED,
             user=current_user,
             station_id=None,
-            remarks=(
-                f"HPTR slot {slot_number} assigned "
-                f"(start slot {start_slot}"
-                + (f", unbalance {unbalance_value} g" if unbalance_value is not None else "")
-                + ")"
-            ),
+            remarks=f"HPTR slot {slot_number} assigned (start slot {start_slot}{unbalance_note})",
         )
+
+
+async def _assign_hptr_work_order_slot(
+    work_order_number: str,
+    body: dict,
+    current_user: Any,
+    db: AsyncSession,
+) -> dict:
+    """
+    Persists the operator-confirmed HPTR blade-to-slot mapping.
+
+    Unlike LPTR, HPTR slot allocation is NOT purely algorithmic: the OH
+    Slot Allocation tab computes an initial mapping client-side (sort by
+    weight descending, pair heaviest with ``start_slot`` and lightest with
+    its opposite slot 45 positions away on the 90-slot rotor, alternating
+    inward), then the Set Making tab lets the operator manually swap blades
+    between the two halves (W1 = slots 1-45, W2 = slots 46-90) until the
+    half containing ``start_slot`` is heavier by 1.5-2.0 g. Because those
+    swaps are manual and un-recomputable server-side, this endpoint simply
+    validates and persists whatever final ``assignments`` the frontend
+    submits — it does not run the allocation algorithm itself.
+
+    Requires OH_OPERATOR/SUPER_ADMIN (checked by the caller). HPTR never
+    leaves OH, so there is no Assembly-acceptance gate. Eligible blades are
+    those at MEASUREMENTS_RECORDED. Logs both a SLOTS_ALLOCATED and a
+    SET_MAKING WorkOrderEvent — this single call is the only backend
+    touchpoint for both steps (Set Making's manual W1/W2 swaps happen
+    client-side and are only persisted once confirmed here).
+    """
+    from app.models.work_order_event import WorkOrderEvent
+
+    start_slot, total_slots, unbalance_value, slot_by_blade_id = _parse_hptr_slot_body(body)
+    blades = await _fetch_eligible_hptr_blades(db, work_order_number, slot_by_blade_id)
+
+    # Fetch latest INITIAL weight_grams per blade, purely to report the W1/W2
+    # split back to the caller for audit/confirmation — the swap decision
+    # itself already happened client-side before this call.
+    weight_map = await _fetch_latest_weight_map(db, list(slot_by_blade_id.keys()))
+
+    half = total_slots // 2  # W1 = 1..half, W2 = half+1..total_slots
+    w1_total, w2_total = _compute_hptr_half_totals(blades, slot_by_blade_id, weight_map, half)
+
+    await _apply_hptr_slot_assignments(db, blades, slot_by_blade_id, start_slot, unbalance_value, current_user)
 
     await db.commit()
 
@@ -2192,6 +2331,22 @@ async def get_work_order_rocking_creep(
     status_code=status.HTTP_200_OK,
     summary="Confirm Rocking & Creep entry is complete for a work order",
 )
+def _find_blades_missing_rocking_creep(blades: list, meas_map: dict) -> tuple[list[str], bool]:
+    """Serials still missing a required Rocking (and Creep, for LPTR) value,
+    plus whether any LPTR blade is present (for the error message wording)."""
+    missing_serials: list[str] = []
+    any_lptr = False
+    for blade in blades:
+        meas = meas_map.get(blade.id)
+        has_rocking = meas is not None and meas.rocking_value is not None
+        needs_creep = blade.blade_type == BladeType.LPTR
+        any_lptr = any_lptr or needs_creep
+        has_creep = meas is not None and meas.creep_value is not None
+        if not has_rocking or (needs_creep and not has_creep):
+            missing_serials.append(blade.serial_number)
+    return missing_serials, any_lptr
+
+
 async def complete_rocking_creep(
     work_order_number: str,
     current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
@@ -2256,16 +2411,7 @@ async def complete_rocking_creep(
     ).all()
     meas_map = {r.blade_id: r for r in meas_rows}
 
-    missing_serials: list[str] = []
-    any_lptr = False
-    for blade in blades:
-        meas = meas_map.get(blade.id)
-        has_rocking = meas is not None and meas.rocking_value is not None
-        needs_creep = blade.blade_type == BladeType.LPTR
-        any_lptr = any_lptr or needs_creep
-        has_creep = meas is not None and meas.creep_value is not None
-        if not has_rocking or (needs_creep and not has_creep):
-            missing_serials.append(blade.serial_number)
+    missing_serials, any_lptr = _find_blades_missing_rocking_creep(blades, meas_map)
 
     if missing_serials:
         missing_serials.sort()
@@ -2362,6 +2508,82 @@ async def accept_work_order(
 # ---------------------------------------------------------------------------
 
 
+_MODIFY_ALLOWED_FIELDS = {
+    "weight_grams",
+    "static_moment_gcm",
+    "melt_number",
+    "part_number",
+    "work_order_number",
+    "shop_order_number",
+    "engine_number",
+}
+
+
+def _apply_blade_field_updates(blade, updated_fields: dict) -> dict:
+    """Apply each allowed, actually-changed field from updated_fields onto
+    blade. Returns {field: {"before": ..., "after": ...}} for what changed."""
+    applied: dict = {}
+    for field, new_value in updated_fields.items():
+        if field not in _MODIFY_ALLOWED_FIELDS or new_value is None:
+            continue
+        old_value = getattr(blade, field, None)
+        if old_value == new_value:
+            continue
+        setattr(blade, field, new_value)
+        applied[field] = {"before": old_value, "after": new_value}
+    return applied
+
+
+async def _apply_one_modification(
+    db: AsyncSession, mod: dict, work_order_number: str, current_user: Any, remarks: str
+) -> tuple[str, dict] | None:
+    """Validate, look up, and apply one modification entry. Returns
+    (change_summary_key, applied_fields), or None if the entry was skipped
+    (missing blade_id/updated fields, invalid uuid, blade not found, or no
+    actual field changes)."""
+    import uuid as _uuid
+    from app.models.blade import Blade
+    from app.models.workflow import WorkflowLog
+
+    blade_id_str = mod.get("blade_id")
+    updated_fields: dict = mod.get("updated", {})
+    serial_number: str = mod.get("serial_number", "")
+
+    if not blade_id_str or not updated_fields:
+        return None
+
+    try:
+        blade_uuid = _uuid.UUID(blade_id_str)
+    except (ValueError, TypeError):
+        return None
+
+    blade = (
+        await db.execute(
+            select(Blade).where(
+                Blade.id == blade_uuid,
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not blade:
+        return None
+
+    applied = _apply_blade_field_updates(blade, updated_fields)
+    if not applied:
+        return None
+
+    sn_key = serial_number or str(blade.id)
+    db.add(WorkflowLog(
+        blade_id=blade.id,
+        from_status=blade.status,
+        to_status=blade.status,
+        action_by_id=current_user.id,
+        remarks=f"Fields modified: {', '.join(applied.keys())}. {remarks}".strip(". "),
+    ))
+    return sn_key, applied
+
+
 @router.post(
     "/{work_order_number}/modify",
     status_code=status.HTTP_201_CREATED,
@@ -2380,71 +2602,15 @@ async def modify_work_order(
     and updated field values so the diff is preserved in the WorkOrderEvent and in OH
     notifications.
     """
-    import uuid as _uuid
-    from app.models.blade import Blade
-    from app.models.workflow import WorkflowLog
-
     remarks: str = body.get("remarks") or ""
     raw_mods: list = body.get("modifications", [])
 
-    ALLOWED_FIELDS = {
-        "weight_grams",
-        "static_moment_gcm",
-        "melt_number",
-        "part_number",
-        "work_order_number",
-        "shop_order_number",
-        "engine_number",
-    }
     changes_summary: dict = {}
-
     for mod in raw_mods:
-        blade_id_str = mod.get("blade_id")
-        updated_fields: dict = mod.get("updated", {})
-        original_fields: dict = mod.get("original", {})
-        serial_number: str = mod.get("serial_number", "")
-
-        if not blade_id_str or not updated_fields:
-            continue
-
-        try:
-            blade_uuid = _uuid.UUID(blade_id_str)
-        except (ValueError, TypeError):
-            continue
-
-        blade = (
-            await db.execute(
-                select(Blade).where(
-                    Blade.id == blade_uuid,
-                    Blade.work_order_number == work_order_number,
-                    Blade.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-
-        if not blade:
-            continue
-
-        applied: dict = {}
-        for field, new_value in updated_fields.items():
-            if field not in ALLOWED_FIELDS or new_value is None:
-                continue
-            old_value = getattr(blade, field, None)
-            if old_value == new_value:
-                continue
-            setattr(blade, field, new_value)
-            applied[field] = {"before": old_value, "after": new_value}
-
-        if applied:
-            sn_key = serial_number or str(blade.id)
+        result = await _apply_one_modification(db, mod, work_order_number, current_user, remarks)
+        if result:
+            sn_key, applied = result
             changes_summary[sn_key] = applied
-            db.add(WorkflowLog(
-                blade_id=blade.id,
-                from_status=blade.status,
-                to_status=blade.status,
-                action_by_id=current_user.id,
-                remarks=f"Fields modified: {', '.join(applied.keys())}. {remarks}".strip(". "),
-            ))
 
     if changes_summary:
         await db.commit()

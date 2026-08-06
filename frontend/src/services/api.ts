@@ -96,7 +96,7 @@ api.interceptors.response.use(
   (response: AxiosResponse): AxiosResponse => response,
   async (rawError: unknown): Promise<AxiosResponse> => {
     // Narrow to AxiosError; propagate anything else immediately.
-    if (!axios.isAxiosError(rawError)) return Promise.reject(rawError);
+    if (!axios.isAxiosError(rawError)) throw rawError;
 
     const error = rawError as AxiosError;
     const originalRequest = error.config as
@@ -109,7 +109,7 @@ api.interceptors.response.use(
       !originalRequest ||
       originalRequest._retry
     ) {
-      return Promise.reject(error);
+      throw error;
     }
 
     // A failed login attempt is not an expired session — just propagate the
@@ -117,13 +117,13 @@ api.interceptors.response.use(
     // page (and the error message) before the form ever sees it.
     const url = originalRequest.url ?? "";
     if (url.includes("/auth/login")) {
-      return Promise.reject(error);
+      throw error;
     }
 
     // Don't refresh for the refresh endpoint itself — avoids infinite loops.
     if (url.includes("/auth/refresh")) {
       await doLogout();
-      return Promise.reject(error);
+      throw error;
     }
 
     originalRequest._retry = true;
@@ -146,7 +146,7 @@ api.interceptors.response.use(
 
       if (!refreshToken) {
         await doLogout();
-        return Promise.reject(error);
+        throw error;
       }
 
       const { data } = await axios.post<{ access_token: string }>(
@@ -163,7 +163,7 @@ api.interceptors.response.use(
     } catch (refreshError) {
       processQueue(refreshError, null);
       await doLogout();
-      return Promise.reject(refreshError);
+      throw refreshError;
     } finally {
       isRefreshing = false;
     }

@@ -168,7 +168,7 @@ export default function AssemblyQueuePage() {
 
   const workOrderNumbers = useMemo(() => {
     const nums = assemblyBatches.map((b) => b.work_order_number);
-    return [...new Set(nums)].sort();
+    return [...new Set(nums)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [assemblyBatches]);
 
   // Counts derived from batch summaries — no blade-list dependency, no pagination limits

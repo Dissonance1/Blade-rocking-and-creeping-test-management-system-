@@ -305,27 +305,8 @@ class WorkOrderService:
     # Complete (validate + bulk workflow transition)
     # ------------------------------------------------------------------
 
-    async def complete(self, work_order_number: str, user: "User") -> WorkOrderCompleteResponse:
-        work_order = await self._get_work_order_or_404(work_order_number)
-        blades = await self._blade_repo.get_by_work_order(work_order.id)
-
-        if len(blades) != BLADES_PER_WORK_ORDER:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=(
-                    f"Work Order '{work_order_number}' has {len(blades)} rows, "
-                    f"expected {BLADES_PER_WORK_ORDER}."
-                ),
-            )
-
-        if work_order.is_entry_complete:
-            return WorkOrderCompleteResponse(
-                work_order_number=work_order.work_order_number,
-                status=BladeStatus.MEASUREMENTS_RECORDED.value,
-                blade_ids=[b.id for b in blades],
-                completed_at=work_order.entry_completed_at or datetime.now(timezone.utc),
-            )
-
+    async def _validate_grid_rows(self, blades: list) -> None:
+        """Raise 422 if any row is missing melt/weight, or melt numbers collide."""
         incomplete_rows: list[int] = []
         melt_groups: dict[str, list[int]] = {}
 
@@ -363,7 +344,9 @@ class WorkOrderService:
                 },
             )
 
-        station_id = user.station_id
+    async def _advance_blades_to_measured(self, blades: list, user: "User", station_id) -> None:
+        """Fire whichever CREATED->OH_INSPECTION->MEASUREMENTS_RECORDED transitions
+        each blade still needs (some may already be partway there)."""
         for blade in blades:
             # Blades normally start at CREATED (fresh scaffold row), but may
             # already be at OH_INSPECTION or MEASUREMENTS_RECORDED (e.g. a
@@ -385,6 +368,32 @@ class WorkOrderService:
                     station_id=station_id,
                     remarks="Blade entry: Work Order completed.",
                 )
+
+    async def complete(self, work_order_number: str, user: "User") -> WorkOrderCompleteResponse:
+        work_order = await self._get_work_order_or_404(work_order_number)
+        blades = await self._blade_repo.get_by_work_order(work_order.id)
+
+        if len(blades) != BLADES_PER_WORK_ORDER:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Work Order '{work_order_number}' has {len(blades)} rows, "
+                    f"expected {BLADES_PER_WORK_ORDER}."
+                ),
+            )
+
+        if work_order.is_entry_complete:
+            return WorkOrderCompleteResponse(
+                work_order_number=work_order.work_order_number,
+                status=BladeStatus.MEASUREMENTS_RECORDED.value,
+                blade_ids=[b.id for b in blades],
+                completed_at=work_order.entry_completed_at or datetime.now(timezone.utc),
+            )
+
+        await self._validate_grid_rows(blades)
+
+        station_id = user.station_id
+        await self._advance_blades_to_measured(blades, user, station_id)
 
         await self._wo_repo.mark_complete(work_order, completed_by_id=user.id)
         await self.db.commit()

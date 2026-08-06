@@ -1,7 +1,7 @@
 # Technical Design Document
 ## Blade Rocking & Creep Test Management System
 
-**Version:** 1.5  
+**Version:** 1.6  
 **Owner:** Meridian Data Labs  
 **Contact:** amit@meridiandatalabs.com
 
@@ -52,15 +52,16 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 
 - Blade registration and identity verification (serial number, melt number, part number)
 - Multi-stage dimensional measurement capture with automated static moment calculation
-- Batch-level tracking: **180 blades per batch** (90 LPTR + 90 HPTR) moving between OH and Assembly
+- **Work Order-based tracking:** 90 blades per Work Order (one blade type per WO); 90-row grid entry with autosave, Excel bulk import, and entry-complete gating before OH inspection begins
 - OCR scan of blade markings (serial, melt number) with mismatch detection — dual-language PP-OCRv4 engine (English + Cyrillic); optional Luxonis OAK-1 industrial camera bridge on OH station
 - Live weight capture from Adam Equipment iScale i-04 (0.1 g) via serial bridge
 - Live DTI readings from Sylvac BT gauge (0.001 mm) via serial bridge
-- Assembly verification loop: receive batch → scan/validate vs OH records → accept / modify / reject per blade
-- Set-making with HAL (Heavy-light Alternating Layout) descending-sort algorithm, 2–3 balancing iterations
-- Slot allocation and dynamic balancing record-keeping
-- Rejection workflow with reason classification and SUPER_ADMIN-controlled reopening
-- Async PDF/Excel IRS report generation for compliance and shipping packages
+- LPTR assembly verification loop: receive WO → scan/validate vs OH records → accept / modify / reject per blade
+- HPTR stays at OH station; slots assigned directly by OH_OPERATOR using HPTR HAL (computed client-side)
+- Set-making with HAL (Heavy-light Alternating Layout) descending-sort algorithm; LPTR two-stage slot allocation with balancing checks and manual corrections audit trail
+- Slot allocation and dynamic balancing record-keeping; LPTR unbalance limit enforced via `LPTR_UNBALANCE_LIMIT_G`
+- Rejection workflow with SUPER_ADMIN-controlled reopening
+- Async PDF/Excel report generation + 4 synchronous export endpoints (blade list, WO report, HPTR W1/W2 slots, LPTR slots + corrections)
 - Real-time WebSocket notifications across operator workstations
 - QR code generation per blade for mobile scanning
 - Full immutable audit trail at both HTTP and domain-event levels
@@ -141,7 +142,7 @@ Turbine blades undergo periodic overhaul cycles. Each blade must be individually
 
 | Layer | Technology | Responsibility |
 |-------|-----------|----------------|
-| API Gateway | NGINX 1.27 | TLS termination, rate limiting, static assets |
+| API Gateway | NGINX 1.27 | Rate limiting, static assets (HTTP-only on LAN) |
 | Web Framework | FastAPI 0.111 | Route handling, dependency injection, WebSocket |
 | ORM | SQLAlchemy 2.0 (async) | Database queries via asyncpg |
 | Validation | Pydantic v2 | Request/response schema enforcement |
@@ -189,33 +190,40 @@ blead_rocking/
 │   │   ├── db/
 │   │   │   ├── base.py              # DeclarativeBase + reusable mixins
 │   │   │   └── session.py           # Async engine factory, get_db()
-│   │   ├── models/                  # SQLAlchemy ORM entities (20 files)
-│   │   ├── schemas/                 # Pydantic I/O schemas (10 files)
+│   │   ├── models/                  # SQLAlchemy ORM entities
+│   │   │   ├── work_order.py        #   Work Order header (replaced BatchGroup)
+│   │   │   ├── lptr_balancing_check.py  # LPTR stage balancing records
+│   │   │   └── enums.py             #   All domain enums (14 BladeStatus values)
+│   │   ├── schemas/                 # Pydantic I/O schemas
+│   │   │   ├── work_order.py        #   WorkOrder create/row/response schemas
+│   │   │   └── lptr_balancing.py    #   LPTR balancing check schemas
 │   │   ├── api/v1/
-│   │   │   ├── router.py            # Top-level router; 16 sub-routers
-│   │   │   └── endpoints/           # 16 endpoint modules:
+│   │   │   ├── router.py            # Top-level router; 17 sub-routers
+│   │   │   └── endpoints/           # 17 endpoint modules:
 │   │   │       ├── assembly.py      #   Assembly verification + set-making
 │   │   │       ├── audit_logs.py    #   Audit trail (SUPER_ADMIN)
 │   │   │       ├── auth.py          #   Login, refresh, logout
-│   │   │       ├── batches.py       #   Batch lifecycle + HAL slot assignment
 │   │   │       ├── blades.py        #   Blade CRUD + workflow transitions
 │   │   │       ├── dti.py           #   DTI gauge WebSocket + push
-│   │   │       ├── measurements.py  #   Measurement CRUD + QA approval
+│   │   │       ├── lptr_balancing.py #  LPTR empty-rotor, balancing-check, corrections
+│   │   │       ├── measurements.py  #   Measurement CRUD + rocking/creep patch
 │   │   │       ├── notifications.py #   Notification list + WebSocket
 │   │   │       ├── ocr.py           #   OCR scan + verify
-│   │   │       ├── reports.py       #   Async report generation
-│   │   │       ├── slots.py         #   Slot allocation + balancing
+│   │   │       ├── reports.py       #   Async + sync export endpoints
+│   │   │       ├── slots.py         #   Slot allocation (role depends on blade_type)
 │   │   │       ├── stations.py      #   Station management
 │   │   │       ├── sync.py          #   LAN sync (OH PC → Assembly)
 │   │   │       ├── users.py         #   User management (SUPER_ADMIN)
-│   │   │       └── weighing.py      #   Weighing scale WebSocket + push
+│   │   │       ├── weighing.py      #   Weighing scale WebSocket + push
+│   │   │       ├── work_orders.py   #   Work Order lifecycle (20 endpoints)
+│   │   │       └── workflows.py     #   Workflow history + dashboard stats
 │   │   ├── repositories/            # Data access layer (5 files)
 │   │   ├── services/                # Business logic
-│   │   │   ├── blade_service.py     #   Blade lifecycle
 │   │   │   ├── assembly_service.py  #   Assembly verification logic
-│   │   │   └── weighing_service.py  #   Weighing scale data
+│   │   │   ├── excel_import.py      #   Excel Work Order bulk-import parser
+│   │   │   └── work_order_service.py #  Work Order lifecycle + row autosave
 │   │   ├── workflows/
-│   │   │   └── state_machine.py     # ALLOWED_TRANSITIONS + WorkflowEngine
+│   │   │   └── state_machine.py     # ALLOWED_TRANSITIONS + EXTRA_TRANSITIONS_BY_TYPE + WorkflowEngine
 │   │   ├── notifications/           # WebSocket manager + persistence
 │   │   ├── ocr/                     # Pluggable OCR provider registry
 │   │   │   └── models/ppocrv4/      # Bundled PP-OCRv4 weights (det, cls, rec_en, rec_ru ~26 MB)
@@ -223,7 +231,7 @@ blead_rocking/
 │   │   ├── middleware/              # Audit logging, rate limiting
 │   │   └── tests/                   # pytest suite (conftest + 5 test files)
 │   ├── alembic/                     # Schema migrations
-│   │   └── versions/                # 3 migration scripts
+│   │   └── versions/                # Migration scripts (assembly_workflow, remove_height_dti, drop_nomenclature, …)
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
@@ -231,11 +239,16 @@ blead_rocking/
 │   │   ├── main.tsx
 │   │   ├── App.tsx
 │   │   ├── routes/
-│   │   │   └── index.tsx            # All 18 application routes
+│   │   │   └── index.tsx            # All 22 application routes (+ redirect aliases)
 │   │   ├── components/              # Reusable UI (Radix UI + Tailwind)
-│   │   ├── pages/                   # Route-level views (18 pages)
+│   │   ├── pages/                   # Route-level views (22 pages)
+│   │   │   ├── blade-entry/         #   BladeEntryGrid, GridRow, ExcelImportButton
+│   │   │   ├── OHSlotAllocationPage.tsx  # HPTR set-making + balancing (OH_OPERATOR)
+│   │   │   └── MyProfile.tsx        #   User profile page
 │   │   ├── hooks/                   # Custom React hooks
-│   │   ├── services/                # Axios API client + React Query (incl. oak1Camera.ts)
+│   │   ├── services/                # Axios API client + React Query
+│   │   │   ├── oak1Camera.ts        #   OAK-1 camera companion client
+│   │   │   └── workOrderService.ts  #   Work Order API client
 │   │   ├── stores/                  # Zustand state
 │   │   └── types/                   # TypeScript type definitions
 │   ├── package.json
@@ -248,9 +261,13 @@ blead_rocking/
 │   ├── oak1_camera_service.py      # OAK-1 camera companion service (Flask, port 8089)
 │   ├── oak1_ocr_test.py            # OAK-1 OCR validation/test script
 │   ├── oak1_requirements.txt       # OAK-1 venv deps (depthai, flask, flask-cors, cv2)
+│   ├── ocr_images_to_excel.py      # Batch OCR → Excel export utility
+│   ├── register_bridge_tasks.ps1   # Register hardware bridges as Windows Scheduled Tasks
 │   ├── reset_and_seed_full.py       # Full DB reset + re-seed
+│   ├── run_native.sh               # Start full stack natively (no Docker)
 │   ├── seed_data.py                 # Dev data seeder
 │   ├── seed_demo_data.py            # Demo data for presentations
+│   ├── stop_native.sh              # Stop the native stack
 │   └── weighing_bridge.py          # Weighing scale RS-232 → API bridge
 ├── nginx/
 │   └── nginx.conf
@@ -273,15 +290,13 @@ User ─────────────────────────
   │  measured_by, approved_by,                                 │
   │  allocated_by, action_by)                                  │
   │                                                            │
-Blade ◄── Measurement (weight, rocking, creep, height)        │
-  │                                                            │
-  ├──► SlotAllocation (slot_number, balanced, unbalance)      │
-  ├──► WorkflowLog (from→to, timestamp, remarks, metadata)   │
-  ├──► Attachment (file_path, mime_type, ocr_scan)            │
-  ├──► Notification (title, body, is_read, expires_at)        │
-  └──► BatchEvent (via batch_number)                          │
-                                                              │
-BatchGroup (batch_number → work_order/part/engine metadata)   │
+WorkOrder ──► Blade ◄── Measurement (weight, rocking, creep)  │
+  (90 blades per WO)  │                                        │
+                       ├──► SlotAllocation (slot, stage)      │
+                       ├──► WorkflowLog (from→to, metadata)   │
+                       ├──► Attachment (file_path, ocr_scan)  │
+                       ├──► Notification (title, is_read)     │
+                       └──► LptrBalancingCheck (stage 1/2)    │
                                                               │
 Station ◄── Blade (current_station)                           │
 Station ◄── User (home_station)                               │
@@ -290,30 +305,50 @@ Role ◄──► Permission (resource + action pairs)                │
 User ◄──► Role (user_roles junction)                         ◄┘
 ```
 
+### WorkOrder (replaces BatchGroup)
+
+One Work Order is created per set of blades entered together. It carries the common identity fields shared by all 90 blades and drives the 90-row grid entry workflow.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | UUID PK | |
+| `work_order_number` | VARCHAR(64) UNIQUE | MRO work order — primary routing key |
+| `shop_order_number` | VARCHAR(64) | Internal shop order |
+| `part_number` | VARCHAR(64) | Drawing/part number |
+| `blade_type` | ENUM | `LPTR` or `HPTR` — fixed for all blades |
+| `engine_number` | VARCHAR(64) | Parent engine |
+| `engine_hours` | VARCHAR(64) | Engine total hours at removal |
+| `component_hours` | VARCHAR(64) | Blade individual hours (defaults to engine_hours) |
+| `is_entry_complete` | BOOLEAN | True once all 90 rows have melt + weight |
+| `entry_completed_at` | TIMESTAMP | When entry was completed |
+| `is_rocking_creep_complete` | BOOLEAN | True once rocking/creep values are locked |
+| `created_at`, `updated_at` | TIMESTAMP | Audit timestamps |
+
 ### Blade (Central Entity)
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | UUID PK | |
-| `serial_number` | VARCHAR(64) UNIQUE | Physical blade identifier |
+| `serial_number` | VARCHAR(64) | Positional S.No within the Work Order (01–90, zero-padded); unique per `work_order_id`, not globally |
+| `work_order_id` | UUID FK → work_orders | RESTRICT on delete |
+| `work_order_number` | VARCHAR(64) | Denormalised copy of `work_order.work_order_number` |
+| `shop_order_number` | VARCHAR(64) | Copied from Work Order |
+| `part_number` | VARCHAR(64) | Copied from Work Order |
 | `melt_number` | VARCHAR(64) | Material traceability |
-| `work_order_number` | VARCHAR(64) | MRO work order |
-| `shop_order_number` | VARCHAR(64) | Internal shop order |
-| `part_number` | VARCHAR(64) | Drawing/part number |
 | `engine_number` | VARCHAR(64) | Parent engine |
 | `engine_hours` | VARCHAR(64) | Engine total hours at removal |
 | `component_hours` | VARCHAR(64) | Blade individual hours at removal |
-| `batch_number` | VARCHAR(64) | Grouping key for assembly batches |
 | `blade_type` | ENUM | `LPTR` or `HPTR` |
-| `status` | ENUM | 15 states (see state machine) |
+| `status` | ENUM | 14 states (see state machine) |
 | `current_station_id` | UUID FK → stations | |
 | `created_by_id` | UUID FK → users | |
 | `assigned_to_id` | UUID FK → users | |
-| `ocr_serial_number` | VARCHAR(64) | OCR-extracted serial |
 | `ocr_melt_number` | VARCHAR(64) | OCR-extracted melt number |
 | `ocr_mismatch_flag` | BOOLEAN | Set when OCR disagrees with manual entry |
 | `ocr_mismatch_notes` | TEXT | Explanation of the mismatch |
 | `deleted_at` | TIMESTAMP | Soft delete |
+
+**Unique constraint:** `uq_blade_workorder_serial` on `(work_order_id, serial_number)`.
 
 ### Measurement
 
@@ -329,7 +364,20 @@ User ◄──► Role (user_roles junction)                         ◄┘
 | `approved_by_id` | UUID FK → users | |
 | `approved_at` | TIMESTAMP | |
 
-**Auto-transition:** Recording a measurement on a blade in `OH_INSPECTION` automatically transitions it to `MEASUREMENTS_RECORDED`.
+**Unique constraint:** `uq_measurement_blade_type` on `(blade_id, measurement_type)` — one row per type per blade.
+
+**Note:** The `height_data` JSONB column (DTI height positions) was removed. DTI readings are captured live via the WebSocket bridge but are no longer persisted.
+
+**Auto-transition:** Recording a measurement on a blade in `OH_INSPECTION` or `REOPENED` automatically transitions it to `MEASUREMENTS_RECORDED`.
+
+### SlotAllocation (updated)
+
+Added two fields for LPTR two-stage allocation:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `stage` | INTEGER | LPTR allocation stage (1 or 2); `null` for HPTR / legacy rows |
+| `group_id` | VARCHAR(64) | Optional group label for staged sets |
 
 **Type rules enforced at the API layer:**
 - `LPTR`: both `rocking_value` AND `creep_value` are mandatory.
@@ -347,6 +395,20 @@ Four built-in roles:
 | `QA_VIEWER` | Read-only access across all entities |
 
 User fields include `last_login` timestamp (updated on each successful authentication).
+
+### LPTR Balancing Records (new)
+
+Three new models support the LPTR two-stage balancing audit trail:
+
+| Model | Table | Purpose |
+|-------|-------|--------|
+| `LptrEmptyRotorReading` | `lptr_empty_rotor_readings` | Empty-rotor unbalance measurement before blade load |
+| `LptrBalancingCheck` | `lptr_balancing_checks` | Measured unbalance at each stage (stage 1 / stage 2) |
+| `LptrManualCorrection` | `lptr_manual_corrections` | Rearrangement, adjustment, or replacement requests |
+
+**`LptrCorrectionType` enum:** `REARRANGEMENT` / `BALANCING_ADJUSTMENT` / `MANUFACTURER_REPLACEMENT_REQUEST`
+
+**`LPTR_UNBALANCE_LIMIT_G`** constant defines the pass/fail threshold for balancing checks.
 
 ### AssemblyBladeRecord
 
@@ -381,19 +443,11 @@ Tracks per-blade verification state during the Assembly receipt process. Created
 | `is_balanced` | BOOLEAN | Balancing outcome |
 | `balancing_remarks` | TEXT | |
 
-### BatchGroup
+### ~~BatchGroup~~ (removed)
 
-Stores metadata associated with a batch number. Used to auto-fill blade fields when a known batch number is entered at registration.
+`BatchGroup` has been replaced by `WorkOrder` (see above). The `batch_number` column on blades and the `batches` endpoint have both been removed. The Work Order concept provides richer lifecycle tracking (90-row grid, `is_entry_complete`, `is_rocking_creep_complete`) with a cleaner one-to-many relationship.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `batch_number` | VARCHAR(64) UNIQUE | |
-| `work_order_number` | VARCHAR(64) | Inherited from first blade in batch |
-| `part_number` | VARCHAR(64) | |
-| `engine_number` | VARCHAR(64) | |
-| `created_at` | TIMESTAMP | |
-
-**Batch size cap:** 90 LPTR + 90 HPTR = **180 blades total per batch number**. Enforced at the API layer via `BATCH_MAX_PER_TYPE = 90` in `endpoints/blades.py`. Per-type counts are validated independently.
+**Batch size:** `BLADES_PER_WORK_ORDER = 90` blades per Work Order. One Work Order covers one `blade_type` only (LPTR or HPTR, never mixed).
 
 ### WorkflowLog (Immutable Audit Trail)
 
@@ -490,35 +544,45 @@ CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
 
 ASSEMBLY_RECEIVED → REJECTED   (via POST /assembly/blades/.../reject)
 
-Any other active state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
-                                                              → SENT_TO_ASSEMBLY
+Any active state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
 ```
 
-**14 total states:** CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, SENT_TO_ASSEMBLY, ASSEMBLY_RECEIVED, ASSEMBLY_VERIFIED, SLOT_ASSIGNED, BALANCING_IN_PROGRESS, BALANCING_COMPLETED, RETURNED_TO_OH, FINAL_VERIFICATION, COMPLETED, REJECTED, REOPENED.
+**14 total states** (`ON_HOLD` removed — it was unreachable from any UI path): CREATED, OH_INSPECTION, MEASUREMENTS_RECORDED, SENT_TO_ASSEMBLY, ASSEMBLY_RECEIVED, ASSEMBLY_VERIFIED, SLOT_ASSIGNED, BALANCING_IN_PROGRESS, BALANCING_COMPLETED, RETURNED_TO_OH, FINAL_VERIFICATION, COMPLETED, REJECTED, REOPENED.
 
-### Allowed Transitions Matrix
+**HPTR vs LPTR paths:** LPTR blades follow the full flow through assembly. HPTR blades stay at the OH station entirely — they skip SENT_TO_ASSEMBLY / ASSEMBLY_RECEIVED / ASSEMBLY_VERIFIED — and are assigned slots directly by OH_OPERATOR.
+
+### Base Transitions (all blade types)
 
 | From | To | Actor | Notes |
 |------|----|-------|-------|
-| CREATED | OH_INSPECTION | System | Auto on create |
-| OH_INSPECTION | MEASUREMENTS_RECORDED | OH_OPERATOR | Auto on first measurement |
+| CREATED | OH_INSPECTION | System | Auto on Work Order complete |
+| OH_INSPECTION | MEASUREMENTS_RECORDED | OH_OPERATOR | Auto on first measurement save |
 | OH_INSPECTION | REJECTED | Any operator | |
-| MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | |
+| MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | LPTR only |
 | MEASUREMENTS_RECORDED | REJECTED | Any operator | |
-| SENT_TO_ASSEMBLY | ASSEMBLY_RECEIVED | System | Via POST /assembly/batches/.../receive |
-| ASSEMBLY_RECEIVED | ASSEMBLY_VERIFIED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../accept |
-| ASSEMBLY_RECEIVED | REJECTED | ASSEMBLY_OPERATOR | Via POST /assembly/blades/.../reject |
-| ASSEMBLY_VERIFIED | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | Via HAL batch assign-slot |
+| SENT_TO_ASSEMBLY | ASSEMBLY_RECEIVED | ASSEMBLY_OPERATOR | Via receive endpoint |
+| ASSEMBLY_RECEIVED | ASSEMBLY_VERIFIED | ASSEMBLY_OPERATOR | Via accept endpoint |
+| ASSEMBLY_RECEIVED | REJECTED | ASSEMBLY_OPERATOR | Via reject endpoint |
+| ASSEMBLY_VERIFIED | SLOT_ASSIGNED | ASSEMBLY_OPERATOR | After HAL slot assignment |
 | SLOT_ASSIGNED | BALANCING_IN_PROGRESS | ASSEMBLY_OPERATOR | |
 | BALANCING_IN_PROGRESS | BALANCING_COMPLETED | ASSEMBLY_OPERATOR | |
-| BALANCING_COMPLETED | RETURNED_TO_OH | ASSEMBLY_OPERATOR | |
-| BALANCING_COMPLETED | COMPLETED | ASSEMBLY_OPERATOR | Skip OH return if applicable |
+| BALANCING_COMPLETED | RETURNED_TO_OH | ASSEMBLY_OPERATOR | LPTR only |
 | RETURNED_TO_OH | FINAL_VERIFICATION | OH_OPERATOR | |
-| RETURNED_TO_OH | COMPLETED | OH_OPERATOR | Direct completion |
 | FINAL_VERIFICATION | COMPLETED | OH_OPERATOR | |
 | REJECTED | REOPENED | SUPER_ADMIN | |
 | REOPENED | OH_INSPECTION | System | |
-| REOPENED | SENT_TO_ASSEMBLY | OH_OPERATOR | If already measured |
+
+### HPTR Extra Edges (`EXTRA_TRANSITIONS_BY_TYPE`)
+
+When `blade.blade_type == HPTR`, additional transitions are unlocked:
+
+| From | To | Notes |
+|------|----|-------|
+| MEASUREMENTS_RECORDED | SLOT_ASSIGNED | Skip assembly entirely |
+| BALANCING_COMPLETED | FINAL_VERIFICATION | Direct to final QA (no RETURNED_TO_OH) |
+| BALANCING_COMPLETED | MEASUREMENTS_RECORDED | Reset for rebalancing |
+| SLOT_ASSIGNED | MEASUREMENTS_RECORDED | Redo slot allocation |
+| BALANCING_IN_PROGRESS | MEASUREMENTS_RECORDED | Abort and redo |
 
 ### WorkflowEngine
 
@@ -537,18 +601,17 @@ await engine.transition(blade, to_status=BladeStatus.SENT_TO_ASSEMBLY, user=curr
 
 This section describes the end-to-end workflow that the **Assembly Station (720 Hanger)** runs after receiving a batch from OH. Implemented in `backend/app/api/v1/endpoints/assembly.py` and `backend/app/services/assembly_service.py`.
 
-### Step 1 — Receive Batch
+### Step 1 — Receive Work Order
 
 ```
-POST /assembly/batches/{batch_number}/receive
-→ All blades in batch: SENT_TO_ASSEMBLY → ASSEMBLY_RECEIVED
+POST /assembly/work-orders/{work_order_number}/receive
+→ All blades in WO: SENT_TO_ASSEMBLY → ASSEMBLY_RECEIVED
 → Creates AssemblyBladeRecord per blade (copies OH FINAL measurements)
 → Creates BatchEvent(event_type=RECEIVED_BY_ASSEMBLY)
 → Notifies OH_OPERATORs
 
-GET /assembly/batches/{batch_number}/progress
+GET /assembly/work-orders/{work_order_number}/progress
 → Returns { total_expected, assembly_received, assembly_verified, rejected }
-   total_expected falls back to 180 if no receipt record exists
 ```
 
 ### Step 2 — Verify Each Blade (assessment only — no status change)
@@ -556,7 +619,7 @@ GET /assembly/batches/{batch_number}/progress
 The operator QR-scans each blade, enters Assembly-side measurements, and calls verify. **This step does NOT change `blade.status`** — it only updates the `AssemblyBladeRecord` and returns a suggested action.
 
 ```
-POST /assembly/blades/{blade_id}/verify?batch_number=BXXX
+POST /assembly/blades/{blade_id}/verify
 body: { assembly_weight, qr_scan_result, ocr_blade_number }
 
 AssemblyService.verify_blade():
@@ -644,21 +707,21 @@ for i, blade in enumerate(interleaved):
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch; transitions all blades to ASSEMBLY_RECEIVED |
-| GET | `/assembly/batches/{batch_number}/receipt` | Any | Receipt details |
-| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress counts |
-| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with AssemblyVerificationStatus |
-| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Assess (no status change) — `?batch_number=` query param |
-| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED — `?batch_number=` query param |
-| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject → REJECTED — `?batch_number=` query param |
-| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check; returns INITIATED |
+| POST | `/assembly/work-orders/{work_order_number}/receive` | ASSEMBLY_OPERATOR | Receive work order; transitions all blades to ASSEMBLY_RECEIVED |
+| GET | `/assembly/work-orders/{work_order_number}/receipt` | ASSEMBLY_OPERATOR / QA_VIEWER | Receipt details |
+| GET | `/assembly/work-orders/{work_order_number}/progress` | ASSEMBLY_OPERATOR / QA_VIEWER | Verification progress (LPTR: ASSEMBLY_VERIFIED count; HPTR: MEASUREMENTS_RECORDED+ count) |
+| GET | `/assembly/work-orders/{work_order_number}/blades` | ASSEMBLY_OPERATOR / QA_VIEWER | Blades with AssemblyVerificationStatus |
+| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Assess vs OH records (no BladeStatus change) |
+| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED |
+| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject → REJECTED |
+| POST | `/assembly/work-orders/{work_order_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check; LPTR requires all ASSEMBLY_VERIFIED; HPTR requires all MEASUREMENTS_RECORDED+ |
 
 ---
 
 ## 7. API Reference
 
 Base path: `/api/v1`  
-**16 sub-routers** registered in `backend/app/api/v1/router.py`.
+**17 sub-routers** registered in `backend/app/api/v1/router.py`.
 
 ### Authentication
 
@@ -679,13 +742,10 @@ Base path: `/api/v1`
 | PUT | `/blades/{id}` | OH_OPERATOR | Update metadata |
 | DELETE | `/blades/{id}` | OH_OPERATOR / SUPER_ADMIN | Hard delete (see deletion rules) |
 | GET | `/blades/rejection-reasons/` | Any | List active rejection reason options |
-| GET | `/blades/batch-lookup` | Any | Fetch BatchGroup metadata by batch number |
-| POST | `/blades/batch-groups` | OH_OPERATOR | Create or update a BatchGroup record |
 | GET | `/blades/{id}/qr` | Any | Generate QR code data for blade |
 | POST | `/blades/{id}/send-to-assembly` | OH_OPERATOR | Transition to SENT_TO_ASSEMBLY |
 | POST | `/blades/{id}/return-to-oh` | ASSEMBLY_OPERATOR | Transition to RETURNED_TO_OH |
 | POST | `/blades/{id}/complete` | OH_OPERATOR / ASSEMBLY_OPERATOR | Transition to COMPLETED |
-| POST | `/blades/{id}/reject` | Any operator | Reject with reason |
 | POST | `/blades/{id}/reopen` | SUPER_ADMIN | Reopen rejected blade |
 | GET | `/blades/{id}/history` | Any | Workflow log entries |
 | POST | `/blades/{id}/attachments` | Any | Upload file attachment |
@@ -698,7 +758,7 @@ GET /blades/?page=1&page_size=20
   &status=OH_INSPECTION
   &blade_statuses=OH_INSPECTION,SLOT_ASSIGNED   # comma-separated multi-status
   &blade_type=LPTR
-  &batch_number=B2026-01
+  &work_order_number=WO-2026-001
   &sort_by=created_at
   &sort_desc=true
 ```
@@ -712,11 +772,12 @@ GET /blades/?page=1&page_size=20
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/blades/{id}/measurements` | OH_OPERATOR | Record; auto-transitions to MEASUREMENTS_RECORDED |
+| POST | `/blades/{id}/measurements` | OH_OPERATOR | Record weight; auto-transitions to MEASUREMENTS_RECORDED |
 | GET | `/blades/{id}/measurements` | Any | Measurement history |
 | GET | `/measurements/{id}` | Any | Single measurement |
 | PUT | `/measurements/{id}` | OH_OPERATOR | Update (pre-approval only) |
-| POST | `/measurements/{id}/approve` | QA_VIEWER | QA sign-off |
+| PATCH | `/blades/{id}/rocking-creep` | OH_OPERATOR | Save rocking/creep independently; creates INITIAL if none exists |
+| POST | `/measurements/{id}/approve` | OH_OPERATOR / SUPER_ADMIN | QA sign-off (was QA_VIEWER) |
 
 ### Slots
 
@@ -728,45 +789,72 @@ GET /blades/?page=1&page_size=20
 | GET | `/slots/` | Any | List active slot allocations (paginated, filterable) |
 | GET | `/slots/blade/{blade_id}` | Any | Get current active slot for a blade |
 
-### Batches
+### Work Orders (replaces Batches)
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/batches/` | Any | List all batches with current status |
-| GET | `/batches/{batch_number}` | Any | Batch detail + full event history |
-| POST | `/batches/{batch_number}/send-to-assembly` | OH_OPERATOR | Bulk-send all eligible blades in batch |
-| POST | `/batches/{batch_number}/assign-slot` | ASSEMBLY_OPERATOR | Run HAL algorithm + assign all slots |
-| GET | `/batches/{batch_number}/rocking-creep` | Any | Rocking/creep values for all blades in batch |
-| POST | `/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Mark batch received |
-| POST | `/batches/{batch_number}/accept` | ASSEMBLY_OPERATOR | Bulk-accept remaining unverified blades |
-| POST | `/batches/{batch_number}/modify` | ASSEMBLY_OPERATOR | Apply blade-level field modifications |
-| POST | `/batches/{batch_number}/events` | ASSEMBLY_OPERATOR | Log a raw batch event |
+| POST | `/work-orders/` | OH_OPERATOR | Create Work Order + 90 scaffold blade rows |
+| GET | `/work-orders/` | Any | Paginated list |
+| GET | `/work-orders/{wo_number}` | Any | Full detail including all 90 rows |
+| PUT | `/work-orders/{wo_number}` | OH_OPERATOR | Update header fields |
+| GET | `/work-orders/{wo_number}/rows` | Any | List all 90 blade rows |
+| PUT | `/work-orders/{wo_number}/rows/{s_no}` | OH_OPERATOR | Autosave single row (melt, weight, OCR) |
+| POST | `/work-orders/{wo_number}/rows/bulk-import` | OH_OPERATOR | Excel file import (partial success) |
+| POST | `/work-orders/{wo_number}/complete` | OH_OPERATOR | Lock entry; transitions all blades CREATED→OH_INSPECTION→MEASUREMENTS_RECORDED |
+| POST | `/work-orders/{wo_number}/send-to-assembly` | OH_OPERATOR | LPTR: bulk SENT_TO_ASSEMBLY |
+| GET | `/work-orders/{wo_number}/rocking-creep` | Any | Rocking/creep for all blades |
+| POST | `/work-orders/{wo_number}/rocking-creep/complete` | OH_OPERATOR | Lock rocking/creep |
+| POST | `/work-orders/{wo_number}/assign-slot` | ASSEMBLY_OPERATOR / OH_OPERATOR | Run HAL + assign slots |
+| GET | `/work-orders/{wo_number}/slot-summary` | Any | Slot occupancy by W1/W2 |
+| POST | `/work-orders/{wo_number}/events` | ASSEMBLY_OPERATOR | Log batch event |
+| GET | `/work-orders/{wo_number}/events` | Any | Batch event history |
+| GET | `/work-orders/{wo_number}/progress` | Any | Verification progress counts |
+| POST | `/work-orders/{wo_number}/accept` | OH_OPERATOR | Accept returned WO from Assembly |
+| GET | `/work-orders/{wo_number}/blades` | Any | All blades in this WO |
 
 ### Assembly (Section 6 for detail)
 
 See [Section 6](#6-assembly-verification--set-making) for the full assembly verification workflow.
 
-> Note: the per-blade endpoints (`verify`, `accept`, `reject`) take `batch_number` as a **query parameter**, not a path segment: `POST /assembly/blades/{blade_id}/verify?batch_number=BXXX`
+> Note: the per-blade endpoints (`verify`, `accept`, `reject`) no longer require a `batch_number` query parameter — they now resolve the work order from the blade record directly.
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/assembly/batches/{batch_number}/receive` | ASSEMBLY_OPERATOR | Receive batch; transitions all blades to ASSEMBLY_RECEIVED |
-| GET | `/assembly/batches/{batch_number}/receipt` | Any | Receipt details |
-| GET | `/assembly/batches/{batch_number}/progress` | Any | Verification progress counts |
-| GET | `/assembly/batches/{batch_number}/blades` | Any | Blades with AssemblyVerificationStatus |
-| POST | `/assembly/blades/{blade_id}/verify?batch_number=` | ASSEMBLY_OPERATOR | Assess vs OH — no BladeStatus change |
-| POST | `/assembly/blades/{blade_id}/accept?batch_number=` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED |
-| POST | `/assembly/blades/{blade_id}/reject?batch_number=` | ASSEMBLY_OPERATOR | Reject → REJECTED |
-| POST | `/assembly/batches/{batch_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check; HAL runs via `/batches/.../assign-slot` |
+| POST | `/assembly/work-orders/{work_order_number}/receive` | ASSEMBLY_OPERATOR | Receive; transitions all blades → ASSEMBLY_RECEIVED |
+| GET | `/assembly/work-orders/{work_order_number}/receipt` | ASSEMBLY_OPERATOR / QA_VIEWER | Receipt details |
+| GET | `/assembly/work-orders/{work_order_number}/progress` | ASSEMBLY_OPERATOR / QA_VIEWER | Verification progress counts |
+| GET | `/assembly/work-orders/{work_order_number}/blades` | ASSEMBLY_OPERATOR / QA_VIEWER | Blades with AssemblyVerificationStatus |
+| POST | `/assembly/blades/{blade_id}/verify` | ASSEMBLY_OPERATOR | Assess vs OH — no BladeStatus change |
+| POST | `/assembly/blades/{blade_id}/accept` | ASSEMBLY_OPERATOR | Accept → ASSEMBLY_VERIFIED |
+| POST | `/assembly/blades/{blade_id}/reject` | ASSEMBLY_OPERATOR | Reject → REJECTED |
+| POST | `/assembly/work-orders/{work_order_number}/start-setmaking` | ASSEMBLY_OPERATOR | Gate check only |
+
+### LPTR Balancing (new)
+
+Prefix: `/lptr`. Requires ASSEMBLY_OPERATOR or SUPER_ADMIN.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/lptr/{wo_number}/empty-rotor` | Get empty-rotor reading for this WO |
+| POST | `/lptr/{wo_number}/empty-rotor` | Save empty-rotor unbalance measurement |
+| GET | `/lptr/{wo_number}/balancing-check` | Get stage 1/2 balancing check records |
+| POST | `/lptr/{wo_number}/balancing-check` | Save balancing check (pass/fail vs LPTR_UNBALANCE_LIMIT_G) |
+| GET | `/lptr/{wo_number}/manual-correction` | Get manual correction records |
+| POST | `/lptr/{wo_number}/manual-correction` | Log a correction (REARRANGEMENT / BALANCING_ADJUSTMENT / MANUFACTURER_REPLACEMENT_REQUEST) |
 
 ### Reports
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/reports/` | Any | Request async generation |
+| POST | `/reports/` | Any | Request async generation (202, returns Report ID) |
 | GET | `/reports/` | Any | List reports |
 | GET | `/reports/{id}` | Any | Status + metadata |
+| DELETE | `/reports/{id}` | Any | Delete report record + file |
 | GET | `/reports/{id}/download` | Any | StreamingResponse download |
+| POST | `/reports/export/blades` | Any | Sync Excel export (≤5000 rows) |
+| GET | `/reports/export/batch` | Any | Sync export for one WO (`?work_order_number=&format=excel\|pdf`) |
+| POST | `/reports/export/hptr-slots` | OH_OPERATOR | HPTR slot allocation export (W1 slots 1-45 / W2 slots 46-90) |
+| POST | `/reports/export/lptr-slots` | ASSEMBLY_OPERATOR | LPTR slot export + Balancing & Corrections audit sheet |
 
 ### DTI Gauge
 
@@ -794,10 +882,10 @@ The `/sync` router exposes read-only endpoints on the OH PC that the Assembly st
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/sync/status` | Station identity: `{ station_type, station_name, api_version, synced_at, status }` |
-| GET | `/sync/blades` | Blade snapshot. Filters: `?batch_number=`, `?status=`. Response: `OHSyncResponse` with flat field `weight` (not `weight_grams`) |
-| GET | `/sync/batches/{batch_number}` | Single batch snapshot |
+| GET | `/sync/blades` | Blade snapshot. Filters: `?work_order_number=`, `?status=`. Response: `OHSyncResponse` with flat field `weight` (not `weight_grams`) |
+| GET | `/sync/work-orders/{wo_number}` | Single Work Order snapshot |
 
-`station_type` and `station_name` in `/sync/status` fall back to hardcoded strings if `STATION_TYPE` / `STATION_NAME` env vars are not set.
+`station_role` and `station_name` in `/sync/status` are set via `STATION_ROLE` (not `STATION_TYPE`) and `STATION_NAME` env vars.
 
 ### Other Endpoints
 
@@ -1211,26 +1299,37 @@ pyzbar==0.1.9                                # QR/barcode decode fallback
   "blade_type": "LPTR",
   "date_from": "2026-01-01",
   "date_to": "2026-06-30",
-  "batch_number": "B2026-01",
-  "serial_number": "SN010001"
+  "work_order_number": "WO-2026-001",
+  "serial_number": "01"
 }
 ```
 
-### Report Structure
+### Report Structure (Async — POST /reports/)
 
-The generator (`backend/app/reports/generator.py`) produces **5 sheets/sections**:
+The async generator (`backend/app/reports/generator.py`) produces **5 sheets**:
 
 | Sheet | Contents |
 |-------|----------|
-| 1 — Summary | Serial, melt, status, station, created, updated |
+| 1 — Summary | S.No, melt, WO number, status, station, created, updated |
 | 2 — Measurements | Type, weight, static moment, rocking, creep, date, station |
-| 3 — Slot Allocations | Serial, slot #, position, balanced flag, imbalance value |
+| 3 — Slot Allocations | S.No, slot #, stage, group_id, balanced flag, imbalance value |
 | 4 — Workflow History | From/to status, actor, timestamp |
-| 5 — Batch Traceability | Batch #, serial, melt, blade type, status, slot, rocking, creep |
+| 5 — Work Order Traceability | WO number, S.No, melt, blade type, status, slot, rocking, creep |
 
 A **Dashboard Summary** report (separate type) additionally includes: total blade count, blades by status, blades by station, rejection rate %, average processing hours.
 
-The IRS logical sections (A–G, described in Section 13) map across these 5 sheets.
+### Sync Export Endpoints (POST /reports/export/...)
+
+Four synchronous (inline) export endpoints return files directly without creating a Report record:
+
+| Endpoint | Output | Contents |
+|----------|--------|----------|
+| `POST /export/blades` | Excel | Up to 5000 blade rows with all fields; accepts same filters as `GET /blades/` |
+| `GET /export/batch?work_order_number=&format=excel\|pdf` | Excel or PDF | Full single-WO report (all 5 sheets in Excel; styled PDF) |
+| `POST /export/hptr-slots` | Excel | HPTR slot allocation with **W1/W2 split** at slot 45 (slots 1-45 = W1, 46-90 = W2) |
+| `POST /export/lptr-slots` | Excel | LPTR slot allocation + **Balancing & Corrections** audit sheet (empty-rotor readings, stage 1/2 checks, all manual corrections) |
+
+The IRS logical sections (A–G, described in Section 13) map across the async report sheets.
 
 ---
 
@@ -1261,14 +1360,12 @@ Example: IRS-45786-SN010001-20260618
 | Blade Type | `blade.blade_type` |
 | Engine Hours | `blade.engine_hours` |
 | Component Hours | `blade.component_hours` |
-| Batch Number | `blade.batch_number` |
 | Inspection Station | `blade.current_station_id → station.name` |
 
 #### Section B — OCR Verification
 
 | Field | Source |
 |-------|--------|
-| OCR Serial No. (extracted) | `blade.ocr_serial_number` |
 | OCR Melt No. (extracted) | `blade.ocr_melt_number` |
 | OCR Provider | Attachment metadata |
 | Confidence Score | OCR result (0.0 – 1.0) |
@@ -1355,7 +1452,7 @@ For the two-station deployment:
 | `backend` | custom (Dockerfile) | 4 Gunicorn workers; port 8000 internal |
 | `celery_worker` | same as backend | Queues: reports, celery; concurrency: 2 |
 | `frontend` | custom (Dockerfile) | Static SPA served via NGINX |
-| `nginx` | nginx:1.27-alpine | Entry point; ports 80, 443 |
+| `nginx` | nginx:1.27-alpine | Entry point; port 80 (HTTP-only — private LAN deployment) |
 
 All services share Docker network `blade_rocking_net`.
 
@@ -1367,8 +1464,28 @@ redis_data      — persistent Redis AOF/RDB
 ./uploads       — file attachments + OCR scans (bind mount)
 ./reports       — generated reports (bind mount)
 ./logs          — structured logs (bind mount)
-./ssl           — TLS certificates (production)
 ```
+
+### Native Stack (no Docker)
+
+For workstations without Docker, two scripts manage the full stack natively:
+
+| Script | Purpose |
+|--------|--------|
+| `scripts/run_native.sh` | Installs PostgreSQL + Redis via apt (if absent), creates `blade_rocking` DB and `blade_user` role, writes `backend/.env`, starts uvicorn + celery + vite in background |
+| `scripts/stop_native.sh` | Stops uvicorn, celery, and vite processes started by `run_native.sh` |
+
+### Windows Scheduled Tasks (Hardware Bridges)
+
+`scripts/register_bridge_tasks.ps1` registers the three hardware bridge scripts as Windows Scheduled Tasks:
+
+- **Trigger:** At user logon (20 second delay to allow the OS to settle)
+- **Restart:** Up to 999 times at 1-minute intervals if the process exits
+- **Tasks registered:** `BladeRocking_WeighingBridge`, `BladeRocking_DTIBridge`, `BladeRocking_OAK1Camera`
+- **Python path:** `C:\Users\ADMIN\AppData\Local\Python\bin\python.exe`
+- **Scripts dir:** `C:\blade-rocking\scripts`
+
+Run once as Administrator: `powershell -ExecutionPolicy Bypass -File scripts/register_bridge_tasks.ps1`
 
 ### CI/CD (GitHub Actions)
 
@@ -1387,10 +1504,16 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-Existing migrations:
+Key migrations applied:
 - `20260529_initial_schema` — bootstrap
 - `20260601_add_blade_type` — `blade_type` ENUM (LPTR/HPTR)
-- `20260616_add_sent_to_assembly_batch_event` — batch event tracking
+- `20260616_add_sent_to_assembly_batch_event` — batch event type additions
+- `20260630_assembly_workflow` — ASSEMBLY_RECEIVED + ASSEMBLY_VERIFIED states
+- `20260714_remove_height_dti_positions` — drop `height_data` JSONB from measurements
+- `20260715_drop_nomenclature_ocr_serial` — drop `nomenclature`, `ocr_serial_number`, `batch_number`, `rejection_reason_id` from blades
+- `20260716_add_work_order` — `work_orders` table + `work_order_id` FK on blades
+- `20260720_slot_stage_group` — `stage` + `group_id` on slot_allocations
+- `20260721_lptr_balancing_tables` — `lptr_empty_rotor_readings`, `lptr_balancing_checks`, `lptr_manual_corrections`
 
 ---
 
@@ -1401,9 +1524,9 @@ Existing migrations:
 | Password hashing | bcrypt, cost factor 12 |
 | JWT signing | PyJWT 2.x, HS256, 64-char random `SECRET_KEY` |
 | Token revocation | Redis blacklist keyed on JWT `jti` |
-| Transport security | NGINX TLS (configurable; self-signed in dev) |
+| Transport security | HTTP-only on private LAN (no TLS — internal network deployment) |
 | CORS | Origin whitelist via `CORS_ORIGINS` env var |
-| Rate limiting | SlowAPI middleware (10 req/min default per IP) |
+| Rate limiting | NGINX `limit_req` — API: 30r/s burst=60; auth: 20r/min burst=10; static: 30r/s burst=50 |
 | Input validation | Pydantic v2 strict schemas on all endpoints |
 | SQL injection | SQLAlchemy parameterized queries only |
 | Audit trail | Every HTTP request + domain event logged to `audit_logs` |
@@ -1456,27 +1579,34 @@ Defined in `frontend/src/routes/index.tsx`. Role-based routing enforced client-s
 
 **Landing page by role:** `SUPER_ADMIN` → `/dashboard`; `QA_VIEWER` → `/qa-dashboard`; all others → `/batch-tracking`.
 
-| Route | Page | Minimum Role |
-|-------|------|-------------|
-| `/login` | LoginPage | Public |
-| `/` | RoleHome (redirect) | Authenticated |
-| `/dashboard` | DashboardPage | SUPER_ADMIN |
-| `/qa-dashboard` | QaDashboardPage | QA_VIEWER |
-| `/blades/new` | BladeEntryPage | OH_OPERATOR |
-| `/blades/:id` | BladeDetailPage | Any |
-| `/blades/:id/timeline` | WorkflowTimelinePage | Any |
-| `/oh-queue` | OHQueuePage | OH_OPERATOR |
-| `/assembly-queue` | AssemblyQueuePage | ASSEMBLY_OPERATOR |
-| `/slots` | SlotAllocationPage | ASSEMBLY_OPERATOR |
-| `/rocking-creep` | RockingCreepPage | OH_OPERATOR |
-| `/assembly/verify/:batchNumber` | AssemblyVerificationPage | ASSEMBLY_OPERATOR |
-| `/batch-tracking` | BatchTrackingPage | Any |
-| `/batches/:batchNumber/modify` | ModifyBatchPage | ASSEMBLY_OPERATOR |
-| `/batches/:batchNumber/accept` | AcceptBatchPage | ASSEMBLY_OPERATOR |
-| `/reports` | ReportsPage | Any |
-| `/users` | UserManagementPage | SUPER_ADMIN |
-| `/notifications` | NotificationsPage | Authenticated |
-| `/settings` | SettingsPage | Authenticated |
+22 application routes + 5 redirect aliases. Role-based routing enforced client-side.
+
+| Route | Page | Minimum Role | Notes |
+|-------|------|-------------|-------|
+| `/login` | LoginPage | Public | |
+| `/` | RoleHome (redirect) | Authenticated | |
+| `/dashboard` | DashboardPage | SUPER_ADMIN | |
+| `/qa-dashboard` | QaDashboardPage | QA_VIEWER | Camera source toggle for OAK-1 |
+| `/blades/new` | BladeEntryPage | OH_OPERATOR | Redirected from `/work-orders/new` |
+| `/blades/:workOrderNumber/entry` | BladeEntryPage | OH_OPERATOR | 90-row grid entry |
+| `/blades/:id` | BladeDetailPage | Any | |
+| `/blades/:id/timeline` | WorkflowTimelinePage | Any | |
+| `/oh-queue` | OHQueuePage | OH_OPERATOR | |
+| `/oh/slot-allocation` | OHSlotAllocationPage | OH_OPERATOR | HPTR set-making + balancing at OH |
+| `/assembly-queue` | AssemblyQueuePage | ASSEMBLY_OPERATOR | |
+| `/slots` | SlotAllocationPage | ASSEMBLY_OPERATOR | LPTR slot assignment |
+| `/rocking-creep` | RockingCreepPage | OH_OPERATOR | |
+| `/assembly/verify/:workOrderNumber` | AssemblyVerificationPage | ASSEMBLY_OPERATOR | |
+| `/batch-tracking` | BatchTrackingPage | Any | Lists Work Orders (not batches) |
+| `/work-orders/:woNumber/modify` | ModifyBatchPage | ASSEMBLY_OPERATOR | |
+| `/work-orders/:woNumber/accept` | AcceptBatchPage | OH_OPERATOR | Accept returned WO |
+| `/reports` | ReportsPage | Any | Async + sync export triggers |
+| `/users` | UserManagementPage | SUPER_ADMIN | |
+| `/notifications` | NotificationsPage | Authenticated | |
+| `/settings` | SettingsPage | Authenticated | |
+| `/profile` | MyProfile | Authenticated | User profile + password change |
+
+**Redirect aliases:** `/work-orders` → `/batch-tracking`; `/batches/:n/modify` → `/work-orders/:n/modify`; `/batches/:n/accept` → `/work-orders/:n/accept`; `/blades/new` → `/blades/:wn/entry`; `/assembly/verify/:n` kept for legacy links.
 
 ---
 
@@ -1511,13 +1641,12 @@ CORS_ORIGINS=["https://your-domain.internal"]
 
 ```bash
 # Two-station deployment (Assembly PC only)
-STATION_ROLE=ASSEMBLY          # "OH" or "ASSEMBLY"
-STATION_TYPE=ASSEMBLY          # Used in /sync/status response
+STATION_ROLE=ASSEMBLY          # "OH" or "ASSEMBLY" — controls sync/status response
 STATION_NAME="Assembly Station — 720 Hanger"   # Used in /sync/status response
-OH_SYNC_URL=https://192.168.1.50
+OH_SYNC_URL=http://192.168.1.50
 
 # OCR backend (default: paddleocr — set mock for dev without PaddleOCR installed)
-OCR_PROVIDER=mock              # mock | tesseract | paddleocr
+OCR_PROVIDER=paddleocr         # mock | tesseract | paddleocr — default is paddleocr
 
 # OAK-1 camera companion service (frontend env var, not backend)
 # VITE_OAK1_SERVICE_URL=http://localhost:8089   # default; set if service runs on different host/port

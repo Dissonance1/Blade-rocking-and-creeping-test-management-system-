@@ -280,7 +280,10 @@ export default function OHQueuePage() {
 
   // All work order numbers from the batch list — not limited by blade pagination
   const workOrderNumbers = useMemo(
-    () => [...new Set(batches.map((b) => b.work_order_number))].sort(),
+    () =>
+      [...new Set(batches.map((b) => b.work_order_number))].sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true })
+      ),
     [batches]
   );
 

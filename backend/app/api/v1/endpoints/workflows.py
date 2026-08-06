@@ -325,6 +325,40 @@ async def daily_throughput(
 # ---------------------------------------------------------------------------
 
 
+def _timeline_actor(log_entry) -> str | None:
+    if log_entry and log_entry.action_by:
+        return log_entry.action_by.username
+    return None
+
+
+def _build_timeline_step(step_num: int, step_status, status_to_log: dict, step_index: int, current_index: int, current_status, status_labels: dict) -> dict:
+    log_entry = status_to_log.get(step_status)
+    is_completed = step_index < current_index or current_status == step_status
+    return {
+        "step_number": step_num,
+        "status": step_status.value,
+        "label": status_labels.get(step_status, step_status.value),
+        "completed": is_completed,
+        "current": current_status == step_status,
+        "timestamp": log_entry.timestamp.isoformat() if log_entry else None,
+        "actor": _timeline_actor(log_entry),
+        "remarks": log_entry.remarks if log_entry else None,
+    }
+
+
+def _build_special_status(current_status, status_to_log: dict, status_labels: dict) -> dict | None:
+    if current_status not in {BladeStatus.REJECTED, BladeStatus.REOPENED}:
+        return None
+    special_log = status_to_log.get(current_status)
+    return {
+        "status": current_status.value,
+        "label": status_labels.get(current_status, current_status.value),
+        "timestamp": special_log.timestamp.isoformat() if special_log else None,
+        "actor": _timeline_actor(special_log),
+        "remarks": special_log.remarks if special_log else None,
+    }
+
+
 @router.get(
     "/timeline/{blade_id}",
     status_code=status.HTTP_200_OK,
@@ -413,46 +447,16 @@ async def get_blade_timeline(
     current_status = blade.status
     current_index = WORKFLOW_ORDER.index(current_status) if current_status in WORKFLOW_ORDER else -1
 
-    timeline_steps = []
-    for step_num, step_status in enumerate(WORKFLOW_ORDER, start=1):
-        step_index = WORKFLOW_ORDER.index(step_status)
-        log_entry = status_to_log.get(step_status)
-
-        is_completed = step_index < current_index or current_status == step_status
-        is_current = current_status == step_status
-
-        timeline_steps.append(
-            {
-                "step_number": step_num,
-                "status": step_status.value,
-                "label": STATUS_LABELS.get(step_status, step_status.value),
-                "completed": is_completed,
-                "current": is_current,
-                "timestamp": log_entry.timestamp.isoformat() if log_entry else None,
-                "actor": (
-                    log_entry.action_by.username
-                    if log_entry and log_entry.action_by
-                    else None
-                ),
-                "remarks": log_entry.remarks if log_entry else None,
-            }
+    timeline_steps = [
+        _build_timeline_step(
+            step_num, step_status, status_to_log,
+            WORKFLOW_ORDER.index(step_status), current_index, current_status, STATUS_LABELS,
         )
+        for step_num, step_status in enumerate(WORKFLOW_ORDER, start=1)
+    ]
 
     # Append special statuses if applicable
-    special_status = None
-    if current_status in {BladeStatus.REJECTED, BladeStatus.REOPENED}:
-        special_log = status_to_log.get(current_status)
-        special_status = {
-            "status": current_status.value,
-            "label": STATUS_LABELS.get(current_status, current_status.value),
-            "timestamp": special_log.timestamp.isoformat() if special_log else None,
-            "actor": (
-                special_log.action_by.username
-                if special_log and special_log.action_by
-                else None
-            ),
-            "remarks": special_log.remarks if special_log else None,
-        }
+    special_status = _build_special_status(current_status, status_to_log, STATUS_LABELS)
 
     return {
         "blade": {

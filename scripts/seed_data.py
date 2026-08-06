@@ -77,6 +77,8 @@ STATIONS = [
     },
 ]
 
+_DEV_PASSWORD = "Test@123"
+
 USERS = [
     {
         "email": "admin@bladerocking.com",
@@ -90,7 +92,7 @@ USERS = [
     {
         "email": "oh.operator@bladerocking.com",
         "username": "oh.operator",
-        "password": "Test@123",
+        "password": _DEV_PASSWORD,
         "full_name": "OH Operator",
         "role": RoleName.OH_OPERATOR,
         "is_superuser": False,
@@ -99,7 +101,7 @@ USERS = [
     {
         "email": "assembly@bladerocking.com",
         "username": "assembly.operator",
-        "password": "Test@123",
+        "password": _DEV_PASSWORD,
         "full_name": "Assembly Operator",
         "role": RoleName.ASSEMBLY_OPERATOR,
         "is_superuser": False,
@@ -108,7 +110,7 @@ USERS = [
     {
         "email": "qa.viewer@bladerocking.com",
         "username": "qa.viewer",
-        "password": "Test@123",
+        "password": _DEV_PASSWORD,
         "full_name": "QA Viewer",
         "role": RoleName.QA_VIEWER,
         "is_superuser": False,
@@ -218,6 +220,102 @@ async def _get_or_create_user(
     return user
 
 
+async def _get_or_create_work_order(db, wo_number, base, part_number, engine_no, blade_type, oh_user):
+    work_order = (
+        await db.execute(select(WorkOrder).where(WorkOrder.work_order_number == wo_number))
+    ).scalar_one_or_none()
+    if work_order is not None:
+        _log_exists(f"WorkOrder {wo_number}")
+        return work_order, False
+
+    work_order = WorkOrder(
+        id=uuid.uuid4(),
+        work_order_number=wo_number,
+        shop_order_number=f"SO{base}",
+        part_number=part_number,
+        blade_type=blade_type,
+        engine_number=engine_no,
+        engine_hours=f"{round(random.uniform(500, 5000), 2)}:00:00",
+        component_hours=f"{round(random.uniform(200, 3000), 2)}:00:00",
+        created_by_id=oh_user.id,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(work_order)
+    await db.flush()
+    return work_order, True
+
+
+async def _get_or_create_blade(db, work_order, wo_idx, s_no, blade_type, oh_user, oh_station):
+    serial = f"{s_no:02d}"
+    blade = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_id == work_order.id,
+                Blade.serial_number == serial,
+            )
+        )
+    ).scalar_one_or_none()
+    if blade is not None:
+        return blade, False
+
+    blade = Blade(
+        id=uuid.uuid4(),
+        serial_number=serial,
+        melt_number=f"MLT{wo_idx:02d}{s_no:04d}",
+        work_order_id=work_order.id,
+        work_order_number=work_order.work_order_number,
+        shop_order_number=work_order.shop_order_number,
+        part_number=work_order.part_number,
+        engine_number=work_order.engine_number,
+        engine_hours=work_order.engine_hours,
+        component_hours=work_order.component_hours,
+        blade_type=blade_type,
+        status=BladeStatus.OH_INSPECTION,
+        current_station_id=oh_station.id,
+        created_by_id=oh_user.id,
+        ocr_mismatch_flag=False,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(blade)
+    await db.flush()
+    return blade, True
+
+
+async def _ensure_initial_measurement(db, blade, blade_type, oh_user, oh_station) -> None:
+    """Mirrors the entry-grid weight capture (weight_grams -> static_moment_gcm)
+    plus the post-slot-allocation rocking/creep entry — LPTR requires both
+    rocking and creep, HPTR rocking only."""
+    existing = (
+        await db.execute(
+            select(Measurement).where(
+                Measurement.blade_id == blade.id,
+                Measurement.measurement_type == MeasurementType.INITIAL,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+
+    weight_grams = round(random.uniform(150.0, 260.0), 4)
+    creep_value = round(random.uniform(0.05, 0.25), 6) if blade_type == BladeType.LPTR else None
+    db.add(
+        Measurement(
+            id=uuid.uuid4(),
+            blade_id=blade.id,
+            measurement_type=MeasurementType.INITIAL,
+            weight_grams=weight_grams,
+            static_moment_gcm=round(weight_grams * STATIC_MOMENT_FACTOR, 4),
+            rocking_value=round(random.uniform(0.015, 0.045), 6),
+            creep_value=creep_value,
+            measured_by_id=oh_user.id,
+            station_id=oh_station.id,
+            measured_at=datetime.now(timezone.utc),
+        )
+    )
+
+
 async def _create_sample_blades(
     db: AsyncSession,
     oh_user: User,
@@ -257,99 +355,23 @@ async def _create_sample_blades(
         base = f"{ENGINE_STRIP}_{PART_SUFFIX}_{date_sfx}"
         wo_number = f"{base}_{blade_type.value}"
 
-        work_order = (
-            await db.execute(select(WorkOrder).where(WorkOrder.work_order_number == wo_number))
-        ).scalar_one_or_none()
-        if work_order is None:
-            work_order = WorkOrder(
-                id=uuid.uuid4(),
-                work_order_number=wo_number,
-                shop_order_number=f"SO{base}",
-                part_number=PART_NUMBER,
-                blade_type=blade_type,
-                engine_number=ENGINE_NO,
-                engine_hours=f"{round(random.uniform(500, 5000), 2)}:00:00",
-                component_hours=f"{round(random.uniform(200, 3000), 2)}:00:00",
-                created_by_id=oh_user.id,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            db.add(work_order)
-            await db.flush()
+        work_order, was_created = await _get_or_create_work_order(
+            db, wo_number, base, PART_NUMBER, ENGINE_NO, blade_type, oh_user
+        )
+        if was_created:
             total_work_orders += 1
             _log_created(f"WorkOrder {wo_number}  ({blade_type.value}, {BLADES_PER_WORK_ORDER} blades)")
-        else:
-            _log_exists(f"WorkOrder {wo_number}")
 
         created_in_wo = 0
         for s_no in range(1, BLADES_PER_WORK_ORDER + 1):
-            serial = f"{s_no:02d}"
-            blade = (
-                await db.execute(
-                    select(Blade).where(
-                        Blade.work_order_id == work_order.id,
-                        Blade.serial_number == serial,
-                    )
-                )
-            ).scalar_one_or_none()
-
-            if blade is None:
-                blade = Blade(
-                    id=uuid.uuid4(),
-                    serial_number=serial,
-                    melt_number=f"MLT{wo_idx:02d}{s_no:04d}",
-                    work_order_id=work_order.id,
-                    work_order_number=wo_number,
-                    shop_order_number=work_order.shop_order_number,
-                    part_number=PART_NUMBER,
-                    engine_number=ENGINE_NO,
-                    engine_hours=work_order.engine_hours,
-                    component_hours=work_order.component_hours,
-                    blade_type=blade_type,
-                    status=BladeStatus.OH_INSPECTION,
-                    current_station_id=oh_station.id,
-                    created_by_id=oh_user.id,
-                    ocr_mismatch_flag=False,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-                db.add(blade)
-                await db.flush()
+            blade, blade_created = await _get_or_create_blade(
+                db, work_order, wo_idx, s_no, blade_type, oh_user, oh_station
+            )
+            if blade_created:
                 created_in_wo += 1
                 total_blades += 1
 
-            existing_measurement = (
-                await db.execute(
-                    select(Measurement).where(
-                        Measurement.blade_id == blade.id,
-                        Measurement.measurement_type == MeasurementType.INITIAL,
-                    )
-                )
-            ).scalar_one_or_none()
-
-            if existing_measurement is None:
-                # Mirrors the entry-grid weight capture (weight_grams ->
-                # static_moment_gcm) plus the post-slot-allocation rocking/creep
-                # entry — LPTR requires both rocking and creep, HPTR rocking only.
-                weight_grams = round(random.uniform(150.0, 260.0), 4)
-                db.add(
-                    Measurement(
-                        id=uuid.uuid4(),
-                        blade_id=blade.id,
-                        measurement_type=MeasurementType.INITIAL,
-                        weight_grams=weight_grams,
-                        static_moment_gcm=round(weight_grams * STATIC_MOMENT_FACTOR, 4),
-                        rocking_value=round(random.uniform(0.015, 0.045), 6),
-                        creep_value=(
-                            round(random.uniform(0.05, 0.25), 6)
-                            if blade_type == BladeType.LPTR
-                            else None
-                        ),
-                        measured_by_id=oh_user.id,
-                        station_id=oh_station.id,
-                        measured_at=datetime.now(timezone.utc),
-                    )
-                )
+            await _ensure_initial_measurement(db, blade, blade_type, oh_user, oh_station)
 
             # Flush every 50 blades to avoid huge in-memory batches
             if total_blades % 50 == 0:

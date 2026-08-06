@@ -19,7 +19,6 @@ GET    /blades/{blade_id}/attachments
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
@@ -144,6 +143,73 @@ async def _log_workflow_transition(
 # ---------------------------------------------------------------------------
 
 
+def _build_blade_filters(
+    serial_number, melt_number, work_order_number, part_number,
+    blade_type, blade_status, blade_statuses, station_id,
+    assigned_to_id, created_by_id, ocr_mismatch_only, date_from, date_to,
+):
+    """Build the SQLAlchemy WHERE conditions for the blade list/search filters."""
+    from app.models.blade import Blade
+    import datetime as dt
+    from sqlalchemy import cast, Date
+
+    conditions = [Blade.deleted_at.is_(None)]
+    if serial_number:
+        conditions.append(Blade.serial_number.ilike(f"%{serial_number}%"))
+    if melt_number:
+        conditions.append(Blade.melt_number.ilike(f"%{melt_number}%"))
+    if work_order_number:
+        conditions.append(Blade.work_order_number.ilike(f"%{work_order_number}%"))
+    if part_number:
+        conditions.append(Blade.part_number.ilike(f"%{part_number}%"))
+    if blade_type:
+        conditions.append(Blade.blade_type == blade_type)
+    if blade_status:
+        conditions.append(Blade.status == blade_status)
+    if blade_statuses:
+        status_list = [s.strip() for s in blade_statuses.split(",") if s.strip() in BladeStatus.__members__]
+        if status_list:
+            conditions.append(Blade.status.in_(status_list))
+    if station_id:
+        conditions.append(Blade.current_station_id == station_id)
+    if assigned_to_id:
+        conditions.append(Blade.assigned_to_id == assigned_to_id)
+    if created_by_id:
+        conditions.append(Blade.created_by_id == created_by_id)
+    if ocr_mismatch_only:
+        conditions.append(Blade.ocr_mismatch_flag.is_(True))
+    if date_from:
+        conditions.append(cast(Blade.created_at, Date) >= dt.date.fromisoformat(date_from))
+    if date_to:
+        conditions.append(cast(Blade.created_at, Date) <= dt.date.fromisoformat(date_to))
+    return conditions
+
+
+async def _fetch_latest_measurements(db: AsyncSession, blade_ids: list) -> dict:
+    """Latest INITIAL measurement (weight/static moment) per blade, keyed by str(blade_id)."""
+    from app.models.measurement import Measurement
+
+    meas_by_blade: dict = {}
+    if not blade_ids:
+        return meas_by_blade
+
+    subq = (
+        select(Measurement.blade_id, func.max(Measurement.measured_at).label("latest_at"))
+        .where(Measurement.blade_id.in_(blade_ids), Measurement.measurement_type == "INITIAL")
+        .group_by(Measurement.blade_id)
+        .subquery()
+    )
+    meas_q = select(Measurement.blade_id, Measurement.weight_grams, Measurement.static_moment_gcm).join(
+        subq, (Measurement.blade_id == subq.c.blade_id) & (Measurement.measured_at == subq.c.latest_at)
+    )
+    for row in (await db.execute(meas_q)).all():
+        meas_by_blade[str(row.blade_id)] = {
+            "weight_grams": float(row.weight_grams) if row.weight_grams else None,
+            "static_moment_gcm": float(row.static_moment_gcm) if row.static_moment_gcm else None,
+        }
+    return meas_by_blade
+
+
 @router.get(
     "/",
     response_model=PaginatedResponse[BladeListItem],
@@ -180,42 +246,12 @@ async def list_blades(
     and ``part_number``.
     """
     from app.models.blade import Blade
-    import datetime as dt
 
-    conditions = [Blade.deleted_at.is_(None)]
-
-    if serial_number:
-        conditions.append(Blade.serial_number.ilike(f"%{serial_number}%"))
-    if melt_number:
-        conditions.append(Blade.melt_number.ilike(f"%{melt_number}%"))
-    if work_order_number:
-        conditions.append(Blade.work_order_number.ilike(f"%{work_order_number}%"))
-    if part_number:
-        conditions.append(Blade.part_number.ilike(f"%{part_number}%"))
-    if blade_type:
-        conditions.append(Blade.blade_type == blade_type)
-    if blade_status:
-        conditions.append(Blade.status == blade_status)
-    if blade_statuses:
-        status_list = [s.strip() for s in blade_statuses.split(",") if s.strip() in BladeStatus.__members__]
-        if status_list:
-            conditions.append(Blade.status.in_(status_list))
-    if station_id:
-        conditions.append(Blade.current_station_id == station_id)
-    if assigned_to_id:
-        conditions.append(Blade.assigned_to_id == assigned_to_id)
-    if created_by_id:
-        conditions.append(Blade.created_by_id == created_by_id)
-    if ocr_mismatch_only:
-        conditions.append(Blade.ocr_mismatch_flag.is_(True))
-    if date_from:
-        from sqlalchemy import cast, Date
-
-        conditions.append(cast(Blade.created_at, Date) >= dt.date.fromisoformat(date_from))
-    if date_to:
-        from sqlalchemy import cast, Date
-
-        conditions.append(cast(Blade.created_at, Date) <= dt.date.fromisoformat(date_to))
+    conditions = _build_blade_filters(
+        serial_number, melt_number, work_order_number, part_number,
+        blade_type, blade_status, blade_statuses, station_id,
+        assigned_to_id, created_by_id, ocr_mismatch_only, date_from, date_to,
+    )
 
     # Count
     count_q = select(func.count()).select_from(Blade).where(*conditions)
@@ -242,43 +278,8 @@ async def list_blades(
     blades = list((await db.execute(items_q)).scalars().all())
 
     # Enrich blades with latest INITIAL measurement weight/SM
-    # Use a subquery that picks the single most recent INITIAL measurement per blade
-    from app.models.measurement import Measurement
-    from sqlalchemy import text
-
     blade_ids = [b.id for b in blades]
-    meas_by_blade: dict = {}
-    if blade_ids:
-        # Use a plain GROUP BY + MAX(measured_at) approach then join back
-        subq = (
-            select(
-                Measurement.blade_id,
-                func.max(Measurement.measured_at).label("latest_at"),
-            )
-            .where(
-                Measurement.blade_id.in_(blade_ids),
-                Measurement.measurement_type == "INITIAL",
-            )
-            .group_by(Measurement.blade_id)
-            .subquery()
-        )
-        meas_q = (
-            select(
-                Measurement.blade_id,
-                Measurement.weight_grams,
-                Measurement.static_moment_gcm,
-            )
-            .join(
-                subq,
-                (Measurement.blade_id == subq.c.blade_id)
-                & (Measurement.measured_at == subq.c.latest_at),
-            )
-        )
-        for row in (await db.execute(meas_q)).all():
-            meas_by_blade[str(row.blade_id)] = {
-                "weight_grams": float(row.weight_grams) if row.weight_grams else None,
-                "static_moment_gcm": float(row.static_moment_gcm) if row.static_moment_gcm else None,
-            }
+    meas_by_blade = await _fetch_latest_measurements(db, blade_ids)
 
     # Build list items enriched with measurement data
     items = []
@@ -926,7 +927,7 @@ async def attach_ocr_scan(
     if not scan_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scan_id is required")
 
-    scan_dir = Path(os.environ.get("UPLOAD_DIR", settings.UPLOAD_DIR)) / "ocr_scans"
+    scan_dir = Path(settings.UPLOAD_DIR) / "ocr_scans"
     found_path: Path | None = None
     found_ext = "jpg"
     for ext in ("jpg", "png", "tiff", "bmp", "webp"):
@@ -1030,7 +1031,7 @@ async def upload_attachment(
 
     safe_name = f"{blade_id}_{hashlib.md5((file.filename or 'file').encode()).hexdigest()[:8]}_{file.filename or 'upload'}"
     relative_path = f"attachments/{blade_id}/{safe_name}"
-    upload_dir = Path(os.environ.get("UPLOAD_DIR", "/app/uploads"))
+    upload_dir = Path(settings.UPLOAD_DIR)
     full_path = upload_dir / relative_path
 
     # Create directory and write file to disk
@@ -1193,7 +1194,7 @@ async def view_attachment(
     if attachment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
 
-    upload_dir = Path(os.environ.get("UPLOAD_DIR", "/app/uploads"))
+    upload_dir = Path(settings.UPLOAD_DIR)
     full_path = upload_dir / attachment.file_path
 
     if not full_path.exists():
@@ -1251,7 +1252,7 @@ async def delete_attachment(
         )
 
     # Remove file from disk (non-fatal if missing)
-    upload_dir = Path(os.environ.get("UPLOAD_DIR", "/app/uploads"))
+    upload_dir = Path(settings.UPLOAD_DIR)
     full_path = upload_dir / attachment.file_path
     try:
         if full_path.exists():

@@ -22,6 +22,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, SoftDeleteMixin
 from app.models.enums import BladeStatus, BladeType
 
+_CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+
 
 class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """
@@ -132,7 +134,7 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         "Measurement",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     slot_allocation: Mapped["SlotAllocation | None"] = relationship(  # type: ignore[name-defined]
         "SlotAllocation",
@@ -145,14 +147,14 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         "WorkflowLog",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
         order_by="WorkflowLog.timestamp",
     )
     attachments: Mapped[list["Attachment"]] = relationship(  # type: ignore[name-defined]
         "Attachment",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     notifications: Mapped[list["Notification"]] = relationship(  # type: ignore[name-defined]
         "Notification",

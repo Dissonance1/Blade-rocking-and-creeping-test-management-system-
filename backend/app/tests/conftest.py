@@ -15,7 +15,6 @@ event_loop
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
@@ -24,7 +23,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -52,31 +52,14 @@ TEST_DATABASE_URL = str(settings.DATABASE_URL).replace(
 )
 
 # ---------------------------------------------------------------------------
-# Event loop — module-scoped so async_engine can be session-wide
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    """Use the default asyncio event loop policy for the test session."""
-    return asyncio.DefaultEventLoopPolicy()
-
-
-@pytest.fixture(scope="session")
-def event_loop(event_loop_policy):
-    """
-    Session-scoped event loop so the session-scoped ``async_engine`` fixture
-    (and everything built on it — ``db_session``, ``client``, etc.) runs on a
-    single loop for the whole test session, matching this pytest-asyncio
-    version's scoping model (it has no ``loop_scope`` fixture kwarg).
-    """
-    loop = event_loop_policy.new_event_loop()
-    yield loop
-    loop.close()
-
-
-# ---------------------------------------------------------------------------
 # Database engine — one engine per test session for performance
+#
+# Session-wide scope for async_engine (and everything built on it — db_session,
+# client, etc.) comes from asyncio_default_fixture_loop_scope = "session" in
+# pyproject.toml, not a custom event_loop fixture — overriding event_loop
+# directly is deprecated as of pytest-asyncio 0.23 and was causing "attached
+# to a different loop" errors once fixtures spanned function- and
+# session-scoped tasks on what pytest-asyncio now treats as separate loops.
 # ---------------------------------------------------------------------------
 
 
@@ -221,8 +204,6 @@ async def assembly_station(db_session: AsyncSession) -> Station:
 
 async def _get_or_create_role(db: AsyncSession, role_name: RoleName) -> Role:
     """Fetch an existing role or create it if absent."""
-    from sqlalchemy import select
-
     result = await db.execute(select(Role).where(Role.name == role_name))
     role = result.scalar_one_or_none()
     if role is None:
@@ -274,8 +255,16 @@ async def _make_user(
     )
     db.add(user_role)
     await db.flush()
-    await db.refresh(user)
-    return user
+
+    # Plain refresh() only reloads column attributes — user_roles/role is
+    # accessed synchronously later (_make_auth_headers is not async), so it
+    # must be eagerly loaded here rather than left to lazy-load on access.
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.user_roles).selectinload(UserRole.role))
+        .where(User.id == user.id)
+    )
+    return result.scalar_one()
 
 
 @pytest_asyncio.fixture

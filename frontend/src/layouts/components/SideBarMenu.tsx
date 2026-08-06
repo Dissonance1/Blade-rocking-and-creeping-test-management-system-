@@ -274,26 +274,24 @@ export default function AppLayout() {
     const token = useAuthStore.getState().accessToken;
     if (!token) return;
 
+    function handleIncomingNotification(notification: Notification) {
+      addNotification(notification);
+      toast(notification.title, {
+        description: notification.body,
+        action: notification.blade_id
+          ? {
+            label: "View",
+            onClick: () => navigate(`/blades/${notification.blade_id}`),
+          }
+          : undefined,
+      });
+    }
+
     function connect() {
-      wsRef.current = connectWebSocket(
-        token!,
-        (notification) => {
-          addNotification(notification);
-          toast(notification.title, {
-            description: notification.body,
-            action: notification.blade_id
-              ? {
-                label: "View",
-                onClick: () => navigate(`/blades/${notification.blade_id}`),
-              }
-              : undefined,
-          });
-        },
-        () => {
-          // Reconnect after 5 s on unexpected close
-          setTimeout(connect, 5000);
-        }
-      );
+      wsRef.current = connectWebSocket(token!, handleIncomingNotification, () => {
+        // Reconnect after 5 s on unexpected close
+        setTimeout(connect, 5000);
+      });
     }
 
     connect();
