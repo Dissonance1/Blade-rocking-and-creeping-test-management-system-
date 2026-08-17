@@ -84,6 +84,13 @@ PREVIEW_JPEG_QUALITY = 80
 STILL_WIDTH = 1920
 STILL_HEIGHT = 1080
 STILL_JPEG_QUALITY = 92
+FIXED_FOCUS_LENS_POSITION = 110  # 0-255, higher = closer; tuned for ~10-15cm scan distance
+# The OAK-1's lens is fixed-focal-length — there's no optical zoom, so this
+# crops the center of the sensor frame and resizes back up. >1.0 trades FOV
+# for a bigger, more filled-in view of whatever's centered under the lens
+# (the blade marking, in normal use), at the usual digital-zoom cost of a
+# softer, more upscaled image the further past 1.0 it goes.
+DIGITAL_ZOOM = 1.5
 RETRY_INTERVAL_S = 5
 STREAM_FPS = 24
 FPS_LOG_INTERVAL_S = 10
@@ -126,6 +133,7 @@ class Oak1CameraWorker:
         cam.setFps(CAMERA_FPS)
         cam.setPreviewSize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         cam.setVideoSize(STILL_WIDTH, STILL_HEIGHT)
+        cam.initialControl.setManualFocus(FIXED_FOCUS_LENS_POSITION)
 
         xout_preview = pipeline.create(dai.node.XLinkOut)
         xout_preview.setStreamName("preview")
@@ -140,11 +148,24 @@ class Oak1CameraWorker:
         cam.video.link(xout_still.input)
         return pipeline
 
+    @staticmethod
+    def _apply_digital_zoom(frame):
+        """Center-crop by ``DIGITAL_ZOOM`` and resize back to the original
+        frame size — the fixed lens has no optical zoom, so this is the only
+        way to fill more of the frame with whatever's centered under it."""
+        if DIGITAL_ZOOM <= 1.0:
+            return frame
+        h, w = frame.shape[:2]
+        crop_w, crop_h = int(w / DIGITAL_ZOOM), int(h / DIGITAL_ZOOM)
+        x0, y0 = (w - crop_w) // 2, (h - crop_h) // 2
+        cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
+        return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
     def _read_preview(self, device: dai.Device) -> None:
         q = device.getOutputQueue(name="preview", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()  # blocks until the next frame — no busy-poll
-            frame = in_frame.getCvFrame()
+            frame = self._apply_digital_zoom(in_frame.getCvFrame())
             ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY])
             if ok:
                 with self._lock:
@@ -155,7 +176,7 @@ class Oak1CameraWorker:
         q = device.getOutputQueue(name="still", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()
-            frame = in_frame.getCvFrame()
+            frame = self._apply_digital_zoom(in_frame.getCvFrame())
             with self._lock:
                 self._still_frame = frame
                 self._still_fps_count += 1
