@@ -12,10 +12,13 @@ reading, Cyrillic-only letters resolve to the Cyrillic reading — rather
 than confidence-weighted voting, since industrial serial formats are
 predictable enough to make rule-based fusion more stable and debuggable.
 
-Three preprocessing variants (grayscale / green-channel / red-channel,
-each + CLAHE) are tried per image to counter glare on engraved metal
-under variable lighting; whichever mode yields the most detections at
-the highest confidence is used for fusion.
+Five preprocessing variants (raw, plus grayscale / green-channel /
+red-channel / unsharp — each + CLAHE) are tried per image; whichever mode
+yields the most detections at the highest confidence is used for fusion.
+The CLAHE variants counter glare on engraved metal under variable
+lighting, but their local-contrast boost can also amplify background
+texture enough to make the detector reject a frame outright — the plain
+`raw` candidate is the fallback that keeps working when that happens.
 
 Model weights (PP-OCRv4 det + cls + rec_en + rec_ru, ~26 MB) are bundled
 locally under ``models/ppocrv4/`` next to this module — no network access
@@ -161,6 +164,16 @@ class PaddleOCRProvider(OCRProvider):
     def _preprocess(image, mode: str):
         import cv2
 
+        if mode == "raw":
+            # No CLAHE — the DB text detector was trained on natural photos,
+            # and CLAHE's local contrast boost amplifies background texture
+            # (cardboard, brushed metal grain) to the same magnitude as the
+            # engraved strokes, which can make the detector reject a frame
+            # outright (0 boxes) even though a human reads it fine. Kept as
+            # a plain candidate so a real capture always has a working
+            # fallback alongside the CLAHE variants below, which still win
+            # on frames where glare is the dominant problem instead.
+            return image
         if mode == "gray":
             img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         elif mode == "green":
@@ -343,7 +356,7 @@ class PaddleOCRProvider(OCRProvider):
         best_score = -1.0
         best_confidence = 0.0
 
-        for mode in ("gray", "green", "red", "sharp"):
+        for mode in ("raw", "gray", "green", "red", "sharp"):
             processed = self._preprocess(image, mode)
             res_en, res_ru = self._run_ocr(processed)
 
