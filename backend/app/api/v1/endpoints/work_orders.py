@@ -6,9 +6,11 @@ GET  /work-orders/{work_order_number}                          — work order de
 POST /work-orders/{work_order_number}/send-to-assembly         — OH bulk-sends all eligible LPTR blades to Assembly
 POST /work-orders/{work_order_number}/assign-slot               — bulk-assigns computed disc slots (LPTR algorithmic / HPTR explicit)
 POST /work-orders/{work_order_number}/complete-hptr-balancing   — mark a saved HPTR slot allocation balanced/complete
+POST /work-orders/{work_order_number}/start-final-verification  — OH moves balanced HPTR blades into Final Verification
 POST /work-orders/{work_order_number}/complete-lptr-balancing   — mark a saved LPTR slot allocation balanced/complete
 POST /work-orders/{work_order_number}/return-to-oh              — Assembly reports LPTR balancing task complete, sends work order back to OH
 POST /work-orders/{work_order_number}/accept-return             — OH accepts a work order returned from Assembly
+POST /work-orders/{work_order_number}/complete-final-verification — OH completes final verification for a work order
 POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/complete-rocking-creep    — confirm Rocking & Creep entry complete for a work order
@@ -207,6 +209,12 @@ async def _fetch_blade_count_rows(db: AsyncSession, has_slot_allocations: bool) 
                 func.sum(
                     case((Blade.status == BladeStatus.COMPLETED, 1), else_=0)
                 ).label("blades_completed"),
+                func.sum(
+                    case((Blade.status == BladeStatus.FINAL_VERIFICATION, 1), else_=0)
+                ).label("blades_final_verification"),
+                func.sum(
+                    case((Blade.status == BladeStatus.BALANCING_COMPLETED, 1), else_=0)
+                ).label("blades_balancing_completed"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.work_order_number.isnot(None), Blade.deleted_at.is_(None))
@@ -446,6 +454,8 @@ def _build_work_order_summary(
         "rows_complete_count": rows_complete_map.get(wn, 0),
         "blades_sent": blades_sent,
         "blades_completed": row.blades_completed or 0,
+        "blades_final_verification": row.blades_final_verification or 0,
+        "blades_balancing_completed": row.blades_balancing_completed or 0,
         "hptr_count": hptr_count,
         "hptr_slotted_count": hptr_slotted_map.get(wn, 0),
         "hptr_balanced_count": hptr_balanced_map.get(wn, 0),
@@ -571,6 +581,18 @@ async def get_work_order(
                         else_=0,
                     )
                 ).label("blades_completed"),
+                func.sum(
+                    case(
+                        (Blade.status == BladeStatus.FINAL_VERIFICATION, 1),
+                        else_=0,
+                    )
+                ).label("blades_final_verification"),
+                func.sum(
+                    case(
+                        (Blade.status == BladeStatus.BALANCING_COMPLETED, 1),
+                        else_=0,
+                    )
+                ).label("blades_balancing_completed"),
                 func.min(Blade.created_at).label("first_blade_at"),
             )
             .where(Blade.work_order_number == work_order_number, Blade.deleted_at.is_(None))
@@ -611,6 +633,8 @@ async def get_work_order(
         "rows_complete_count": rows_complete_count,
         "blades_sent": blades_sent,
         "blades_completed": blade_agg.blades_completed or 0,
+        "blades_final_verification": blade_agg.blades_final_verification or 0,
+        "blades_balancing_completed": blade_agg.blades_balancing_completed or 0,
         "current_status": cur_status,
         "current_status_label": _status_label(cur_status),
         "first_blade_at": blade_agg.first_blade_at.isoformat() if blade_agg.first_blade_at else None,
@@ -1681,7 +1705,98 @@ async def complete_hptr_balancing(
     return {
         "work_order_number": work_order_number,
         "blades_completed": len(blades),
-        "message": f"{len(blades)} HPTR blade(s) marked balanced — work order complete.",
+        "message": f"{len(blades)} HPTR blade(s) marked balanced.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/start-final-verification
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/start-final-verification",
+    status_code=status.HTTP_200_OK,
+    summary="OH starts final verification for a work order's balanced HPTR blades",
+)
+async def start_final_verification(
+    work_order_number: str,
+    body: dict,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    HPTR blades never leave OH, so unlike LPTR (which reaches
+    ``FINAL_VERIFICATION`` via ``accept-return`` once Assembly physically
+    returns the set) they need a direct trigger — transitions every
+    ``BALANCING_COMPLETED`` blade in *work_order_number* to
+    ``FINAL_VERIFICATION``.
+
+    Only applies to HPTR work orders — calling this on an LPTR work order
+    returns 422 (use ``accept-return`` instead).
+    """
+    from app.models.blade import Blade
+    from app.models.work_order import WorkOrder
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.blade_type != BladeType.HPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' is {work_order.blade_type.value} — "
+                "this endpoint only applies to HPTR work orders."
+            ),
+        )
+
+    remarks = (body or {}).get("remarks") or "Final verification started by OH"
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status == BladeStatus.BALANCING_COMPLETED,
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No balanced HPTR blades pending final verification found for Work Order '{work_order_number}'",
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.FINAL_VERIFICATION,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    logger.info(
+        "work_order_hptr_final_verification_started",
+        work_order=work_order_number,
+        blades=len(blades),
+    )
+    return {
+        "work_order_number": work_order_number,
+        "blades_started": len(blades),
+        "message": f"{len(blades)} HPTR blade(s) moved to Final Verification.",
     }
 
 
@@ -2090,6 +2205,84 @@ async def accept_returned_work_order(
 
     logger.info("work_order_accepted_by_oh", work_order=work_order_number)
     return _event_to_dict(ev)
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/complete-final-verification
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/complete-final-verification",
+    status_code=status.HTTP_200_OK,
+    summary="OH completes final verification for every blade in a work order",
+)
+async def complete_final_verification(
+    work_order_number: str,
+    body: dict,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    OH operator confirms final verification is done for every blade in
+    *work_order_number* currently ``FINAL_VERIFICATION`` — transitions them
+    all to ``COMPLETED`` in one action.
+    """
+    from app.models.blade import Blade
+    from app.models.work_order import WorkOrder
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+
+    remarks = (body or {}).get("remarks") or "Final verification completed by OH"
+
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status == BladeStatus.FINAL_VERIFICATION,
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No blades pending final verification found for Work Order '{work_order_number}'",
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.COMPLETED,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    logger.info(
+        "work_order_final_verification_completed",
+        work_order=work_order_number,
+        blades=len(blades),
+    )
+    return {
+        "work_order_number": work_order_number,
+        "blades_completed": len(blades),
+        "message": f"{len(blades)} blade(s) marked completed — final verification done.",
+    }
 
 
 # ---------------------------------------------------------------------------

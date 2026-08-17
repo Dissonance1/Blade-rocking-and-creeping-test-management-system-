@@ -238,7 +238,7 @@ export default function DashboardPage() {
     "CREATED", "OH_INSPECTION", "MEASUREMENTS_RECORDED", "SENT_TO_ASSEMBLY",
     "ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "SLOT_ASSIGNED",
     "BALANCING_IN_PROGRESS", "BALANCING_COMPLETED", "RETURNED_TO_OH",
-    "FINAL_VERIFICATION", "COMPLETED", "REJECTED", "REOPENED",
+    "FINAL_VERIFICATION", "COMPLETED",
   ];
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => byStatus[s] ?? 0));
 
@@ -452,7 +452,7 @@ export default function DashboardPage() {
                 Status Distribution
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex-1 min-h-0 flex flex-col gap-1 pt-2 overflow-y-auto pb-2">
+            <CardContent className="flex-1 min-h-0 flex flex-col justify-between pt-2 pb-2">
               {STATUS_ORDER.map((s) => {
                 const cfg = STATUS_CFG[s];
                 const count = byStatus[s] ?? 0;

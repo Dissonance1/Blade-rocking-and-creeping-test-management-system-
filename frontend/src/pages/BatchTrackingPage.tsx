@@ -678,6 +678,18 @@ export default function BatchTrackingPage() {
     (b) => b.blade_type === "LPTR" && b.current_status === "RETURNED_TO_OH"
   );
 
+  // Any blade type — HPTR blades reach FINAL_VERIFICATION without ever
+  // going through accept-return (they never leave OH), so this can't be
+  // keyed off current_status the way returnedBatches is.
+  const finalVerificationBatches = batches.filter((b) => b.blades_final_verification > 0);
+
+  // HPTR-only — once HPTR balancing is confirmed, blades sit at
+  // BALANCING_COMPLETED with no Assembly leg to trigger the next step
+  // themselves, so this card is their equivalent of returnedBatches.
+  const hptrBalancedBatches = batches.filter(
+    (b) => b.blade_type === "HPTR" && b.blades_balancing_completed > 0
+  );
+
   const acceptReturnMutation = useMutation({
     mutationFn: (workOrderNumber: string) => batchService.acceptReturn(workOrderNumber),
     onSuccess: (_res, workOrderNumber) => {
@@ -690,6 +702,34 @@ export default function BatchTrackingPage() {
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to accept work order";
+      toast.error(msg);
+    },
+  });
+
+  const completeFinalVerificationMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.completeFinalVerification(workOrderNumber),
+    onSuccess: (res, workOrderNumber) => {
+      const summary = finalVerificationBatches.find((b) => b.work_order_number === workOrderNumber);
+      if (summary) {
+        setAcceptedSummaries((prev) => ({ ...prev, [workOrderNumber]: summary }));
+      }
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to complete final verification";
+      toast.error(msg);
+    },
+  });
+
+  const startFinalVerificationMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.startFinalVerification(workOrderNumber),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to start final verification";
       toast.error(msg);
     },
   });
@@ -813,6 +853,98 @@ export default function BatchTrackingPage() {
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
                       )}
                       Accept
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {canAcceptReturn && hptrBalancedBatches.length > 0 && (
+          <Card className="shrink-0 bg-amber-50/60 dark:bg-amber-900/10 border-amber-200 dark:border-amber-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                <Scale className="w-4 h-4 shrink-0" />
+                HPTR Balancing Confirmed — Start Final Verification
+                <span className="text-xs font-normal text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 rounded-full">
+                  {hptrBalancedBatches.length}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col divide-y divide-amber-200/70 dark:divide-amber-700/40">
+                {hptrBalancedBatches.map((b) => (
+                  <div
+                    key={b.work_order_number}
+                    className="flex items-center justify-between gap-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-mono text-sm font-semibold text-slate-700 dark:text-slate-200 block">
+                        {b.work_order_number}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {b.blades_balancing_completed} / {b.blade_count} blade(s) balanced
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => startFinalVerificationMutation.mutate(b.work_order_number)}
+                      disabled={startFinalVerificationMutation.isPending}
+                      className="bg-lime-600 hover:bg-lime-500 text-white"
+                    >
+                      {startFinalVerificationMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Start
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {canAcceptReturn && finalVerificationBatches.length > 0 && (
+          <Card className="shrink-0 bg-lime-50/60 dark:bg-lime-900/10 border-lime-200 dark:border-lime-700/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-lime-800 dark:text-lime-300">
+                <ClipboardCheck className="w-4 h-4 shrink-0" />
+                Final Verification — Ready to Complete
+                <span className="text-xs font-normal text-lime-600 dark:text-lime-400 bg-lime-100 dark:bg-lime-900/40 px-2 py-0.5 rounded-full">
+                  {finalVerificationBatches.length}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col divide-y divide-lime-200/70 dark:divide-lime-700/40">
+                {finalVerificationBatches.map((b) => (
+                  <div
+                    key={b.work_order_number}
+                    className="flex items-center justify-between gap-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-mono text-sm font-semibold text-slate-700 dark:text-slate-200 block">
+                        {b.work_order_number}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {b.blades_final_verification} / {b.blade_count} blade(s) pending
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => completeFinalVerificationMutation.mutate(b.work_order_number)}
+                      disabled={completeFinalVerificationMutation.isPending}
+                      className="bg-green-600 hover:bg-green-500 text-white"
+                    >
+                      {completeFinalVerificationMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Complete
                     </Button>
                   </div>
                 ))}

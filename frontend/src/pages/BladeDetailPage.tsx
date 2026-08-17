@@ -297,18 +297,18 @@ export default function BladeDetailPage() {
                 </div>
               )}
 
-            {blade.status === "BALANCING_COMPLETED" &&
-              hasRole(["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]) && (
+            {blade.status === "FINAL_VERIFICATION" &&
+              hasRole(["OH_OPERATOR", "SUPER_ADMIN"]) && (
                 <Button
                   size="sm"
                   onClick={() =>
-                    transitionMutation.mutate({ to_status: "FINAL_VERIFICATION" })
+                    transitionMutation.mutate({ to_status: "COMPLETED" })
                   }
                   disabled={transitionMutation.isPending}
-                  className="bg-lime-600 hover:bg-lime-500 text-white"
+                  className="bg-green-600 hover:bg-green-500 text-white"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Final Verification
+                  Mark Completed
                 </Button>
               )}
 

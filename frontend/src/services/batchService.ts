@@ -42,6 +42,10 @@ export interface BatchSummary {
   rows_complete_count: number;
   blades_sent: number;
   blades_completed: number;
+  /** Blades currently in FINAL_VERIFICATION — ready for "Complete Final Verification". */
+  blades_final_verification: number;
+  /** Blades currently in BALANCING_COMPLETED — for HPTR, ready to "Start Final Verification". */
+  blades_balancing_completed: number;
   hptr_count: number;
   hptr_slotted_count: number;
   hptr_balanced_count: number;
@@ -292,6 +296,29 @@ export const batchService = {
    */
   acceptReturn: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
     const { data } = await api.post<BatchEvent>(`/work-orders/${batchNumber}/accept-return`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH completes final verification for every FINAL_VERIFICATION blade in the batch — marks them all COMPLETED.
+   */
+  completeFinalVerification: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-final-verification`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH moves a batch's balanced HPTR blades into Final Verification — HPTR blades never leave OH,
+   * so unlike LPTR they need a direct trigger instead of acceptReturn.
+   */
+  startFinalVerification: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_started: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/start-final-verification`, { remarks });
     return data;
   },
 
