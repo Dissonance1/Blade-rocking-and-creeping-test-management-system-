@@ -191,6 +191,28 @@ export default function BladeEntryGrid() {
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
+  // ── Flush pending debounced saves on unmount ────────────────────────────────
+  // beforeunload only covers closing the tab. Navigating away in-app (e.g. the
+  // Back button) unmounts this grid and the parent page resets the store right
+  // after — if a row's 600ms debounce hasn't fired yet, saveRow would read an
+  // already-reset (empty) row and silently drop the save. Firing pending saves
+  // immediately here (child unmount runs before the parent's reset) prevents that.
+  const saveRowRef = useRef(saveRow);
+  useEffect(() => {
+    saveRowRef.current = saveRow;
+  }, [saveRow]);
+
+  useEffect(() => {
+    return () => {
+      const timers = saveTimersRef.current;
+      timers.forEach((timerId, rowIndex) => {
+        clearTimeout(timerId);
+        void saveRowRef.current(rowIndex);
+      });
+      timers.clear();
+    };
+  }, []);
+
   // ── OCR capture ──────────────────────────────────────────────────────────────
   // Keeps the raw OCR detection (ocr_melt_number) separate from the editable
   // ground-truth cell (melt_number) so the two can be compared later, and

@@ -458,7 +458,7 @@ function BatchTable({
   const pageRows = batches.slice((safePage - 1) * ROWS_PER_PAGE, safePage * ROWS_PER_PAGE);
 
   return (
-    <Card className="h-full flex flex-col bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
+    <Card className="shrink-0 flex flex-col bg-white/70 dark:bg-background backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-black/20 overflow-hidden">
       <CardHeader className="shrink-0 pb-4 border-b border-slate-100 dark:border-slate-700/50">
         <CardTitle className="text-slate-900 dark:text-white text-lg flex items-center gap-2.5">
           <span className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-teal-400 to-cyan-600 shadow-lg shadow-cyan-500/30 text-white">
@@ -819,7 +819,7 @@ export default function BatchTrackingPage() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-3 overflow-hidden">
+      <div className="flex-1 min-h-0 w-full px-4 sm:px-6 py-3 flex flex-col gap-3 overflow-y-auto">
         {canAcceptReturn && returnedBatches.length > 0 && (
           <Card className="shrink-0 bg-orange-50/60 dark:bg-orange-900/10 border-orange-200 dark:border-orange-700/50">
             <CardHeader className="pb-2">
@@ -992,7 +992,7 @@ export default function BatchTrackingPage() {
             </p>
           </div>
         ) : (
-          <div className={cn("flex-1 min-h-0 grid grid-cols-1 gap-3", !isAssemblyView && "lg:grid-cols-2")}>
+          <div className={cn("shrink-0 grid grid-cols-1 gap-3 items-start", !isAssemblyView && "lg:grid-cols-2")}>
             <BatchTable
               title="LPTR Work Orders"
               batches={lptrBatches}
