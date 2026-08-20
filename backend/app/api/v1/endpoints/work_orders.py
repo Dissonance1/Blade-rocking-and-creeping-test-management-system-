@@ -1132,6 +1132,12 @@ async def _check_lptr_slot_conflicts(
     from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
 
+    # is_active marks the current live allocation *row for that blade* — it
+    # is never flipped off once the blade leaves the slot, so it does not
+    # mean "slot is physically occupied right now". Only blades still
+    # sitting in the slot (not yet through balancing) actually hold it.
+    occupying_statuses = [BladeStatus.SLOT_ASSIGNED, BladeStatus.BALANCING_IN_PROGRESS]
+
     target_slot_numbers = {str(s) for s in slot_by_blade_id.values()}
     conflicts = (
         await db.execute(
@@ -1141,6 +1147,7 @@ async def _check_lptr_slot_conflicts(
                 SlotAllocation.slot_number.in_(target_slot_numbers),
                 SlotAllocation.is_active.is_(True),
                 Blade.blade_type == BladeType.LPTR,
+                Blade.status.in_(occupying_statuses),
                 SlotAllocation.blade_id.notin_(slot_by_blade_id.keys()),
             )
         )
