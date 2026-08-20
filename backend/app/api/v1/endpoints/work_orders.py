@@ -1123,19 +1123,28 @@ async def _fetch_eligible_lptr_blades(db: AsyncSession, work_order_number: str) 
 
 
 async def _check_lptr_slot_conflicts(
-    db: AsyncSession, slot_by_blade_id: dict
+    db: AsyncSession, work_order_number: str, slot_by_blade_id: dict
 ) -> None:
     """Guard against Stage 1 and Stage 2 (two independent save requests)
     landing on the same physical slot number for two different blades —
     nothing else stops that, since each stage only validates duplicates
-    within its own request body."""
+    within its own request body.
+
+    Scoped to this work order only: each work order/batch has its own
+    independent slot numbering, not a numbering space shared across every
+    LPTR work order that has ever run — a slot number is only meaningful
+    relative to the 90 blades of the batch that's currently on the rig.
+    """
     from app.models.blade import Blade
     from app.models.slot_allocation import SlotAllocation
 
     # is_active marks the current live allocation *row for that blade* — it
-    # is never flipped off once the blade leaves the slot, so it does not
-    # mean "slot is physically occupied right now". Only blades still
-    # sitting in the slot (not yet through balancing) actually hold it.
+    # is never flipped off once the blade leaves the slot, so within this
+    # same work order it does not by itself mean "still physically on the
+    # rig". Only blades still sitting in the slot (not yet through
+    # balancing) actually hold it — this also lets a REJECTED -> REOPENED
+    # blade's stale prior-cycle row be superseded instead of blocking the
+    # new cycle's assignment.
     occupying_statuses = [BladeStatus.SLOT_ASSIGNED, BladeStatus.BALANCING_IN_PROGRESS]
 
     target_slot_numbers = {str(s) for s in slot_by_blade_id.values()}
@@ -1147,6 +1156,7 @@ async def _check_lptr_slot_conflicts(
                 SlotAllocation.slot_number.in_(target_slot_numbers),
                 SlotAllocation.is_active.is_(True),
                 Blade.blade_type == BladeType.LPTR,
+                Blade.work_order_number == work_order_number,
                 Blade.status.in_(occupying_statuses),
                 SlotAllocation.blade_id.notin_(slot_by_blade_id.keys()),
             )
@@ -1162,6 +1172,7 @@ async def _check_lptr_slot_conflicts(
 
 async def _apply_lptr_slot_assignments(
     db: AsyncSession,
+    work_order_number: str,
     assigned_blades: list,
     slot_by_blade_id: dict,
     stage: int,
@@ -1172,7 +1183,7 @@ async def _apply_lptr_slot_assignments(
     from app.models.slot_allocation import SlotAllocation
     from app.workflows.state_machine import WorkflowEngine
 
-    await _check_lptr_slot_conflicts(db, slot_by_blade_id)
+    await _check_lptr_slot_conflicts(db, work_order_number, slot_by_blade_id)
 
     for blade in assigned_blades:
         slot_number = str(slot_by_blade_id[blade.id])
@@ -1286,7 +1297,7 @@ async def _assign_lptr_work_order_slot(
 
     assigned_blades = [b for b in blades if b.id in slot_by_blade_id]
     await _apply_lptr_slot_assignments(
-        db, assigned_blades, slot_by_blade_id, stage, unbalance_slot, total_slots, current_user
+        db, work_order_number, assigned_blades, slot_by_blade_id, stage, unbalance_slot, total_slots, current_user
     )
 
     await db.commit()
