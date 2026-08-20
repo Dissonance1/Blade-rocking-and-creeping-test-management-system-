@@ -1122,6 +1122,37 @@ async def _fetch_eligible_lptr_blades(db: AsyncSession, work_order_number: str) 
     return blades
 
 
+async def _check_lptr_slot_conflicts(
+    db: AsyncSession, slot_by_blade_id: dict
+) -> None:
+    """Guard against Stage 1 and Stage 2 (two independent save requests)
+    landing on the same physical slot number for two different blades —
+    nothing else stops that, since each stage only validates duplicates
+    within its own request body."""
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+
+    target_slot_numbers = {str(s) for s in slot_by_blade_id.values()}
+    conflicts = (
+        await db.execute(
+            select(SlotAllocation.slot_number, Blade.serial_number)
+            .join(Blade, Blade.id == SlotAllocation.blade_id)
+            .where(
+                SlotAllocation.slot_number.in_(target_slot_numbers),
+                SlotAllocation.is_active.is_(True),
+                Blade.blade_type == BladeType.LPTR,
+                SlotAllocation.blade_id.notin_(slot_by_blade_id.keys()),
+            )
+        )
+    ).all()
+    if conflicts:
+        detail = ", ".join(f"slot {slot} (blade {serial})" for slot, serial in conflicts)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target slot(s) already occupied by another active allocation: {detail}",
+        )
+
+
 async def _apply_lptr_slot_assignments(
     db: AsyncSession,
     assigned_blades: list,
@@ -1133,6 +1164,8 @@ async def _apply_lptr_slot_assignments(
 ) -> None:
     from app.models.slot_allocation import SlotAllocation
     from app.workflows.state_machine import WorkflowEngine
+
+    await _check_lptr_slot_conflicts(db, slot_by_blade_id)
 
     for blade in assigned_blades:
         slot_number = str(slot_by_blade_id[blade.id])
