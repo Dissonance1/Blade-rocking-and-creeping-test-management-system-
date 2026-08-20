@@ -81,7 +81,7 @@ export function computeLptrStage1(
   stage1Count: number = LPTR_STAGE1_COUNT
 ): LptrStage1Result {
   const pool = [...blades].sort((a, b) => weightOf(b) - weightOf(a));
-  const slotA = unbalanceSlot;
+  const slotA = stepSlot(unbalanceSlot, 0, totalSlots);
   const slotB = stepSlot(slotA, 1, totalSlots);
 
   const entries: LptrAllocationEntry[] = [];

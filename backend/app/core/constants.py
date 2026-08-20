@@ -17,3 +17,6 @@ LPTR_STAGE1_BLADE_COUNT: int = 46
 
 LPTR_STAGE2_BLADE_COUNT: int = 44
 """LPTR slot allocation stage 2 fills the remaining slots stage 1 left empty."""
+
+LPTR_TOTAL_SLOTS: int = 90
+"""Number of physical slots on the LPTR balancing rotor."""

@@ -77,6 +77,10 @@ function swapStage1Preview(preview: LptrStage1Result | null, swapA: string, swap
   const a = parseInt(swapA, 10);
   const b = parseInt(swapB, 10);
   if (!preview || !a || !b || a === b) return null;
+  if (a < 1 || a > LPTR_TOTAL_SLOTS || b < 1 || b > LPTR_TOTAL_SLOTS) {
+    toast.error(`Slot numbers must be between 1 and ${LPTR_TOTAL_SLOTS}`);
+    return null;
+  }
   return { ...preview, entries: swapBladesBetweenSlots(preview.entries, a, b) };
 }
 
@@ -108,6 +112,10 @@ function swapStage2Preview(
   const a = parseInt(swapA, 10);
   const b = parseInt(swapB, 10);
   if (!preview || !a || !b || a === b) return null;
+  if (a < 1 || a > LPTR_TOTAL_SLOTS || b < 1 || b > LPTR_TOTAL_SLOTS) {
+    toast.error(`Slot numbers must be between 1 and ${LPTR_TOTAL_SLOTS}`);
+    return null;
+  }
   return swapBladesBetweenSlots(preview, a, b);
 }
 

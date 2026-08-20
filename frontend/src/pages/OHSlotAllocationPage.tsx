@@ -718,6 +718,10 @@ export default function OHSlotAllocationPage() {
     const a = parseInt(swapA, 10);
     const b = parseInt(swapB, 10);
     if (!allocation || !a || !b || a === b) return;
+    if (a < 1 || a > N || b < 1 || b > N) {
+      toast.error(`Slot numbers must be between 1 and ${N}`);
+      return;
+    }
     setAllocation(swapBladesBetweenSlots(allocation, a, b));
     setSwapA("");
     setSwapB("");

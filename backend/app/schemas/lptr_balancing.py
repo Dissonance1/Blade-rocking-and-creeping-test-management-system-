@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from pydantic import Field, field_validator
 
+from app.core.constants import LPTR_TOTAL_SLOTS
 from app.models.enums import LptrCorrectionType
 from app.schemas.base import BaseSchema
 from app.schemas.user import UserListItem
@@ -28,7 +29,10 @@ class EmptyRotorReadingRequest(BaseSchema):
     """Payload for recording the empty-rotor unbalance position + value."""
 
     unbalance_slot: int = Field(
-        ..., ge=1, description="First-named slot of the reported unbalance position"
+        ...,
+        ge=1,
+        le=LPTR_TOTAL_SLOTS,
+        description="First-named slot of the reported unbalance position",
     )
     unbalance_value: Decimal = Field(..., gt=0, description="Measured unbalance (grams)")
 
