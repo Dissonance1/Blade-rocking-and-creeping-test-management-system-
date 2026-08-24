@@ -195,7 +195,7 @@ async def dashboard_work_orders(
     Return one record per distinct work_order_number from active blades.
 
     Each record includes: work_order_number, shop_order_number, engine_number,
-    running_hours, part_number, and the count of active blades for that
+    engine_hours, part_number, and the count of active blades for that
     work order.
     """
     from app.models.blade import Blade
@@ -206,7 +206,7 @@ async def dashboard_work_orders(
                 Blade.work_order_number,
                 Blade.shop_order_number,
                 Blade.engine_number,
-                Blade.running_hours,
+                Blade.engine_hours,
                 Blade.part_number,
                 func.count(Blade.id).label("blade_count"),
             )
@@ -218,7 +218,7 @@ async def dashboard_work_orders(
                 Blade.work_order_number,
                 Blade.shop_order_number,
                 Blade.engine_number,
-                Blade.running_hours,
+                Blade.engine_hours,
                 Blade.part_number,
             )
             .order_by(func.count(Blade.id).desc())
@@ -230,7 +230,7 @@ async def dashboard_work_orders(
             "work_order_number": row.work_order_number,
             "shop_order_number": row.shop_order_number,
             "engine_number": row.engine_number,
-            "running_hours": row.running_hours,
+            "engine_hours": row.engine_hours,
             "part_number": row.part_number,
             "blade_count": row.blade_count,
         }

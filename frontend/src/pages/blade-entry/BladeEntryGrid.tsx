@@ -6,6 +6,7 @@ import {
   Check,
   RefreshCw,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import CameraModal from "@/components/common/CameraModal";
 import RussianKeyboard from "@/components/common/RussianKeyboard";
@@ -223,6 +224,13 @@ export default function BladeEntryGrid() {
       if (rowIndex == null) return;
       try {
         const result = await ocrService.scanMelt(file);
+        if (!result.value) {
+          // OCR ran but found nothing readable in the frame — leave the
+          // row's existing value untouched and tell the operator explicitly
+          // instead of silently applying an empty string.
+          toast.warning(`Row ${rowIndex + 1}: no melt number detected — try retaking with better lighting/focus.`);
+          return;
+        }
         const readyToSave = applyOcrResult(rowIndex, result.value);
         const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
         if (bladeId) {
@@ -234,6 +242,8 @@ export default function BladeEntryGrid() {
             });
         }
         if (readyToSave) scheduleSave(rowIndex);
+      } catch (err) {
+        toast.error(`Row ${rowIndex + 1}: scan failed — ${extractApiError(err)}`);
       } finally {
         setCameraTargetRow(null);
         nav.focusCell(rowIndex, "melt_number");
