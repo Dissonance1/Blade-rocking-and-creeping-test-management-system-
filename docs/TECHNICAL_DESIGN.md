@@ -417,7 +417,7 @@ Tracks per-blade verification state during the Assembly receipt process. Created
 | Field | Type | Notes |
 |-------|------|-------|
 | `blade_id` | UUID FK | |
-| `batch_number` | VARCHAR(64) | |
+| `work_order_id` | UUID FK → work_orders | |
 | `status` | ENUM | `AssemblyVerificationStatus`: PENDING, ACCEPTED, MODIFIED, REJECTED |
 | `qr_scan_result` | VARCHAR(64) | Serial number scanned by QR gun |
 | `ocr_blade_number` | VARCHAR(64) | Blade number from OCR |
@@ -530,7 +530,7 @@ CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
                                                         │
                                              ASSEMBLY_VERIFIED       ← POST /assembly/blades/.../accept
                                                         │
-                                              SLOT_ASSIGNED          ← POST /batches/.../assign-slot (HAL)
+                                              SLOT_ASSIGNED          ← POST /work-orders/.../assign-slot (HAL)
                                                         │
                                            BALANCING_IN_PROGRESS
                                                         │
@@ -551,15 +551,15 @@ Any active state → REJECTED → (SUPER_ADMIN) → REOPENED → OH_INSPECTION
 
 **HPTR vs LPTR paths:** LPTR blades follow the full flow through assembly. HPTR blades stay at the OH station entirely — they skip SENT_TO_ASSEMBLY / ASSEMBLY_RECEIVED / ASSEMBLY_VERIFIED — and are assigned slots directly by OH_OPERATOR.
 
+**Rejection:** There is no standalone `/blades/{id}/reject` endpoint. Blades are rejected exclusively through the Assembly verification flow (`POST /assembly/blades/{id}/reject`) or through the HPTR balancing flow. SUPER_ADMIN can reopen a rejected blade via `POST /blades/{id}/reopen`.
+
 ### Base Transitions (all blade types)
 
 | From | To | Actor | Notes |
 |------|----|-------|-------|
 | CREATED | OH_INSPECTION | System | Auto on Work Order complete |
 | OH_INSPECTION | MEASUREMENTS_RECORDED | OH_OPERATOR | Auto on first measurement save |
-| OH_INSPECTION | REJECTED | Any operator | |
 | MEASUREMENTS_RECORDED | SENT_TO_ASSEMBLY | OH_OPERATOR | LPTR only |
-| MEASUREMENTS_RECORDED | REJECTED | Any operator | |
 | SENT_TO_ASSEMBLY | ASSEMBLY_RECEIVED | ASSEMBLY_OPERATOR | Via receive endpoint |
 | ASSEMBLY_RECEIVED | ASSEMBLY_VERIFIED | ASSEMBLY_OPERATOR | Via accept endpoint |
 | ASSEMBLY_RECEIVED | REJECTED | ASSEMBLY_OPERATOR | Via reject endpoint |
@@ -638,41 +638,36 @@ AssemblyService.verify_blade():
 ### Step 3 — Accept or Reject (status-changing)
 
 ```
-POST /assembly/blades/{blade_id}/accept?batch_number=BXXX
+POST /assembly/blades/{blade_id}/accept
   → body: optional field overrides { assembly_weight }
   → AssemblyBladeRecord.status → ACCEPTED (or MODIFIED if overrides differ from OH)
   → blade.status: ASSEMBLY_RECEIVED → ASSEMBLY_VERIFIED
-  → Note: station_id is NOT recorded on this workflow log entry (known limitation)
 
-POST /assembly/blades/{blade_id}/reject?batch_number=BXXX
+POST /assembly/blades/{blade_id}/reject
   → body: { notes }
   → AssemblyBladeRecord.status → REJECTED
   → blade.status: ASSEMBLY_RECEIVED → REJECTED
-  → Creates BatchEvent(event_type=REJECTED)
+  → Creates WorkOrderEvent(event_type=REJECTED)
   → Notifies OH_OPERATORs
-  → Note: station_id is NOT recorded on this workflow log entry (known limitation)
-
-POST /batches/{batch_number}/accept   (bulk accept all remaining ASSEMBLY_RECEIVED blades)
-POST /batches/{batch_number}/reject   (bulk reject entire batch)
-POST /batches/{batch_number}/modify   (batch-level field modifications, creates MODIFIED events)
 ```
 
 ### Step 4 — Start Set-Making (gate check only)
 
 ```
-POST /assembly/batches/{batch_number}/start-setmaking
-→ Validates: assembly_verified count >= total_expected (ALL blades must be verified)
+POST /assembly/work-orders/{work_order_number}/start-setmaking
+→ LPTR: validates all blades are ASSEMBLY_VERIFIED
+→ HPTR: validates all blades are MEASUREMENTS_RECORDED or beyond
 → Returns SetMakingResponse { status: "INITIATED" }
 → Does NOT run HAL or create slots — that is a separate call.
-   The operator then calls POST /batches/{batch_number}/assign-slot to run HAL.
+   The operator then calls POST /work-orders/{wo_number}/assign-slot to run HAL.
 ```
 
 ### Step 5 — HAL Slot Assignment
 
-**Endpoint:** `POST /batches/{batch_number}/assign-slot`  
-**Implemented in:** `backend/app/api/v1/endpoints/batches.py`
+**Endpoint:** `POST /work-orders/{wo_number}/assign-slot`  
+**Implemented in:** `backend/app/api/v1/endpoints/work_orders.py`
 
-**Gate check:** The batch must have its latest `BatchEvent.event_type` in `{ACCEPTED, MODIFIED}`. Any other event type raises HTTP 422.
+**Gate check:** The work order must have a recent WorkOrderEvent with event_type in `{ACCEPTED, MODIFIED}`. Any other state raises HTTP 422.
 
 **Eligible blade statuses:** `SENT_TO_ASSEMBLY`, `ASSEMBLY_RECEIVED`, `ASSEMBLY_VERIFIED` — all three are valid inputs to the HAL step.
 
@@ -741,7 +736,6 @@ Base path: `/api/v1`
 | GET | `/blades/{id}` | Any | Full blade detail |
 | PUT | `/blades/{id}` | OH_OPERATOR | Update metadata |
 | DELETE | `/blades/{id}` | OH_OPERATOR / SUPER_ADMIN | Hard delete (see deletion rules) |
-| GET | `/blades/rejection-reasons/` | Any | List active rejection reason options |
 | GET | `/blades/{id}/qr` | Any | Generate QR code data for blade |
 | POST | `/blades/{id}/send-to-assembly` | OH_OPERATOR | Transition to SENT_TO_ASSEMBLY |
 | POST | `/blades/{id}/return-to-oh` | ASSEMBLY_OPERATOR | Transition to RETURNED_TO_OH |
@@ -1002,7 +996,7 @@ Weighing Scale      iScale i-04, 0.1 g       weighing_bridge.py       POST /weig
 DTI Gauge           Sylvac BT, 0.001 mm      dti_bridge.py            POST /dti/push
 OAK-1 Camera        Luxonis OAK-1 (IMX378)   oak1_camera_service.py   GET /snapshot, GET /stream
 QR Scanner          USB HID barcode gun      (keyboard emulation)     Browser reads directly
-Balancing Machine   Turbine disc             Manual entry UI          POST /batches/assign-slot
+Balancing Machine   Turbine disc             Manual entry UI          POST /work-orders/{wo}/assign-slot
 ```
 
 Bridge scripts are **not** part of the Docker Compose stack. Run each on the workstation physically connected to the instrument.
