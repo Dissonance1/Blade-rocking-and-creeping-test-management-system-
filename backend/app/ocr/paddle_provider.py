@@ -113,6 +113,18 @@ class PaddleOCRProvider(OCRProvider):
                 "use_gpu": False,
                 "enable_mkldnn": False,  # avoid MKL-DNN issues inside containers
                 "cpu_threads": 4,
+                # PaddleOCR silently discards any recognized line below this
+                # score before it ever reaches our fusion/candidate logic below.
+                # The default (0.5) is tuned for normal printed/handwritten text;
+                # this dot-punch engraved font routinely scores 0.2-0.4 even on a
+                # correct read, so the default was zeroing out real detections
+                # (verified: the English engine consistently found the melt-number
+                # box but every read fell under 0.5 and got dropped, leaving only
+                # whatever the Cyrillic engine happened to score above 0.5 on —
+                # usually nonsense). Set near zero so every candidate reaches the
+                # existing multi-mode/multi-crop scoring instead of being filtered
+                # before we ever see it.
+                "drop_score": 0.05,
             }
             cls._ocr_en = PaddleOCR(
                 rec_model_dir=str(_MODELS_DIR / "rec_en"), lang="en", **common
@@ -324,7 +336,13 @@ class PaddleOCRProvider(OCRProvider):
             return ""
         if c_en in _INDUSTRIAL_SYMBOLS:
             return c_en
-        if c_ru in _PURE_CYRILLIC:
+        # `c_ru` is "" whenever the Cyrillic read is shorter than the English
+        # read at this index (the common case, since the Cyrillic engine
+        # garbles digit/Latin strings into a short garbage token) — and in
+        # Python `"" in any_string` is always True, so without the `c_ru and`
+        # guard this branch silently deleted every trailing English character
+        # instead of falling through to keep it.
+        if c_ru and c_ru in _PURE_CYRILLIC:
             return c_ru
         if re.match(r"[A-Z]", c_en):
             return c_en

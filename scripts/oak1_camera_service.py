@@ -84,13 +84,13 @@ PREVIEW_JPEG_QUALITY = 80
 STILL_WIDTH = 1920
 STILL_HEIGHT = 1080
 STILL_JPEG_QUALITY = 92
-FIXED_FOCUS_LENS_POSITION = 110  # 0-255, higher = closer; tuned for ~10-15cm scan distance
+FIXED_FOCUS_LENS_POSITION = 105  # 0-255, higher = closer; tuned for ~10-15cm scan distance
 # The OAK-1's lens is fixed-focal-length — there's no optical zoom, so this
 # crops the center of the sensor frame and resizes back up. >1.0 trades FOV
 # for a bigger, more filled-in view of whatever's centered under the lens
 # (the blade marking, in normal use), at the usual digital-zoom cost of a
 # softer, more upscaled image the further past 1.0 it goes.
-DIGITAL_ZOOM = 1.5
+DIGITAL_ZOOM = 2.6
 RETRY_INTERVAL_S = 5
 STREAM_FPS = 24
 FPS_LOG_INTERVAL_S = 10
