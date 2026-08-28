@@ -73,11 +73,15 @@ export function useLocalSaveFolder() {
     setStatus("not-set");
   }, []);
 
+  /** Returns false when the capture was skipped (folder not connected/ready)
+   * rather than actually written — callers should surface that to the
+   * operator instead of assuming a silent no-op means "saved". */
   const saveCapture = useCallback(
     async (opts: { workOrderNumber: string; fieldLabel: string; photoBlob: Blob; ocr: OcrCaptureForSave }) => {
       const handle = handleRef.current;
-      if (!handle || status !== "ready") return;
+      if (!handle || status !== "ready") return false;
       await saveCaptureToFolder(handle, opts);
+      return true;
     },
     [status]
   );

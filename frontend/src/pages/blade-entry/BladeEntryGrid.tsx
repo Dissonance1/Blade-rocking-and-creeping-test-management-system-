@@ -252,10 +252,22 @@ export default function BladeEntryGrid() {
           fieldLabel: `melt-number-row${rowIndex + 1}`,
           photoBlob: blob,
           ocr: result,
-        }).catch(() => {
-          // Non-fatal — the local copy is a convenience mirror of the
-          // server-saved scan, not the source of truth.
-        });
+        })
+          .then((saved) => {
+            // The folder's permission grant lapses on every browser reload —
+            // saveCapture then no-ops instead of throwing, so without this
+            // check a whole session's worth of local photo copies can go
+            // missing with no visible sign anything was wrong.
+            if (!saved && localSaveFolder.status === "permission-needed") {
+              toast.warning("Local photo copy skipped — reconnect the save folder (top right) to resume mirroring captures.", {
+                id: "local-save-permission-needed",
+              });
+            }
+          })
+          .catch(() => {
+            // Non-fatal — the local copy is a convenience mirror of the
+            // server-saved scan, not the source of truth.
+          });
         if (readyToSave) scheduleSave(rowIndex);
       } catch (err) {
         toast.error(`Row ${rowIndex + 1}: scan failed — ${extractApiError(err)}`);
@@ -264,7 +276,7 @@ export default function BladeEntryGrid() {
         nav.focusCell(rowIndex, "melt_number");
       }
     },
-    [cameraTargetRow, applyOcrResult, scheduleSave, nav, saveCaptureLocally, workOrderNumber]
+    [cameraTargetRow, applyOcrResult, scheduleSave, nav, saveCaptureLocally, localSaveFolder.status, workOrderNumber]
   );
 
   // ── Russian keyboard ─────────────────────────────────────────────────────────
