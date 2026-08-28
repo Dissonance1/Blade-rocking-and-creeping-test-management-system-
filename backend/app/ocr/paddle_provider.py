@@ -453,11 +453,14 @@ class PaddleOCRProvider(OCRProvider):
         lines_en = self._group_by_lines(best_res_en)
 
         final_lines: list[str] = []
+        line_confidences: list[float] = []
         for line in lines_en:
             line_boxes = [box for box, _text, _conf in line["items"]]
             candidates = [self._fuse_boxes_as_is(line["items"], best_res_ru)]
             candidates += self._crop_candidates(line_boxes, best_processed, ocr_en, ocr_ru)
-            final_lines.append(max(candidates, key=lambda c: c[1])[0])
+            best_text, best_line_conf = max(candidates, key=lambda c: c[1])
+            final_lines.append(best_text)
+            line_confidences.append(best_line_conf)
 
         full_text = "_".join(final_lines) if final_lines else ""
         logger.debug(
@@ -470,6 +473,7 @@ class PaddleOCRProvider(OCRProvider):
         return {
             "full_text": full_text,
             "lines": final_lines,
+            "line_confidences": line_confidences,
             "confidence": best_confidence,
             "preprocessing_mode": best_mode,
         }
@@ -493,12 +497,39 @@ class PaddleOCRProvider(OCRProvider):
             logger.warning("paddleocr_extract_text_error", error=str(exc))
             return self._make_error_result(str(exc))
 
+    @staticmethod
+    def _best_line_fallback(fused: dict) -> str:
+        """When the serial/melt regex finds no match, fall back to the
+        single highest-confidence detected line rather than every detected
+        line joined together. A frame legitimately containing more than one
+        text line is rare for these markings — an extra "line" is usually a
+        spurious second detection elsewhere in frame (background texture,
+        an unrelated part of the part), and blindly concatenating it onto an
+        otherwise-decent single-line read corrupts the result.
+        """
+        lines = fused["lines"]
+        if not lines:
+            return ""
+        if len(lines) == 1:
+            return lines[0].strip()
+        # Rank by length first, confidence as tie-break — a short spurious
+        # detection (background texture, an unrelated 2-3 char blob) reports
+        # a deceptively high average confidence purely because a CTC
+        # recognizer accumulates less uncertainty over fewer characters, so
+        # confidence alone systematically favors short garbage over the
+        # longer, genuinely-longer melt-number line.
+        best_idx = max(
+            range(len(lines)),
+            key=lambda i: (len(lines[i]), fused["line_confidences"][i]),
+        )
+        return lines[best_idx].strip()
+
     async def extract_serial_number(self, image_bytes: bytes) -> OCRResult:
         t0 = time.perf_counter()
         try:
             fused = await asyncio.to_thread(self._sync_fuse, image_bytes)
             match = _SERIAL_RE.search(fused["full_text"])
-            value = match.group(0).upper() if match else fused["full_text"].strip()
+            value = match.group(0).upper() if match else self._best_line_fallback(fused)
             confidence = 0.88 if match else self._clamp_confidence(fused["confidence"] * 0.5)
             return OCRResult(
                 raw_text=fused["full_text"],
@@ -520,7 +551,7 @@ class PaddleOCRProvider(OCRProvider):
         try:
             fused = await asyncio.to_thread(self._sync_fuse, image_bytes)
             match = _MELT_RE.search(fused["full_text"])
-            value = match.group(0).upper() if match else fused["full_text"].strip()
+            value = match.group(0).upper() if match else self._best_line_fallback(fused)
             confidence = 0.88 if match else self._clamp_confidence(fused["confidence"] * 0.5)
             return OCRResult(
                 raw_text=fused["full_text"],
