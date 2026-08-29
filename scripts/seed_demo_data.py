@@ -7,6 +7,7 @@ Run: python3 /home/amit/src/blead_rocking/scripts/seed_demo_data.py
 import urllib.request, urllib.error, json, time, random, math
 
 BASE = "http://localhost"
+LOGIN_PATH = "/api/v1/auth/login"
 
 # ─── API helper ───────────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ def api(method, path, body=None, token=None):
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
         try: return e.code, json.loads(raw)
-        except: return e.code, {"_raw": raw[:200]}
+        except json.JSONDecodeError: return e.code, {"_raw": raw[:200]}
 
 def log(msg): print(f"  {msg}")
 def section(title): print(f"\n{'━'*55}\n  {title}\n{'━'*55}")
@@ -32,22 +33,14 @@ def section(title): print(f"\n{'━'*55}\n  {title}\n{'━'*55}")
 # ─── Login ────────────────────────────────────────────────────────────────────
 
 section("AUTHENTICATION")
-sc, d = api("POST", "/api/v1/auth/login", {"email":"admin@bladerocking.com","password":"Admin@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"admin@bladerocking.com","password":"Admin@123"})
 ADMIN = d["access_token"]; log("Admin logged in")
 time.sleep(0.5)
-sc, d = api("POST", "/api/v1/auth/login", {"email":"oh.operator@bladerocking.com","password":"Test@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"oh.operator@bladerocking.com","password":"Test@123"})
 OH = d["access_token"]; log("OH Operator logged in")
 time.sleep(0.5)
-sc, d = api("POST", "/api/v1/auth/login", {"email":"assembly@bladerocking.com","password":"Test@123"})
+sc, d = api("POST", LOGIN_PATH, {"email":"assembly@bladerocking.com","password":"Test@123"})
 ASM = d["access_token"]; log("Assembly Operator logged in")
-
-# ─── Rejection reasons ────────────────────────────────────────────────────────
-
-REJECT_REASONS = [
-    "b7806b96-c5b0-4902-9e19-b2fd72aaea39",  # OCR_MISMATCH
-    "f776971d-fa15-4c52-ac42-0f20e50fdc45",  # WEIGHT_OOT
-    "95ad5859-e81d-4ec7-82bd-a0f51c310668",  # VISUAL_DEFECT
-]
 
 # ─── Engine / WO configurations ───────────────────────────────────────────────
 
@@ -57,7 +50,6 @@ ENGINES = [
         "work_order_number": "WO-2024-CF6-001",
         "shop_order_number": "SO-720-2024-001",
         "part_number": "PN-HPT-S1-001",
-        "nomenclature": "HPT Stage 1 Blade",
         "running_hours": 18450,
         "melt_series": "CF6-MELT",
         "blade_type": "HPTR",
@@ -68,7 +60,6 @@ ENGINES = [
         "work_order_number": "WO-2024-CFM-002",
         "shop_order_number": "SO-720-2024-002",
         "part_number": "PN-LPT-S3-002",
-        "nomenclature": "LPT Stage 3 Blade",
         "running_hours": 22100,
         "melt_series": "CFM-MELT",
         "blade_type": "LPTR",
@@ -79,7 +70,6 @@ ENGINES = [
         "work_order_number": "WO-2024-PW4-003",
         "shop_order_number": "SO-720-2024-003",
         "part_number": "PN-HPT-S2-003",
-        "nomenclature": "HPT Stage 2 Blade",
         "running_hours": 15680,
         "melt_series": "PW4-MELT",
         "blade_type": "HPTR",
@@ -121,7 +111,6 @@ for eng_idx, eng in enumerate(ENGINES):
             "work_order_number": eng["work_order_number"],
             "shop_order_number": eng["shop_order_number"],
             "part_number": eng["part_number"],
-            "nomenclature": eng["nomenclature"],
             "engine_number": eng["engine_number"],
             "running_hours": eng["running_hours"],
             "blade_type": eng["blade_type"],
@@ -165,21 +154,9 @@ for eng, blade_list in created_blades:
         # Decide workflow stage based on position in list
         progress = idx / len(blade_list)
 
-        if progress < 0.08:
-            # ~8% stay in OH_INSPECTION (measurements not yet recorded — skip send)
+        if progress < 0.12:
+            # ~12% stay in OH_INSPECTION (measurements not yet recorded — skip send)
             pass
-
-        elif progress < 0.12:
-            # ~4% rejected at OH stage
-            api("POST", f"/api/v1/blades/{bid}/reject", {
-                "rejection_reason_id": random.choice(REJECT_REASONS),
-                "notes": random.choice([
-                    "Weight out of tolerance range",
-                    "Visual crack detected on leading edge",
-                    "OCR serial number mismatch with traveller",
-                    "Surface erosion beyond limits",
-                ])
-            }, token=OH)
 
         elif progress < 0.25:
             # ~13% at MEASUREMENTS_RECORDED — sent but not yet assigned

@@ -5,11 +5,16 @@ import {
   Loader2,
   Check,
   RefreshCw,
+  Folder,
+  FolderOpen,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/utils/cn";
 import CameraModal from "@/components/common/CameraModal";
 import RussianKeyboard from "@/components/common/RussianKeyboard";
 import { useWeighingSocket } from "@/hooks/useWeighingSocket";
+import { useLocalSaveFolder } from "@/hooks/useLocalSaveFolder";
 import { extractApiError } from "@/services/api";
 import { ocrService } from "@/services/ocrService";
 import {
@@ -20,6 +25,8 @@ import { useBladeEntryStore, BLADES_PER_WORK_ORDER } from "@/store/bladeEntrySto
 import { useGridKeyboardNav } from "./hooks/useGridKeyboardNav";
 import GridRow from "./GridRow";
 import CompleteWorkOrderDialog from "./CompleteWorkOrderDialog";
+import ExcelImportButton from "./ExcelImportButton";
+import type { WorkOrderBulkImportResult } from "@/services/workOrderService";
 
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const SAVE_RETRY_DELAYS_MS = [500, 1500, 4000];
@@ -45,12 +52,15 @@ export default function BladeEntryGrid() {
     closeCompleteDialog,
     markEntryComplete,
     applyServerRow,
+    loadFromServer,
   } = useBladeEntryStore();
 
   const workOrderNumber = commonInfo.work_order_number;
 
   // ── Single shared weighing-socket + camera + RU keyboard for the whole grid ──
   const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket();
+  const localSaveFolder = useLocalSaveFolder();
+  const saveCaptureLocally = localSaveFolder.saveCapture;
 
   const [cameraTargetRow, setCameraTargetRow] = useState<number | null>(null);
   const [keyboardTargetRow, setKeyboardTargetRow] = useState<number | null>(null);
@@ -130,8 +140,11 @@ export default function BladeEntryGrid() {
   //    camera for the next row (manual capture — no autoCapture) ────────────
   const handleLockWeight = useCallback(
     (rowIndex: number) => {
-      lockRowWeight(rowIndex);
+      // Save BEFORE locking — saveRow() reads the row fresh from the store
+      // and bails out early if it's already locked, so locking first would
+      // silently skip the save entirely.
       scheduleSave(rowIndex, true);
+      lockRowWeight(rowIndex);
       clearReading();
       const nextRow = Math.min(rowIndex + 1, rows.length - 1);
       focusCell(nextRow, "melt_number");
@@ -185,16 +198,45 @@ export default function BladeEntryGrid() {
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
+  // ── Flush pending debounced saves on unmount ────────────────────────────────
+  // beforeunload only covers closing the tab. Navigating away in-app (e.g. the
+  // Back button) unmounts this grid and the parent page resets the store right
+  // after — if a row's 600ms debounce hasn't fired yet, saveRow would read an
+  // already-reset (empty) row and silently drop the save. Firing pending saves
+  // immediately here (child unmount runs before the parent's reset) prevents that.
+  const saveRowRef = useRef(saveRow);
+  useEffect(() => {
+    saveRowRef.current = saveRow;
+  }, [saveRow]);
+
+  useEffect(() => {
+    return () => {
+      const timers = saveTimersRef.current;
+      timers.forEach((timerId, rowIndex) => {
+        clearTimeout(timerId);
+        void saveRowRef.current(rowIndex);
+      });
+      timers.clear();
+    };
+  }, []);
+
   // ── OCR capture ──────────────────────────────────────────────────────────────
   // Keeps the raw OCR detection (ocr_melt_number) separate from the editable
   // ground-truth cell (melt_number) so the two can be compared later, and
   // links the scanned image to this blade so it isn't an orphaned file.
   const handleOcrCapture = useCallback(
-    async (file: File) => {
+    async (file: File, blob: Blob) => {
       const rowIndex = cameraTargetRow;
       if (rowIndex == null) return;
       try {
         const result = await ocrService.scanMelt(file);
+        if (!result.value) {
+          // OCR ran but found nothing readable in the frame — leave the
+          // row's existing value untouched and tell the operator explicitly
+          // instead of silently applying an empty string.
+          toast.warning(`Row ${rowIndex + 1}: no melt number detected — try retaking with better lighting/focus.`);
+          return;
+        }
         const readyToSave = applyOcrResult(rowIndex, result.value);
         const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
         if (bladeId) {
@@ -205,13 +247,36 @@ export default function BladeEntryGrid() {
               // image link shouldn't block data entry.
             });
         }
+        saveCaptureLocally({
+          workOrderNumber,
+          fieldLabel: `melt-number-row${rowIndex + 1}`,
+          photoBlob: blob,
+          ocr: result,
+        })
+          .then((saved) => {
+            // The folder's permission grant lapses on every browser reload —
+            // saveCapture then no-ops instead of throwing, so without this
+            // check a whole session's worth of local photo copies can go
+            // missing with no visible sign anything was wrong.
+            if (!saved && localSaveFolder.status === "permission-needed") {
+              toast.warning("Local photo copy skipped — reconnect the save folder (top right) to resume mirroring captures.", {
+                id: "local-save-permission-needed",
+              });
+            }
+          })
+          .catch(() => {
+            // Non-fatal — the local copy is a convenience mirror of the
+            // server-saved scan, not the source of truth.
+          });
         if (readyToSave) scheduleSave(rowIndex);
+      } catch (err) {
+        toast.error(`Row ${rowIndex + 1}: scan failed — ${extractApiError(err)}`);
       } finally {
         setCameraTargetRow(null);
         nav.focusCell(rowIndex, "melt_number");
       }
     },
-    [cameraTargetRow, applyOcrResult, scheduleSave, nav]
+    [cameraTargetRow, applyOcrResult, scheduleSave, nav, saveCaptureLocally, localSaveFolder.status, workOrderNumber]
   );
 
   // ── Russian keyboard ─────────────────────────────────────────────────────────
@@ -264,6 +329,21 @@ export default function BladeEntryGrid() {
     [closeCompleteDialog, focusCell, nav]
   );
 
+  // ── Excel bulk import ────────────────────────────────────────────────────────
+  // Re-fetches the whole Work Order via loadFromServer rather than patching
+  // rows in place — bulk-imported rows go from blank to populated, and
+  // applyServerRow (designed for autosave's echo-back) only ever backfills
+  // computed fields, never melt_number/raw_weight/status/locked.
+  const handleExcelImport = useCallback(
+    async (file: File): Promise<WorkOrderBulkImportResult> => {
+      const result = await workOrderService.bulkImportRows(workOrderNumber, file);
+      const detail = await workOrderService.getEntry(workOrderNumber);
+      if (detail) loadFromServer(detail);
+      return result;
+    },
+    [workOrderNumber, loadFromServer]
+  );
+
   const savedCount = rows.filter((r) => r.status === "saved").length;
   const errorCount = rows.filter((r) => r.status === "error").length;
 
@@ -272,11 +352,16 @@ export default function BladeEntryGrid() {
       <CameraModal
         open={cameraTargetRow != null}
         fieldLabel={cameraTargetRow != null ? `Melt Number — Row ${cameraTargetRow + 1}` : "Melt Number"}
-        onCapture={(file) => void handleOcrCapture(file)}
+        onCapture={(file, blob) => void handleOcrCapture(file, blob)}
         onClose={() => {
           setCameraTargetRow(null);
           if (cameraTargetRow != null) nav.focusCell(cameraTargetRow, "melt_number");
         }}
+        saveFolderSupported={localSaveFolder.supported}
+        saveFolderStatus={localSaveFolder.status}
+        saveFolderName={localSaveFolder.folderName}
+        onChooseSaveFolder={() => void localSaveFolder.choose()}
+        onReconnectSaveFolder={() => void localSaveFolder.reconnect()}
       />
       {keyboardTargetRow != null && (
         <RussianKeyboard
@@ -323,16 +408,59 @@ export default function BladeEntryGrid() {
           )}
         </div>
 
-        {errorCount > 0 && (
-          <button
-            type="button"
-            onClick={retryAllFailed}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700/50 rounded-full px-3 py-1"
-          >
-            <RefreshCw className="w-3 h-3" />
-            {errorCount} row(s) failed to save — Retry All
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {localSaveFolder.supported && (
+            <button
+              type="button"
+              onClick={() =>
+                void (localSaveFolder.status === "permission-needed"
+                  ? localSaveFolder.reconnect()
+                  : localSaveFolder.choose())
+              }
+              title={
+                localSaveFolder.status === "ready"
+                  ? `OCR photos are also saved to "${localSaveFolder.folderName}"`
+                  : localSaveFolder.status === "permission-needed"
+                    ? `Click to reconnect to "${localSaveFolder.folderName}"`
+                    : "Choose a folder to also save OCR photos locally"
+              }
+              className={cn(
+                "inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1 border",
+                localSaveFolder.status === "ready"
+                  ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50"
+                  : localSaveFolder.status === "permission-needed"
+                    ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50"
+                    : "text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-background border-slate-200 dark:border-slate-700/50"
+              )}
+            >
+              {localSaveFolder.status === "ready" ? (
+                <FolderOpen className="w-3 h-3" />
+              ) : (
+                <Folder className="w-3 h-3" />
+              )}
+              {localSaveFolder.status === "ready" && `Saving to “${localSaveFolder.folderName}”`}
+              {localSaveFolder.status === "permission-needed" && "Reconnect save folder"}
+              {(localSaveFolder.status === "not-set" || localSaveFolder.status === "checking") &&
+                "Choose save folder"}
+            </button>
+          )}
+          {errorCount > 0 && (
+            <button
+              type="button"
+              onClick={retryAllFailed}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700/50 rounded-full px-3 py-1"
+            >
+              <RefreshCw className="w-3 h-3" />
+              {errorCount} row(s) failed to save — Retry All
+            </button>
+          )}
+          <ExcelImportButton
+            label="Upload Excel"
+            confirmMessage="This will overwrite Melt Number/Weight for any rows present in the file. Continue?"
+            onImport={handleExcelImport}
+            disabled={isEntryComplete}
+          />
+        </div>
       </div>
 
       {/* Column headers */}

@@ -117,3 +117,19 @@ class WorkOrderCompleteResponse(BaseSchema):
     status: str
     blade_ids: list[uuid.UUID]
     completed_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Response: bulk import (Excel upload)
+# ---------------------------------------------------------------------------
+
+class WorkOrderBulkImportError(BaseSchema):
+    s_no: int | None = None
+    message: str
+
+
+class WorkOrderBulkImportResponse(BaseSchema):
+    imported_count: int
+    skipped_count: int
+    errors: list[WorkOrderBulkImportError]
+    rows: list[WorkOrderRowResponse]

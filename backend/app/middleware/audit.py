@@ -109,6 +109,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, *, max_body_bytes: int = 65_536) -> None:
         super().__init__(app)
         self._max_body_bytes = max_body_bytes
+        # asyncio only holds a weak reference to a "fire and forget" task —
+        # without a strong reference somewhere, it can be garbage-collected
+        # mid-write. Held here and released via the done-callback once it
+        # actually finishes.
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in _SKIP_PATHS:
@@ -141,6 +146,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         # Schedule the DB write as a background coroutine to avoid
         # blocking the response from being sent to the client.
-        asyncio.ensure_future(_persist_audit_log(entry))
+        task = asyncio.ensure_future(_persist_audit_log(entry))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
         return response

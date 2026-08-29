@@ -117,7 +117,7 @@ def test_workflow_transition_error_lists_allowed_states() -> None:
         requested=BladeStatus.COMPLETED,
     )
     msg = str(exc)
-    # OH_INSPECTION allows MEASUREMENTS_RECORDED, REJECTED, ON_HOLD
+    # OH_INSPECTION allows MEASUREMENTS_RECORDED, REJECTED
     assert "MEASUREMENTS_RECORDED" in msg or "REJECTED" in msg
 
 
@@ -183,11 +183,11 @@ GET_ALLOWED_CASES: list[tuple[BladeStatus, set[BladeStatus]]] = [
     ),
     (
         BladeStatus.OH_INSPECTION,
-        {BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.REJECTED, BladeStatus.ON_HOLD},
+        {BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.REJECTED},
     ),
     (
         BladeStatus.MEASUREMENTS_RECORDED,
-        {BladeStatus.SENT_TO_ASSEMBLY, BladeStatus.REJECTED, BladeStatus.ON_HOLD},
+        {BladeStatus.SENT_TO_ASSEMBLY, BladeStatus.REJECTED},
     ),
     (
         BladeStatus.SENT_TO_ASSEMBLY,
@@ -216,10 +216,6 @@ GET_ALLOWED_CASES: list[tuple[BladeStatus, set[BladeStatus]]] = [
     (
         BladeStatus.REJECTED,
         {BladeStatus.REOPENED},
-    ),
-    (
-        BladeStatus.ON_HOLD,
-        {BladeStatus.OH_INSPECTION, BladeStatus.MEASUREMENTS_RECORDED, BladeStatus.ASSEMBLY_RECEIVED},
     ),
     (
         BladeStatus.REOPENED,

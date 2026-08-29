@@ -4,7 +4,10 @@ Blade Rocking & Creep Test Management System — FastAPI application entry-point
 Startup sequence
 ----------------
 1. ``lifespan`` runs:   init DB tables (non-prod), connect Redis, configure Celery.
-2. Middleware stack:   rate-limit → audit → CORS.
+2. Middleware stack:   CORS → audit → rate-limit (CORS registered last, so it
+                       wraps outermost and sees every request/response first —
+                       including preflight OPTIONS and anything rate-limiting
+                       or the audit middleware short-circuits).
 3. Routers:           /api/v1/* sub-routers.
 4. Exception handlers: HTTPException, RequestValidationError, WorkflowTransitionError.
 5. Utility endpoints:  /health, optionally /metrics.
@@ -41,6 +44,119 @@ class WorkflowTransitionError(Exception):
         super().__init__(detail)
         self.detail = detail
         self.current_status = current_status
+
+
+# ---------------------------------------------------------------------------
+# Exception handlers
+#
+# Registered via app.add_exception_handler() in create_application() rather
+# than defined as @app.exception_handler-decorated closures there — none of
+# them actually capture anything from that scope, so nesting them only added
+# to its Cognitive Complexity for no benefit.
+# ---------------------------------------------------------------------------
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": exc.detail,
+            "errors": [],
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    field_errors = []
+    for error in exc.errors():
+        loc = error.get("loc", [])
+        field = ".".join(str(p) for p in loc[1:]) if len(loc) > 1 else str(loc[0]) if loc else None
+        field_errors.append(
+            {
+                "field": field,
+                "message": error.get("msg", "Validation error"),
+                "code": error.get("type"),
+            }
+        )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "success": False,
+            "message": "Request validation failed",
+            "errors": field_errors,
+        },
+    )
+
+
+async def workflow_transition_error_handler(request: Request, exc: WorkflowTransitionError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "success": False,
+            "message": exc.detail,
+            "errors": [
+                {
+                    "field": "status",
+                    "message": exc.detail,
+                    "code": "invalid_workflow_transition",
+                }
+            ],
+            "current_status": exc.current_status,
+        },
+    )
+
+
+# WorkflowEngine.transition() (app.workflows.state_machine) raises its own,
+# differently-shaped WorkflowTransitionError — without this handler it was
+# an unhandled exception (raw 500) instead of a clean 409.
+from app.workflows.state_machine import WorkflowTransitionError as EngineWorkflowTransitionError  # noqa: E402
+
+
+async def engine_workflow_transition_error_handler(
+    request: Request, exc: EngineWorkflowTransitionError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "success": False,
+            "message": str(exc),
+            "errors": [
+                {
+                    "field": "status",
+                    "message": str(exc),
+                    "code": "invalid_workflow_transition",
+                }
+            ],
+            "current_status": exc.current.value,
+        },
+    )
+
+
+async def health_check() -> dict[str, Any]:
+    """Return application liveness / readiness information."""
+    return {
+        "status": "ok",
+        "version": settings.APP_VERSION,
+        "environment": settings.ENVIRONMENT,
+    }
+
+
+def _maybe_enable_metrics(app: FastAPI) -> None:
+    """Wire up the optional Prometheus /metrics endpoint if ENABLE_METRICS is set."""
+    if os.getenv("ENABLE_METRICS", "").lower() not in {"1", "true", "yes"}:
+        return
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore[import]
+
+        Instrumentator(
+            should_group_status_codes=False,
+            excluded_handlers=["/health", "/metrics"],
+        ).instrument(app).expose(app, endpoint="/metrics")
+        logger.info("prometheus_metrics_enabled")
+    except ImportError:
+        logger.warning("prometheus_fastapi_instrumentator_not_installed")
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +278,20 @@ def create_application() -> FastAPI:
         redoc_url="/redoc" if settings.ENVIRONMENT != "prod" else None,
     )
 
+    # -------------------------------------------------------- Custom middleware
+    from app.middleware.audit import AuditMiddleware
+    from app.middleware.rate_limit import configure_rate_limiting
+
+    app.add_middleware(AuditMiddleware)
+    configure_rate_limiting(app)
+
     # ----------------------------------------------------------------- CORS
+    # Added last so it becomes the outermost middleware (Starlette wraps in
+    # reverse registration order) — every response, including one rejected
+    # by rate-limiting or raised from the audit middleware, still gets CORS
+    # headers. Registered before CORS, those responses would otherwise reach
+    # the browser without them and surface as an opaque CORS failure instead
+    # of the real status code.
     cors_origins: list[str] = [str(o) for o in settings.CORS_ORIGINS]
     if not cors_origins and settings.ENVIRONMENT == "dev":
         # Allow all origins in development when none are explicitly configured.
@@ -177,129 +306,31 @@ def create_application() -> FastAPI:
         expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
     )
 
-    # -------------------------------------------------------- Custom middleware
-    from app.middleware.audit import AuditMiddleware
-    from app.middleware.rate_limit import configure_rate_limiting
-
-    app.add_middleware(AuditMiddleware)
-    configure_rate_limiting(app)
-
     # ------------------------------------------------------------- Routers
     from app.api.v1.router import api_router
 
     app.include_router(api_router, prefix=settings.API_V1_STR)
 
     # ------------------------------------------------------- Exception handlers
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(
-        request: Request, exc: HTTPException
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "success": False,
-                "message": exc.detail,
-                "errors": [],
-            },
-            headers=getattr(exc, "headers", None),
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        field_errors = []
-        for error in exc.errors():
-            loc = error.get("loc", [])
-            field = ".".join(str(p) for p in loc[1:]) if len(loc) > 1 else str(loc[0]) if loc else None
-            field_errors.append(
-                {
-                    "field": field,
-                    "message": error.get("msg", "Validation error"),
-                    "code": error.get("type"),
-                }
-            )
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "success": False,
-                "message": "Request validation failed",
-                "errors": field_errors,
-            },
-        )
-
-    @app.exception_handler(WorkflowTransitionError)
-    async def workflow_transition_error_handler(
-        request: Request, exc: WorkflowTransitionError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={
-                "success": False,
-                "message": exc.detail,
-                "errors": [
-                    {
-                        "field": "status",
-                        "message": exc.detail,
-                        "code": "invalid_workflow_transition",
-                    }
-                ],
-                "current_status": exc.current_status,
-            },
-        )
-
+    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(WorkflowTransitionError, workflow_transition_error_handler)
     # WorkflowEngine.transition() (app.workflows.state_machine) raises its own,
     # differently-shaped WorkflowTransitionError — without this handler it was
     # an unhandled exception (raw 500) instead of a clean 409.
-    from app.workflows.state_machine import WorkflowTransitionError as EngineWorkflowTransitionError
-
-    @app.exception_handler(EngineWorkflowTransitionError)
-    async def engine_workflow_transition_error_handler(
-        request: Request, exc: EngineWorkflowTransitionError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={
-                "success": False,
-                "message": str(exc),
-                "errors": [
-                    {
-                        "field": "status",
-                        "message": str(exc),
-                        "code": "invalid_workflow_transition",
-                    }
-                ],
-                "current_status": exc.current.value,
-            },
-        )
+    app.add_exception_handler(EngineWorkflowTransitionError, engine_workflow_transition_error_handler)
 
     # --------------------------------------------------------- Utility routes
-    @app.get(
+    app.add_api_route(
         "/health",
+        health_check,
+        methods=["GET"],
         tags=["health"],
         summary="Health check",
         response_model=dict[str, Any],
     )
-    async def health_check() -> dict[str, Any]:
-        """Return application liveness / readiness information."""
-        return {
-            "status": "ok",
-            "version": settings.APP_VERSION,
-            "environment": settings.ENVIRONMENT,
-        }
 
-    # Optional Prometheus metrics endpoint
-    if os.getenv("ENABLE_METRICS", "").lower() in {"1", "true", "yes"}:
-        try:
-            from prometheus_fastapi_instrumentator import Instrumentator  # type: ignore[import]
-
-            Instrumentator(
-                should_group_status_codes=False,
-                excluded_handlers=["/health", "/metrics"],
-            ).instrument(app).expose(app, endpoint="/metrics")
-            logger.info("prometheus_metrics_enabled")
-        except ImportError:
-            logger.warning("prometheus_fastapi_instrumentator_not_installed")
+    _maybe_enable_metrics(app)
 
     return app
 

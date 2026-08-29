@@ -59,10 +59,6 @@ const STATUS_MAP: Record<BladeStatus, StatusConfig> = {
     label: "Rejected",
     classes: "bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800",
   },
-  ON_HOLD: {
-    label: "On Hold",
-    classes: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800",
-  },
   REOPENED: {
     label: "Reopened",
     classes: "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800",

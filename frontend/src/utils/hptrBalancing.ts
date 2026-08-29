@@ -562,6 +562,35 @@ function attemptCrossSwap(
   if (maxBlockSize >= 2) sizeOrder.push(2);
   if (maxBlockSize >= 1) sizeOrder.push(1);
 
+  type BestCandidate = { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean };
+
+  /** Best-scoring W2 candidate (if any) for one W1 window, out of whatever `candidatesFor` offers. */
+  function bestCandidateForWindow(
+    w1w: number[],
+    size: number,
+    candidatesFor: (w1w: number[]) => number[][]
+  ): BestCandidate | null {
+    const sumW1 = w1w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+    let best: BestCandidate | null = null;
+    let bestScore = Infinity;
+
+    for (const w2w of candidatesFor(w1w)) {
+      const sumW2 = w2w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
+      // Swapping the two blocks moves the whole W2 block's weight into W1
+      // and vice versa — the W1-W2 delta is twice the sum difference.
+      const deltaSum = 2 * (sumW2 - sumW1);
+      if (size <= 2 && Math.abs(deltaSum) > MAX_SMALL_BLOCK_SWAP_DELTA_G) continue;
+      const { adjustedDiff, meets } = evaluateSum(deltaSum);
+      if (!meets) continue;
+      const score = Math.abs(adjustedDiff - targetMid);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { w1w, w2w, adjustedDiff, meets };
+      }
+    }
+    return best;
+  }
+
   /**
    * Shared search loop: `candidatesFor(w1w)` decides which W2 windows are
    * eligible partners for a given W1 window — the two tiers differ only in
@@ -569,28 +598,13 @@ function attemptCrossSwap(
    */
   function search(candidatesFor: (w1w: number[]) => number[][]): CrossSwapResult | null {
     for (const size of sizeOrder) {
-      const w1Windows = windows(w1Slots, size);
-      let best: { w1w: number[]; w2w: number[]; adjustedDiff: number; meets: boolean } | null = null;
-      let bestScore = Infinity;
-
-      for (const w1w of w1Windows) {
-        const sumW1 = w1w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
-        for (const w2w of candidatesFor(w1w)) {
-          const sumW2 = w2w.reduce((s, slot) => s + (bySlot.get(slot)?.blade.weight_grams ?? 0), 0);
-          // Swapping the two blocks moves the whole W2 block's weight into W1
-          // and vice versa — the W1-W2 delta is twice the sum difference.
-          const deltaSum = 2 * (sumW2 - sumW1);
-          if (size <= 2 && Math.abs(deltaSum) > MAX_SMALL_BLOCK_SWAP_DELTA_G) continue;
-          const { adjustedDiff, meets } = evaluateSum(deltaSum);
-          if (!meets) continue;
-          const score = Math.abs(adjustedDiff - targetMid);
-          if (score < bestScore) {
-            bestScore = score;
-            best = { w1w, w2w, adjustedDiff, meets };
-          }
+      let best: BestCandidate | null = null;
+      for (const w1w of windows(w1Slots, size)) {
+        const candidate = bestCandidateForWindow(w1w, size, candidatesFor);
+        if (candidate && (!best || Math.abs(candidate.adjustedDiff - targetMid) < Math.abs(best.adjustedDiff - targetMid))) {
+          best = candidate;
         }
       }
-
       if (best) return buildResult(best);
     }
     return null;

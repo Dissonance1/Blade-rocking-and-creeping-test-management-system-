@@ -26,12 +26,6 @@ class StationSummary(BaseSchema):
     code: str
 
 
-class RejectionReasonSummary(BaseSchema):
-    id: uuid.UUID
-    code: str
-    description: str
-
-
 # ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
@@ -49,7 +43,6 @@ class BladeUpdate(BaseSchema):
     work_order_number: str | None = Field(default=None, max_length=64)
     shop_order_number: str | None = Field(default=None, max_length=64)
     part_number: str | None = Field(default=None, max_length=64)
-    nomenclature: str | None = Field(default=None, max_length=128)
     engine_number: str | None = Field(default=None, max_length=64)
     running_hours: Decimal | None = Field(default=None, ge=0)
     engine_hours: str | None = Field(default=None, max_length=64)
@@ -77,19 +70,6 @@ class SendToAssemblyRequest(BaseSchema):
     target_station_id: uuid.UUID | None = Field(
         default=None,
         description="Assembly station to route the blade to (optional override)",
-    )
-
-
-class RejectBladeRequest(BaseSchema):
-    """Payload for rejecting a blade."""
-
-    rejection_reason_id: uuid.UUID = Field(
-        ..., description="Pre-defined rejection reason ID"
-    )
-    rejection_notes: str | None = Field(
-        default=None,
-        max_length=4096,
-        description="Detailed rejection notes (will appear in reports)",
     )
 
 
@@ -162,7 +142,6 @@ class BladeListItem(BaseSchema):
     work_order_number: str | None = None
     shop_order_number: str | None = None
     part_number: str | None = None
-    nomenclature: str | None = None
     engine_number: str | None = None
     running_hours: float | None = None
     status: BladeStatus
@@ -186,7 +165,6 @@ class BladeResponse(BaseSchema):
     work_order_number: str | None = None
     shop_order_number: str | None = None
     part_number: str | None = None
-    nomenclature: str | None = None
     engine_number: str | None = None
     running_hours: Decimal | None = None
     engine_hours: str | None = None
@@ -202,10 +180,6 @@ class BladeResponse(BaseSchema):
     ocr_melt_number: str | None = None
     ocr_mismatch_flag: bool
     ocr_mismatch_notes: str | None = None
-
-    # Rejection
-    rejection_reason: RejectionReasonSummary | None = None
-    rejection_notes: str | None = None
 
     measurements: list[MeasurementResponse] | None = None
 

@@ -57,6 +57,18 @@ export interface WorkOrderCompleteValidationError {
   duplicate_groups?: { melt_number: string; s_nos: number[] }[];
 }
 
+export interface WorkOrderBulkImportError {
+  s_no: number | null;
+  message: string;
+}
+
+export interface WorkOrderBulkImportResult {
+  imported_count: number;
+  skipped_count: number;
+  errors: WorkOrderBulkImportError[];
+  rows: WorkOrderRow[];
+}
+
 export const workOrderService = {
   create: async (payload: WorkOrderCreatePayload): Promise<WorkOrderDetail> => {
     const { data } = await api.post<WorkOrderDetail>("/work-orders/", payload);
@@ -92,6 +104,17 @@ export const workOrderService = {
   complete: async (workOrderNumber: string): Promise<WorkOrderCompleteResult> => {
     const { data } = await api.post<WorkOrderCompleteResult>(
       `/work-orders/${encodeURIComponent(workOrderNumber)}/complete`
+    );
+    return data;
+  },
+
+  bulkImportRows: async (workOrderNumber: string, file: File): Promise<WorkOrderBulkImportResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    const { data } = await api.post<WorkOrderBulkImportResult>(
+      `/work-orders/${encodeURIComponent(workOrderNumber)}/rows/bulk-import`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } }
     );
     return data;
   },

@@ -282,7 +282,10 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
         result = await runBackendOCR(blob, mode);
       }
 
-      setScanResult(result);
+      // An empty value means OCR ran but found nothing readable in the frame —
+      // treat it the same as "no result" so the operator sees a clear signal
+      // to retake instead of a blank "Detected" panel.
+      setScanResult(result.value ? result : null);
       setPhase("captured");
     } catch {
       setErrorMsg("Scan failed. Try again with better lighting or a clearer image.");

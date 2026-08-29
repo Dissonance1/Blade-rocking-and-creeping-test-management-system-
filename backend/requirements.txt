@@ -29,6 +29,7 @@ pyserial==3.5
 # Data processing
 pandas==2.2.2
 openpyxl==3.1.5
+xlrd==2.0.1
 
 # PDF / Report generation
 reportlab==4.2.2

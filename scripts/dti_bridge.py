@@ -25,7 +25,7 @@ Usage:
     python dti_bridge.py --port COM2 --station 2                 # rig 2
     python dti_bridge.py --port COM4                             # different port
     python dti_bridge.py --port COM7 --positions H1 H2 H3 H4 H5 # five positions
-    python dti_bridge.py --port COM7 --server https://192.168.1.50
+    python dti_bridge.py --port COM7 --server https://192.168.1.50 --insecure-ssl
 
 Requirements (install once):
     pip install pyserial requests
@@ -50,9 +50,9 @@ from pathlib import Path
 
 import requests
 import serial
-import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from bridge_common import build_session as _build_session
+from bridge_common import wait_until_reachable as _wait_until_reachable
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -141,29 +141,69 @@ def _connect(port: str) -> serial.Serial:
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def run(port: str, server: str, station: str) -> None:
+def _read_next_value(ser: serial.Serial, port: str):
+    """Read and parse one line from the DTI gauge.
+
+    Returns ``(ser, value)`` — ``ser`` is a freshly reconnected handle if the
+    port needed to be reopened; ``value`` is ``None`` when nothing usable was
+    read this iteration (caller should just loop again).
+    """
+    try:
+        raw = ser.read_until(b'\r')
+    except serial.SerialException as exc:
+        log.exception("[serial] read error: %s — reconnecting in 5 s …", exc)
+        try:
+            ser.close()
+        except Exception:
+            pass
+        time.sleep(5)
+        return _connect(port), None
+
+    if not raw:
+        time.sleep(0.05)
+        return ser, None
+
+    decoded = raw.decode("ascii", errors="ignore").strip()
+    if not decoded:
+        return ser, None
+
+    value = _parse_reading(decoded)
+    if value is None:
+        log.debug("[dti  ] unparseable line: %r", decoded)
+    return ser, value
+
+
+def _post_reading(session: requests.Session, push_url: str, station: str, current_pos: str, value: float) -> str:
+    """POST one reading; returns the (possibly server-advanced) position."""
+    try:
+        resp = session.post(
+            push_url,
+            json={"station": station, "position": current_pos, "value": value},
+            timeout=3,
+        )
+    except requests.RequestException as exc:
+        log.warning("[http ] POST failed: %s", exc)
+        return current_pos
+
+    if resp.status_code != 200:
+        log.warning("[http ] server returned %d: %s", resp.status_code, resp.text[:120])
+        return current_pos
+
+    log.info("[http ] ✓ accepted  value = %.4f", value)
+    try:
+        next_position = resp.json().get("next_position")
+    except ValueError:
+        next_position = None
+    return next_position or current_pos
+
+
+def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> None:
     push_url = server.rstrip("/") + PUSH_PATH
-    positions_url = server.rstrip("/") + POSITIONS_PATH
     log.info("[http ] push URL → %s", push_url)
-    log.info("[http ] SSL verification disabled (self-signed cert)")
     log.info("[dti  ] station: %s", station)
 
-    session = requests.Session()
-    session.verify = False
-
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            r = session.get(server.rstrip("/") + "/health", timeout=5)
-            log.info("[http ] server reachable — status %s", r.status_code)
-            break
-        except requests.RequestException as exc:
-            log.warning(
-                "[http ] cannot reach server at %s (attempt %d): %s — retrying in %ds",
-                server, attempt, exc, RETRY_INTERVAL_S,
-            )
-            time.sleep(RETRY_INTERVAL_S)
+    session = _build_session(insecure_ssl)
+    _wait_until_reachable(session, server, RETRY_INTERVAL_S)
 
     ser = _connect(port)
 
@@ -180,63 +220,20 @@ def run(port: str, server: str, station: str) -> None:
 
     try:
         while True:
-            try:
-                raw = ser.read_until(b'\r')
-            except serial.SerialException as exc:
-                log.error("[serial] read error: %s — reconnecting in 5 s …", exc)
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                time.sleep(5)
-                ser = _connect(port)
-                continue
-
-            if not raw:
-                time.sleep(0.05)
-                continue
-
-            decoded = raw.decode("ascii", errors="ignore").strip()
-            if not decoded:
-                continue
-
-            value = _parse_reading(decoded)
+            ser, value = _read_next_value(ser, port)
             if value is None:
-                log.debug("[dti  ] unparseable line: %r", decoded)
                 continue
 
             # Debounce: Sylvac BT can emit the same frame twice on one DATA press
             now = time.monotonic()
             if value == last_value and now - last_accepted < DEBOUNCE_S:
-                log.debug("[dti  ] debounced (%.0f ms since last, same value) — skipping %r", (now - last_accepted) * 1000, decoded)
+                log.debug("[dti  ] debounced (%.0f ms since last, same value) — skipping %.4f", (now - last_accepted) * 1000, value)
                 continue
             last_value = value
             last_accepted = now
 
             log.info("[dti  ] %s = %.4f mm  →  posting (station %s) …", current_pos, value, station)
-
-            try:
-                resp = session.post(
-                    push_url,
-                    json={"station": station, "position": current_pos, "value": value},
-                    timeout=3,
-                )
-                if resp.status_code == 200:
-                    log.info("[http ] ✓ accepted  value = %.4f", value)
-                    try:
-                        next_position = resp.json().get("next_position")
-                    except ValueError:
-                        next_position = None
-                    if next_position:
-                        current_pos = next_position
-                else:
-                    log.warning(
-                        "[http ] server returned %d: %s",
-                        resp.status_code, resp.text[:120],
-                    )
-            except requests.RequestException as exc:
-                log.warning("[http ] POST failed: %s", exc)
-
+            current_pos = _post_reading(session, push_url, station, current_pos, value)
             log.info("[dti  ] ready for next reading at position %s — press DATA", current_pos)
 
     except KeyboardInterrupt:
@@ -262,7 +259,7 @@ Examples:
   python dti_bridge.py --port COM1 --station 1   # rig 1
   python dti_bridge.py --port COM2 --station 2   # rig 2  (separate terminal)
   python dti_bridge.py --port COM4
-  python dti_bridge.py --port COM7 --server https://192.168.1.50
+  python dti_bridge.py --port COM7 --server https://192.168.1.50 --insecure-ssl
 
 Position count is read from the server automatically — it matches however
 many rows are in the measurement form at the time of each reading.
@@ -296,10 +293,18 @@ Typical DTI gauge RS-232 settings:
         "--debug", action="store_true",
         help="Log every raw serial line, including ones skipped as unparseable or debounced.",
     )
+    parser.add_argument(
+        "--insecure-ssl", action="store_true",
+        help=(
+            "Disable TLS certificate verification. Only needed when --server "
+            "is the documented self-signed cert on the LAN server; verified "
+            "by default."
+        ),
+    )
     args = parser.parse_args()
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-    run(args.port, args.server, args.station)
+    run(args.port, args.server, args.station, args.insecure_ssl)
 
 
 if __name__ == "__main__":

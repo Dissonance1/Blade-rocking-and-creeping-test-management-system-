@@ -16,11 +16,14 @@ LPTR and HPTR blades no longer exists, so every fixture here is single-type.
 
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import datetime, timezone
 
+import openpyxl
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from app.models.blade import Blade
 from app.models.enums import BatchEventType, BladeStatus, BladeType
@@ -30,6 +33,17 @@ from app.models.work_order import WorkOrder
 from app.models.work_order_event import WorkOrderEvent
 
 BASE = "/api/v1/work-orders"
+
+
+def _xlsx_bytes(rows: list[list[object]]) -> bytes:
+    """Build a minimal .xlsx from a list of rows (first row = header)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 async def _make_work_order(
@@ -67,7 +81,6 @@ async def _make_blade(
         work_order_id=work_order.id,
         work_order_number=work_order.work_order_number,
         part_number=work_order.part_number,
-        nomenclature="Turbine Blade",
         blade_type=work_order.blade_type,
         status=status,
         created_by_id=oh_user.id,
@@ -360,3 +373,160 @@ async def test_assign_slot_hptr_rejects_duplicate_slot_numbers(
     )
     assert resp.status_code == 422
     assert "duplicate" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/rows/bulk-import  (grid-entry: Excel upload)
+# ---------------------------------------------------------------------------
+
+
+async def _start_blade_entry_work_order(client: AsyncClient, headers: dict, work_order_number: str) -> None:
+    """Create + scaffold a Work Order via the real Phase-A create endpoint."""
+    resp = await client.post(
+        f"{BASE}/",
+        json={
+            "work_order_number": work_order_number,
+            "shop_order_number": "SO-TEST",
+            "part_number": "PT-4470",
+            "blade_type": "HPTR",
+            "engine_hours": "100:00:00",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def _upload_file(data: bytes, filename: str = "rows.xlsx") -> dict:
+    return {
+        "file": (
+            filename,
+            data,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_populates_scaffolded_rows(
+    client: AsyncClient, auth_headers: dict, db_session
+) -> None:
+    wo_number = f"WO-BULK-{uuid.uuid4().hex[:8].upper()}"
+    await _start_blade_entry_work_order(client, auth_headers, wo_number)
+
+    data = _xlsx_bytes(
+        [
+            ["S.No", "Melt Number", "Weight"],
+            [1, "MELT-001", 157.35],
+            [2, "MELT-002", 155.58],
+        ]
+    )
+    resp = await client.post(
+        f"{BASE}/{wo_number}/rows/bulk-import",
+        files=_upload_file(data),
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported_count"] == 2
+    assert body["skipped_count"] == 0
+    assert body["errors"] == []
+
+    blade = (
+        await db_session.execute(
+            select(Blade).where(Blade.work_order_number == wo_number, Blade.serial_number == "01")
+        )
+    ).scalar_one()
+    assert blade.melt_number == "MELT-001"
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_unknown_work_order_returns_404(client: AsyncClient, auth_headers: dict) -> None:
+    data = _xlsx_bytes([["S.No", "Melt Number", "Weight"], [1, "MELT-001", 100.0]])
+    resp = await client.post(
+        f"{BASE}/DOES-NOT-EXIST/rows/bulk-import",
+        files=_upload_file(data),
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_rejects_non_xlsx_extension(
+    client: AsyncClient, auth_headers: dict
+) -> None:
+    wo_number = f"WO-BULK-{uuid.uuid4().hex[:8].upper()}"
+    await _start_blade_entry_work_order(client, auth_headers, wo_number)
+
+    resp = await client.post(
+        f"{BASE}/{wo_number}/rows/bulk-import",
+        files=_upload_file(b"not a spreadsheet", filename="rows.csv"),
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+    assert ".xlsx" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_partial_success_reports_bad_rows(
+    client: AsyncClient, auth_headers: dict
+) -> None:
+    """A sheet with one valid row and one out-of-range S.No still imports the good row."""
+    wo_number = f"WO-BULK-{uuid.uuid4().hex[:8].upper()}"
+    await _start_blade_entry_work_order(client, auth_headers, wo_number)
+
+    data = _xlsx_bytes(
+        [
+            ["S.No", "Melt Number", "Weight"],
+            [1, "MELT-001", 100.0],
+            [999, "MELT-BAD", 100.0],
+        ]
+    )
+    resp = await client.post(
+        f"{BASE}/{wo_number}/rows/bulk-import",
+        files=_upload_file(data),
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["imported_count"] == 1
+    assert body["skipped_count"] == 1
+    assert len(body["errors"]) == 1
+    assert "out of range" in body["errors"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_conflict_when_entry_already_complete(
+    client: AsyncClient, auth_headers: dict, db_session
+) -> None:
+    wo_number = f"WO-BULK-{uuid.uuid4().hex[:8].upper()}"
+    await _start_blade_entry_work_order(client, auth_headers, wo_number)
+
+    work_order = (
+        await db_session.execute(select(WorkOrder).where(WorkOrder.work_order_number == wo_number))
+    ).scalar_one()
+    work_order.is_entry_complete = True
+    await db_session.flush()
+
+    data = _xlsx_bytes([["S.No", "Melt Number", "Weight"], [1, "MELT-001", 100.0]])
+    resp = await client.post(
+        f"{BASE}/{wo_number}/rows/bulk-import",
+        files=_upload_file(data),
+        headers=auth_headers,
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_forbidden_for_qa_viewer(
+    client: AsyncClient, auth_headers: dict, qa_headers: dict
+) -> None:
+    wo_number = f"WO-BULK-{uuid.uuid4().hex[:8].upper()}"
+    await _start_blade_entry_work_order(client, auth_headers, wo_number)
+
+    data = _xlsx_bytes([["S.No", "Melt Number", "Weight"], [1, "MELT-001", 100.0]])
+    resp = await client.post(
+        f"{BASE}/{wo_number}/rows/bulk-import",
+        files=_upload_file(data),
+        headers=qa_headers,
+    )
+    assert resp.status_code == 403

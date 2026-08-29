@@ -51,6 +51,12 @@ export function useWeighingSocket() {
     let alive = true;
     let ws: WebSocket;
 
+    function scheduleReconnect() {
+      setTimeout(() => {
+        if (alive) connect();
+      }, 5000);
+    }
+
     function connect() {
       statusRef.current = "connecting";
       setStatus("connecting");
@@ -91,9 +97,7 @@ export function useWeighingSocket() {
         if (!alive) return;
         statusRef.current = "disconnected";
         setStatus("disconnected");
-        setTimeout(() => {
-          if (alive) connect();
-        }, 5000);
+        scheduleReconnect();
       };
 
       ws.onerror = () => {

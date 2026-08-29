@@ -5,7 +5,7 @@ Reset all batch/blade data then seed two full batches:
 
 Each blade has:
   Serial Number, Melt Number, Work Order, Shop Order, Part Number,
-  Nomenclature, Engine Number, Engine Hours, Component Hours,
+  Engine Number, Engine Hours, Component Hours,
   Weight (g), Static Moment (g·cm), H1, H2, H3, H4 (mm)
 
 Blade status → MEASUREMENTS_RECORDED (ready to send to assembly)
@@ -62,7 +62,6 @@ LPTR_BATCH = {
     "shop_order":      "SO45786-L",
     "engine_number":   "14-587-63",
     "part_number":     "104.04.01.010",
-    "nomenclature":    "LP Turbine Rotor Blade Stage 2",
     "blade_type":      BladeType.LPTR,
     "count":           90,
     "prefix":          "LPTR",
@@ -83,7 +82,6 @@ HPTR_BATCH = {
     "shop_order":      "SO45786-H",
     "engine_number":   "14-587-63",
     "part_number":     "104.04.02.021",
-    "nomenclature":    "HP Turbine Rotor Blade Stage 1",
     "blade_type":      BladeType.HPTR,
     "count":           90,
     "prefix":          "HPTR",
@@ -152,7 +150,6 @@ async def _seed_batch(
         work_order_number=spec["work_order"],
         part_number=spec["part_number"],
         engine_number=spec["engine_number"],
-        nomenclature=spec["nomenclature"],
     )
     db.add(bg)
     await db.flush()
@@ -172,7 +169,6 @@ async def _seed_batch(
             work_order_number=spec["work_order"],
             shop_order_number=spec["shop_order"],
             part_number=spec["part_number"],
-            nomenclature=spec["nomenclature"],
             engine_number=spec["engine_number"],
             engine_hours=eng_h,
             component_hours=comp_h,

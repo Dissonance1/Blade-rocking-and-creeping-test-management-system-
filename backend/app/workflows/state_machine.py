@@ -48,12 +48,10 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
     BladeStatus.OH_INSPECTION: {
         BladeStatus.MEASUREMENTS_RECORDED,
         BladeStatus.REJECTED,
-        BladeStatus.ON_HOLD,
     },
     BladeStatus.MEASUREMENTS_RECORDED: {
         BladeStatus.SENT_TO_ASSEMBLY,
         BladeStatus.REJECTED,
-        BladeStatus.ON_HOLD,
     },
     # Assembly receipt flow (720 Hanger)
     BladeStatus.SENT_TO_ASSEMBLY: {
@@ -65,7 +63,6 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
         BladeStatus.ASSEMBLY_VERIFIED,   # per-blade: scan → accept/modify
         BladeStatus.SLOT_ASSIGNED,       # batch bulk slot assignment (skips per-blade verify)
         BladeStatus.REJECTED,            # per-blade: reject at Assembly
-        BladeStatus.ON_HOLD,
     },
     BladeStatus.ASSEMBLY_VERIFIED: {
         BladeStatus.SLOT_ASSIGNED,       # set-making complete → assign slot
@@ -92,11 +89,6 @@ ALLOWED_TRANSITIONS: dict[BladeStatus, set[BladeStatus]] = {
         BladeStatus.REJECTED,
     },
     BladeStatus.REJECTED: {BladeStatus.REOPENED},
-    BladeStatus.ON_HOLD: {
-        BladeStatus.OH_INSPECTION,
-        BladeStatus.MEASUREMENTS_RECORDED,
-        BladeStatus.ASSEMBLY_RECEIVED,
-    },
     BladeStatus.REOPENED: {BladeStatus.OH_INSPECTION},
     BladeStatus.COMPLETED: set(),
 }

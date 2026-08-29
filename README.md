@@ -220,8 +220,6 @@ CREATED ──► OH_INSPECTION ──► MEASUREMENTS_RECORDED ──► SENT_T
                                                        COMPLETED
 ```
 
-Any state except `COMPLETED` can be placed on hold (`ON_HOLD`) and resumed.
-
 ---
 
 ## Project Structure

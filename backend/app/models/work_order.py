@@ -19,6 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models.enums import BladeType
 
+_USERS_ID_FK = "users.id"
+
 
 class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Common info entered once for a set of blades, before grid entry starts."""
@@ -46,12 +48,25 @@ class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     entry_completed_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey(_USERS_ID_FK, ondelete="SET NULL"),
         nullable=True,
     )
+
+    is_rocking_creep_complete: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    rocking_creep_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rocking_creep_completed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(_USERS_ID_FK, ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_by_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey(_USERS_ID_FK, ondelete="RESTRICT"),
         nullable=False,
     )
 
@@ -72,6 +87,11 @@ class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     entry_completed_by: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
         "User",
         foreign_keys=[entry_completed_by_id],
+        lazy="selectin",
+    )
+    rocking_creep_completed_by: Mapped["User | None"] = relationship(  # type: ignore[name-defined]
+        "User",
+        foreign_keys=[rocking_creep_completed_by_id],
         lazy="selectin",
     )
 

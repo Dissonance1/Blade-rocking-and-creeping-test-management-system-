@@ -46,7 +46,6 @@ PARSED_JSON = Path(__file__).resolve().parent.parent / "hptr_96_16_040_parsed.js
 WORK_ORDER_NUMBER = "96-16-040_HPTR"
 SHOP_ORDER_NUMBER = "SO_96-16-040"
 PART_NUMBER = "TBD"
-NOMENCLATURE = "HP Turbine Blade Stage 1"
 ENGINE_NUMBER = "96-16-040"
 ENGINE_HOURS = "TBD"
 
@@ -192,7 +191,6 @@ async def _import_blades(
                 work_order_number=work_order.work_order_number,
                 shop_order_number=work_order.shop_order_number,
                 part_number=work_order.part_number,
-                nomenclature=NOMENCLATURE,
                 engine_number=work_order.engine_number,
                 engine_hours=work_order.engine_hours,
                 component_hours=work_order.component_hours,

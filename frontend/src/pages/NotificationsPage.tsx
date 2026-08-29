@@ -208,6 +208,14 @@ const PAGE_SIZE = 20;
 const NOTIF_QUERY_KEY = ["notifications", "unread-feed"] as const;
 type NotifPage = PaginatedResponse<Notification>;
 
+function removeNotificationFromPage(page: NotifPage, id: string): NotifPage {
+  return {
+    ...page,
+    items: page.items.filter((n) => n.id !== id),
+    total: Math.max(0, page.total - 1),
+  };
+}
+
 export default function NotificationsPage() {
   const queryClient = useQueryClient();
   const setNotifications = useNotificationStore((s) => s.setNotifications);
@@ -253,14 +261,7 @@ export default function NotificationsPage() {
       storeMarkAsRead(id);
       queryClient.setQueryData(NOTIF_QUERY_KEY, (old: InfiniteData<NotifPage, number> | undefined) =>
         old
-          ? {
-              ...old,
-              pages: old.pages.map((p) => ({
-                ...p,
-                items: p.items.filter((n) => n.id !== id),
-                total: Math.max(0, p.total - 1),
-              })),
-            }
+          ? { ...old, pages: old.pages.map((p) => removeNotificationFromPage(p, id)) }
           : old
       );
       queryClient.invalidateQueries({ queryKey: ["notifications", "unread-count"] });

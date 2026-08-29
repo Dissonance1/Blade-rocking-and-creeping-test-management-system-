@@ -5,7 +5,6 @@ Coverage:
     GET    /blades/
     GET    /blades/{id}
     POST   /blades/{id}/send-to-assembly
-    POST   /blades/{id}/reject
     POST   /blades/{id}/reopen
 
 Blade creation is exclusively via POST /work-orders/ (grid scaffold) —
@@ -230,52 +229,6 @@ async def test_send_to_assembly_rejects_hptr_blade(
     )
     assert resp.status_code == 422, resp.text
     assert "HPTR" in resp.json()["detail"]
-
-
-# ---------------------------------------------------------------------------
-# POST /{blade_id}/reject
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reject_blade_from_oh_inspection(
-    client: AsyncClient,
-    auth_headers: dict,
-    sample_blade: Blade,
-    db_session,
-) -> None:
-    """Rejecting a blade from OH_INSPECTION sets status to REJECTED."""
-    sample_blade.status = BladeStatus.OH_INSPECTION
-    db_session.add(sample_blade)
-    await db_session.flush()
-
-    resp = await client.post(
-        f"{BASE}/{sample_blade.id}/reject",
-        json={"rejection_notes": "Serial number unreadable"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == BladeStatus.REJECTED.value
-
-
-@pytest.mark.asyncio
-async def test_reject_blade_from_completed_forbidden(
-    client: AsyncClient,
-    auth_headers: dict,
-    sample_blade: Blade,
-    db_session,
-) -> None:
-    """A COMPLETED blade cannot be rejected — returns 409."""
-    sample_blade.status = BladeStatus.COMPLETED
-    db_session.add(sample_blade)
-    await db_session.flush()
-
-    resp = await client.post(
-        f"{BASE}/{sample_blade.id}/reject",
-        json={"rejection_notes": "Should not be possible"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 409
 
 
 # ---------------------------------------------------------------------------

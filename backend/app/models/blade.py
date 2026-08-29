@@ -22,6 +22,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, SoftDeleteMixin
 from app.models.enums import BladeStatus, BladeType
 
+_CASCADE_ALL_DELETE_ORPHAN = "all, delete-orphan"
+
 
 class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """
@@ -54,7 +56,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     shop_order_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     part_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    nomenclature: Mapped[str | None] = mapped_column(String(128), nullable=True)
     engine_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     engine_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
     component_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -105,16 +106,6 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     ocr_mismatch_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # -----------------------------------------------------------------------
-    # Rejection fields
-    # -----------------------------------------------------------------------
-    rejection_reason_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("rejection_reasons.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    rejection_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # -----------------------------------------------------------------------
     # Relationships
     # -----------------------------------------------------------------------
     work_order: Mapped["WorkOrder"] = relationship(  # type: ignore[name-defined]
@@ -139,17 +130,11 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         foreign_keys=[assigned_to_id],
         lazy="selectin",
     )
-    rejection_reason: Mapped["RejectionReason | None"] = relationship(  # type: ignore[name-defined]
-        "RejectionReason",
-        foreign_keys=[rejection_reason_id],
-        back_populates="blades",
-        lazy="selectin",
-    )
     measurements: Mapped[list["Measurement"]] = relationship(  # type: ignore[name-defined]
         "Measurement",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     slot_allocation: Mapped["SlotAllocation | None"] = relationship(  # type: ignore[name-defined]
         "SlotAllocation",
@@ -162,14 +147,14 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         "WorkflowLog",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
         order_by="WorkflowLog.timestamp",
     )
     attachments: Mapped[list["Attachment"]] = relationship(  # type: ignore[name-defined]
         "Attachment",
         back_populates="blade",
         lazy="noload",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_ALL_DELETE_ORPHAN,
     )
     notifications: Mapped[list["Notification"]] = relationship(  # type: ignore[name-defined]
         "Notification",
@@ -201,7 +186,7 @@ class Blade(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 # Deferred imports
 from app.models.work_order import WorkOrder  # noqa: E402, F401
-from app.models.workflow import Station, RejectionReason, WorkflowLog  # noqa: E402, F401
+from app.models.workflow import Station, WorkflowLog  # noqa: E402, F401
 from app.models.user import User  # noqa: E402, F401
 from app.models.measurement import Measurement  # noqa: E402, F401
 from app.models.slot_allocation import SlotAllocation  # noqa: E402, F401

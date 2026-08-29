@@ -39,7 +39,6 @@ const STATUS_CFG: Record<BladeStatus, { label: string; color: string; ring: stri
   FINAL_VERIFICATION: { label: "Final Verification", color: "bg-lime-500", ring: "ring-lime-200 dark:ring-lime-500/30" },
   COMPLETED: { label: "Completed", color: "bg-green-500", ring: "ring-green-200 dark:ring-green-500/30" },
   REJECTED: { label: "Rejected", color: "bg-red-500", ring: "ring-red-200 dark:ring-red-500/30" },
-  ON_HOLD: { label: "On Hold", color: "bg-slate-500", ring: "ring-slate-200 dark:ring-slate-500/30" },
   REOPENED: { label: "Reopened", color: "bg-amber-500", ring: "ring-amber-200 dark:ring-amber-500/30" },
 };
 

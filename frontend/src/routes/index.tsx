@@ -19,7 +19,6 @@ import BatchTrackingPage from "@/pages/BatchTrackingPage";
 import ModifyBatchPage from "@/pages/ModifyBatchPage";
 import AcceptBatchPage from "@/pages/AcceptBatchPage";
 import RockingCreepPage from "@/pages/RockingCreepPage";
-import AssemblyVerificationPage from "@/pages/AssemblyVerificationPage";
 import MyProfile from "@/pages/MyProfile";
 import { useAuthStore } from "@/store/authStore";
 import type { UserRole } from "@/types";
@@ -205,14 +204,6 @@ const router = createBrowserRouter([
 
       { path: "/profile", element: <MyProfile /> },
 
-      {
-        path: "/assembly/verify/:workOrderNumber",
-        element: (
-          <RequireRole roles={["ASSEMBLY_OPERATOR", "SUPER_ADMIN"]}>
-            <AssemblyVerificationPage />
-          </RequireRole>
-        ),
-      },
       { path: "/batch-tracking", element: <BatchTrackingPage /> },
       {
         path: "/batches/:workOrderNumber/modify",

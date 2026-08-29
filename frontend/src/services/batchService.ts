@@ -9,11 +9,12 @@ export interface BatchEvent {
     | "SENT_TO_ASSEMBLY"
     | "RECEIVED_BY_ASSEMBLY"
     | "ACCEPTED"
-    | "REJECTED"
     | "MODIFIED"
     | "SLOTS_ALLOCATED"
     | "SET_MAKING"
-    | "BALANCED";
+    | "BALANCED"
+    | "RETURNED_TO_OH"
+    | "ACCEPTED_BY_OH";
   action_by: { id: string; username: string; full_name: string } | null;
   remarks: string | null;
   changes: Record<string, unknown> | null;
@@ -26,11 +27,12 @@ export type BatchStatus =
   | "SENT_TO_ASSEMBLY"
   | "RECEIVED_BY_ASSEMBLY"
   | "ACCEPTED"
-  | "REJECTED"
   | "MODIFIED"
   | "SLOTS_ALLOCATED"
   | "SET_MAKING"
-  | "BALANCED";
+  | "BALANCED"
+  | "RETURNED_TO_OH"
+  | "ACCEPTED_BY_OH";
 
 export interface BatchSummary {
   work_order_number: string;
@@ -40,9 +42,15 @@ export interface BatchSummary {
   rows_complete_count: number;
   blades_sent: number;
   blades_completed: number;
+  /** Blades currently in FINAL_VERIFICATION — ready for "Complete Final Verification". */
+  blades_final_verification: number;
+  /** Blades currently in BALANCING_COMPLETED — for HPTR, ready to "Start Final Verification". */
+  blades_balancing_completed: number;
   hptr_count: number;
   hptr_slotted_count: number;
   hptr_balanced_count: number;
+  /** LPTR blades with an active slot allocation (either stage) — 90 once both Stage 1 and Stage 2 are saved. */
+  lptr_slotted_count: number;
   current_status: BatchStatus;
   current_status_label: string;
   first_blade_at: string | null;
@@ -50,9 +58,10 @@ export interface BatchSummary {
   last_event: BatchEvent | null;
   part_number: string | null;
   engine_number: string | null;
-  nomenclature: string | null;
   /** True only once all 90 rows have Melt Number + Weight and Complete has been run. */
   is_entry_complete: boolean;
+  /** True once every blade has Rocking (and Creep, for LPTR) recorded — independent of slot allocation. */
+  rocking_creep_complete: boolean;
 }
 
 export interface BatchDetail extends BatchSummary {
@@ -152,14 +161,6 @@ export const batchService = {
     return data;
   },
 
-  reject: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
-    const { data } = await api.post<BatchEvent>(
-      `/work-orders/${batchNumber}/reject`,
-      { remarks }
-    );
-    return data;
-  },
-
   modify: async (
     batchNumber: string,
     modifications: Array<{
@@ -237,6 +238,19 @@ export const batchService = {
   },
 
   /**
+   * Confirms every blade in the work order has its required Rocking (and
+   * Creep, for LPTR) value recorded — this explicit confirmation, not
+   * auto-detection, is what drops the work order out of the Rocking & Creep
+   * picker.
+   */
+  completeRockingCreep: async (
+    batchNumber: string
+  ): Promise<{ work_order_number: string; is_rocking_creep_complete: boolean; completed_at: string | null }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-rocking-creep`, {});
+    return data;
+  },
+
+  /**
    * Physical balancing testing confirmed the set is balanced — transitions
    * every HPTR blade in the batch to BALANCING_COMPLETED. Once complete,
    * the batch stops showing up as selectable in the OH Slot Allocation page.
@@ -246,6 +260,65 @@ export const batchService = {
     remarks?: string
   ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
     const { data } = await api.post(`/work-orders/${batchNumber}/complete-hptr-balancing`, { remarks });
+    return data;
+  },
+
+  /**
+   * Physical balancing testing confirmed the set is balanced — transitions
+   * every LPTR blade in the batch's active slot allocation (whichever
+   * stage(s) have been saved) to BALANCING_COMPLETED. Mirrors
+   * completeHptrBalancing, run from Assembly instead of OH.
+   */
+  completeLptrBalancing: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-lptr-balancing`, { remarks });
+    return data;
+  },
+
+  /**
+   * Assembly formally reports the LPTR balancing task complete and sends
+   * the work order back to OH — a deliberate, separate step from
+   * completeLptrBalancing since the blades may not physically travel back
+   * to OH immediately.
+   */
+  returnToOh: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_returned: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/return-to-oh`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH acknowledges and accepts a work order returned from Assembly.
+   */
+  acceptReturn: async (batchNumber: string, remarks?: string): Promise<BatchEvent> => {
+    const { data } = await api.post<BatchEvent>(`/work-orders/${batchNumber}/accept-return`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH completes final verification for every FINAL_VERIFICATION blade in the batch — marks them all COMPLETED.
+   */
+  completeFinalVerification: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_completed: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/complete-final-verification`, { remarks });
+    return data;
+  },
+
+  /**
+   * OH moves a batch's balanced HPTR blades into Final Verification — HPTR blades never leave OH,
+   * so unlike LPTR they need a direct trigger instead of acceptReturn.
+   */
+  startFinalVerification: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_started: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/start-final-verification`, { remarks });
     return data;
   },
 

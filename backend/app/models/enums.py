@@ -29,7 +29,6 @@ class BladeStatus(str, enum.Enum):
     FINAL_VERIFICATION = "FINAL_VERIFICATION"
     COMPLETED = "COMPLETED"
     REJECTED = "REJECTED"
-    ON_HOLD = "ON_HOLD"
     REOPENED = "REOPENED"
 
 
@@ -92,11 +91,12 @@ class BatchEventType(str, enum.Enum):
     SENT_TO_ASSEMBLY = "SENT_TO_ASSEMBLY"
     RECEIVED_BY_ASSEMBLY = "RECEIVED_BY_ASSEMBLY"
     ACCEPTED = "ACCEPTED"
-    REJECTED = "REJECTED"
     MODIFIED = "MODIFIED"
     SLOTS_ALLOCATED = "SLOTS_ALLOCATED"
     SET_MAKING = "SET_MAKING"
     BALANCED = "BALANCED"
+    RETURNED_TO_OH = "RETURNED_TO_OH"     # Assembly reports LPTR balancing task complete, sends blades back
+    ACCEPTED_BY_OH = "ACCEPTED_BY_OH"     # OH acknowledges + accepts the returned work order
 
 
 class AssemblyVerificationStatus(str, enum.Enum):

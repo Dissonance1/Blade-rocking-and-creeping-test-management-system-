@@ -154,39 +154,20 @@ class WorkOrderService:
         )
 
     # ------------------------------------------------------------------
-    # Autosave (per-row)
+    # Autosave (per-row) — shared mutation helper (no commit)
     # ------------------------------------------------------------------
 
-    async def save_row(
+    async def _apply_row(
         self,
-        work_order_number: str,
-        s_no: int,
+        blade: "Blade",
         data: WorkOrderRowUpdate,
         user: "User",
-    ) -> WorkOrderRowResponse:
-        if not 1 <= s_no <= BLADES_PER_WORK_ORDER:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"s_no must be between 1 and {BLADES_PER_WORK_ORDER}.",
-            )
-
-        work_order = await self._get_work_order_or_404(work_order_number)
-        if work_order.is_entry_complete:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Work Order '{work_order_number}' entry is already complete. "
-                    "Use the Assembly modify flow for corrections."
-                ),
-            )
-
-        blade = await self._blade_repo.get_row(work_order.id, s_no)
-        if blade is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Row {s_no} not found for Work Order '{work_order_number}'.",
-            )
-
+    ) -> "Measurement | None":
+        """
+        Apply melt-number/OCR-mismatch/weight mutations to *blade* and flush,
+        without committing — shared by :meth:`save_row` (single row, commits
+        itself) and :meth:`bulk_import_rows` (many rows, one commit for all).
+        """
         if data.melt_number is not None:
             blade.melt_number = data.melt_number
         if data.ocr_melt_number is not None:
@@ -226,6 +207,40 @@ class WorkOrderService:
         else:
             measurement = await self._measurement_repo.get_latest_by_blade(blade.id)
 
+        return measurement
+
+    async def save_row(
+        self,
+        work_order_number: str,
+        s_no: int,
+        data: WorkOrderRowUpdate,
+        user: "User",
+    ) -> WorkOrderRowResponse:
+        if not 1 <= s_no <= BLADES_PER_WORK_ORDER:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"s_no must be between 1 and {BLADES_PER_WORK_ORDER}.",
+            )
+
+        work_order = await self._get_work_order_or_404(work_order_number)
+        if work_order.is_entry_complete:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Work Order '{work_order_number}' entry is already complete. "
+                    "Use the Assembly modify flow for corrections."
+                ),
+            )
+
+        blade = await self._blade_repo.get_row(work_order.id, s_no)
+        if blade is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Row {s_no} not found for Work Order '{work_order_number}'.",
+            )
+
+        measurement = await self._apply_row(blade, data, user)
+
         await self.db.commit()
         await self.db.refresh(blade)
 
@@ -237,30 +252,61 @@ class WorkOrderService:
         return _row_response(blade, measurement)
 
     # ------------------------------------------------------------------
-    # Complete (validate + bulk workflow transition)
+    # Bulk import (Excel upload) — many rows, one commit
     # ------------------------------------------------------------------
 
-    async def complete(self, work_order_number: str, user: "User") -> WorkOrderCompleteResponse:
-        work_order = await self._get_work_order_or_404(work_order_number)
-        blades = await self._blade_repo.get_by_work_order(work_order.id)
+    async def bulk_import_rows(
+        self,
+        work_order_number: str,
+        rows: list[tuple[int, WorkOrderRowUpdate]],
+        user: "User",
+    ) -> "WorkOrderBulkImportResponse":
+        from app.schemas.work_order import WorkOrderBulkImportError, WorkOrderBulkImportResponse
 
-        if len(blades) != BLADES_PER_WORK_ORDER:
+        work_order = await self._get_work_order_or_404(work_order_number)
+        if work_order.is_entry_complete:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"Work Order '{work_order_number}' has {len(blades)} rows, "
-                    f"expected {BLADES_PER_WORK_ORDER}."
+                    f"Work Order '{work_order_number}' entry is already complete. "
+                    "Use the Assembly modify flow for corrections."
                 ),
             )
 
-        if work_order.is_entry_complete:
-            return WorkOrderCompleteResponse(
-                work_order_number=work_order.work_order_number,
-                status=BladeStatus.MEASUREMENTS_RECORDED.value,
-                blade_ids=[b.id for b in blades],
-                completed_at=work_order.entry_completed_at or datetime.now(timezone.utc),
-            )
+        imported: list[WorkOrderRowResponse] = []
+        errors: list[WorkOrderBulkImportError] = []
 
+        for s_no, data in rows:
+            blade = await self._blade_repo.get_row(work_order.id, s_no)
+            if blade is None:
+                errors.append(
+                    WorkOrderBulkImportError(s_no=s_no, message=f"Row {s_no} not found in this Work Order.")
+                )
+                continue
+            measurement = await self._apply_row(blade, data, user)
+            imported.append(_row_response(blade, measurement))
+
+        await self.db.commit()
+
+        log.info(
+            "work_order_service.bulk_import",
+            work_order_number=work_order_number,
+            imported=len(imported),
+            skipped=len(errors),
+        )
+        return WorkOrderBulkImportResponse(
+            imported_count=len(imported),
+            skipped_count=len(errors),
+            errors=errors,
+            rows=imported,
+        )
+
+    # ------------------------------------------------------------------
+    # Complete (validate + bulk workflow transition)
+    # ------------------------------------------------------------------
+
+    async def _validate_grid_rows(self, blades: list) -> None:
+        """Raise 422 if any row is missing melt/weight, or melt numbers collide."""
         incomplete_rows: list[int] = []
         melt_groups: dict[str, list[int]] = {}
 
@@ -298,11 +344,13 @@ class WorkOrderService:
                 },
             )
 
-        station_id = user.station_id
+    async def _advance_blades_to_measured(self, blades: list, user: "User", station_id) -> None:
+        """Fire whichever CREATED->OH_INSPECTION->MEASUREMENTS_RECORDED transitions
+        each blade still needs (some may already be partway there)."""
         for blade in blades:
             # Blades normally start at CREATED (fresh scaffold row), but may
             # already be at OH_INSPECTION or MEASUREMENTS_RECORDED (e.g. a
-            # dev-seeded row, or a row re-entered after ON_HOLD/REOPENED) —
+            # dev-seeded row, or a row re-entered after REOPENED) —
             # only fire the transitions this blade actually still needs.
             if blade.status == BladeStatus.CREATED:
                 blade, _ = await self._workflow_engine.transition(
@@ -320,6 +368,32 @@ class WorkOrderService:
                     station_id=station_id,
                     remarks="Blade entry: Work Order completed.",
                 )
+
+    async def complete(self, work_order_number: str, user: "User") -> WorkOrderCompleteResponse:
+        work_order = await self._get_work_order_or_404(work_order_number)
+        blades = await self._blade_repo.get_by_work_order(work_order.id)
+
+        if len(blades) != BLADES_PER_WORK_ORDER:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Work Order '{work_order_number}' has {len(blades)} rows, "
+                    f"expected {BLADES_PER_WORK_ORDER}."
+                ),
+            )
+
+        if work_order.is_entry_complete:
+            return WorkOrderCompleteResponse(
+                work_order_number=work_order.work_order_number,
+                status=BladeStatus.MEASUREMENTS_RECORDED.value,
+                blade_ids=[b.id for b in blades],
+                completed_at=work_order.entry_completed_at or datetime.now(timezone.utc),
+            )
+
+        await self._validate_grid_rows(blades)
+
+        station_id = user.station_id
+        await self._advance_blades_to_measured(blades, user, station_id)
 
         await self._wo_repo.mark_complete(work_order, completed_by_id=user.id)
         await self.db.commit()

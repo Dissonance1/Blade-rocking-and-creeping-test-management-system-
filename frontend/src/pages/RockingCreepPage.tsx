@@ -120,12 +120,19 @@ export default function RockingCreepPage() {
     []
   );
 
-  // ── Only work orders where Assembly has assigned at least one slot ──────────
-  const { data: batches = [] } = useQuery({
-    queryKey: ["batches", "with-slots"],
-    queryFn: () => batchService.list({ has_slot_allocations: true }),
+  // ── Work orders where blade entry + measurement (weight/melt) is done —
+  //    Rocking/Creep testing doesn't require a slot allocation, so this is
+  //    NOT filtered on has_slot_allocations. Drops back out once every blade
+  //    already has its Rocking (and Creep, for LPTR) value recorded. ───────
+  const { data: allBatches = [] } = useQuery({
+    queryKey: ["batches"],
+    queryFn: () => batchService.list(),
     staleTime: 30_000,
   });
+  const batches = useMemo(
+    () => allBatches.filter((b) => b.is_entry_complete && !b.rocking_creep_complete),
+    [allBatches]
+  );
 
   // ── Blades for selected work order with slot + rocking/creep data ───────────
   const {
@@ -239,7 +246,7 @@ export default function RockingCreepPage() {
   const advanceTarget = useCallback(
     (fromEntry: BladeRockingCreepEntry, fromField: ActiveField) => {
       const idx = entries.findIndex((e) => e.blade_id === fromEntry.blade_id);
-      const next = entries.slice(idx + 1).find((e) => !!e.slot_number && !isFieldFilled(e, fromField));
+      const next = entries.slice(idx + 1).find((e) => !isFieldFilled(e, fromField));
       setActiveTarget(next ? { bladeId: next.blade_id, field: fromField } : null);
     },
     [entries, isFieldFilled]
@@ -252,7 +259,7 @@ export default function RockingCreepPage() {
   // row 1 on the post-save refetch, risking an accidental overwrite there).
   useEffect(() => {
     if (activeTarget || !entries.length) return;
-    const first = entries.find((e) => !!e.slot_number && !isEntryComplete(e));
+    const first = entries.find((e) => !isEntryComplete(e));
     if (first) setActiveTarget({ bladeId: first.blade_id, field: "rocking" });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
@@ -268,7 +275,7 @@ export default function RockingCreepPage() {
     lastAppliedAtRef.current = capturedAt;
 
     const entry = entries.find((e) => e.blade_id === activeTarget.bladeId);
-    if (!entry || !entry.slot_number) return; // target no longer editable — ignore
+    if (!entry) return; // target no longer editable — ignore
 
     const value = Number(lastReading.value.toFixed(4));
     const { bladeId, field } = activeTarget;
@@ -363,7 +370,7 @@ export default function RockingCreepPage() {
       const idx = entries.findIndex((e) => e.blade_id === entry.blade_id);
       const next = entries
         .slice(idx + 1)
-        .find((e) => !!e.slot_number && (field === "rocking" || e.blade_type === "LPTR"));
+        .find((e) => field === "rocking" || e.blade_type === "LPTR");
       setActiveTarget(next ? { bladeId: next.blade_id, field } : null);
     },
     [rowState, entries, trySaveIfReady, clearAutoSaveTimer]
@@ -376,6 +383,22 @@ export default function RockingCreepPage() {
     (e) => e.rocking_value != null || (rowState[e.blade_id]?.saved ?? false)
   ).length;
   const activeEntry = activeTarget ? entries.find((e) => e.blade_id === activeTarget.bladeId) : undefined;
+
+  // Every blade has its required Rocking (and Creep, for LPTR) value —
+  // gates the "Complete Rocking & Creep" button. Server-confirmed data only.
+  const allEntriesComplete = totalCount > 0 && entries.every(isEntryComplete);
+
+  const completeMutation = useMutation({
+    mutationFn: () => batchService.completeRockingCreep(selectedBatch),
+    onSuccess: () => {
+      toast.success(`Rocking & Creep complete for ${selectedBatch}`);
+      queryClient.invalidateQueries({ queryKey: ["batches"] });
+      setSelectedBatch("");
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail ?? "Failed to mark complete");
+    },
+  });
 
   // Blade type + status breakdown for the header — a work order mixes LPTR
   // and HPTR blades, and status can differ row to row, so there is no single
@@ -398,7 +421,7 @@ export default function RockingCreepPage() {
               Rocking &amp; Creep Entry
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 tracking-tight mt-0.5">
-              Enter Rocking and Creep values for blades after Assembly slot allocation
+              Enter Rocking and Creep values once blade entry and measurement is done
             </p>
           </div>
         </div>
@@ -470,6 +493,21 @@ export default function RockingCreepPage() {
                     Next capture → {activeEntry.serial_number} ({activeTarget?.field === "creep" ? "Creep" : "Rocking"})
                   </span>
                 )}
+                {allEntriesComplete && (
+                  <Button
+                    size="sm"
+                    onClick={() => completeMutation.mutate()}
+                    disabled={completeMutation.isPending}
+                    className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                  >
+                    {completeMutation.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Complete Rocking &amp; Creep
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -482,7 +520,7 @@ export default function RockingCreepPage() {
           <FlaskConical className="w-16 h-16 opacity-30" />
           <p className="text-lg font-medium">Select a work order above to begin entry</p>
           <p className="text-sm text-center max-w-xs">
-            Rocking and Creep values can be entered once Assembly has assigned slot numbers to the blades.
+            Rocking and Creep values can be entered once blade entry and measurement is done — slot allocation is not required.
           </p>
         </div>
       )}
@@ -631,54 +669,48 @@ export default function RockingCreepPage() {
 
                         {/* Rocking input */}
                         <td className="px-4 py-3">
-                          {entry.slot_number ? (
-                            <div className="flex items-center gap-1.5">
-                              <Input
-                                ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
-                                type="number"
-                                step="0.0001"
-                                min={0}
-                                placeholder="0.0000"
-                                value={row.rocking}
-                                onChange={(e) => {
-                                  setRowState((prev) =>
-                                    patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
-                                  );
-                                  scheduleAutoSave(entry);
-                                }}
-                                onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
-                                onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    handleFieldEnter(entry, "rocking");
-                                  }
-                                }}
-                                className={cn(
-                                  "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
-                                  activeTarget?.bladeId === entry.blade_id &&
-                                    activeTarget.field === "rocking" &&
-                                    "ring-2 ring-orange-400 border-orange-400",
-                                  isRockingOutOfRange &&
-                                    "border-red-400 dark:border-red-500 text-red-600 dark:text-red-400"
-                                )}
-                              />
-                              {isRockingOutOfRange && (
-                                <span title={`Out of range (${HPTR_ROCKING_MIN}–${HPTR_ROCKING_MAX})`}>
-                                  <AlertTriangle className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
-                                </span>
+                          <div className="flex items-center gap-1.5">
+                            <Input
+                              ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
+                              type="number"
+                              step="0.0001"
+                              min={0}
+                              placeholder="0.0000"
+                              value={row.rocking}
+                              onChange={(e) => {
+                                setRowState((prev) =>
+                                  patchRow(prev, entry.blade_id, { rocking: e.target.value, saved: false })
+                                );
+                                scheduleAutoSave(entry);
+                              }}
+                              onFocus={() => setActiveTarget({ bladeId: entry.blade_id, field: "rocking" })}
+                              onBlur={() => { clearAutoSaveTimer(entry.blade_id); trySaveIfReady(entry); }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleFieldEnter(entry, "rocking");
+                                }
+                              }}
+                              className={cn(
+                                "w-28 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-mono text-sm h-8",
+                                activeTarget?.bladeId === entry.blade_id &&
+                                  activeTarget.field === "rocking" &&
+                                  "ring-2 ring-orange-400 border-orange-400",
+                                isRockingOutOfRange &&
+                                  "border-red-400 dark:border-red-500 text-red-600 dark:text-red-400"
                               )}
-                            </div>
-                          ) : (
-                            <span className="text-slate-300 dark:text-slate-600">—</span>
-                          )}
+                            />
+                            {isRockingOutOfRange && (
+                              <span title={`Out of range (${HPTR_ROCKING_MIN}–${HPTR_ROCKING_MAX})`}>
+                                <AlertTriangle className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {/* Creep input */}
                         <td className="px-4 py-3">
-                          {!entry.slot_number ? (
-                            <span className="text-slate-300 dark:text-slate-600">—</span>
-                          ) : isLPTR ? (
+                          {isLPTR ? (
                             <Input
                               ref={(el) => registerInputRef(entry.blade_id, "creep", el)}
                               type="number"
@@ -718,11 +750,7 @@ export default function RockingCreepPage() {
                             typing), so there's nothing to click the first time. "Update" only
                             appears once a value exists, for manually re-pushing a correction. */}
                         <td className="px-4 py-3">
-                          {!entry.slot_number ? (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
-                              Awaiting slot
-                            </span>
-                          ) : isSaving ? (
+                          {isSaving ? (
                             <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 text-xs font-medium">
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               Saving…

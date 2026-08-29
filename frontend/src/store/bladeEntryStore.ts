@@ -84,6 +84,7 @@ interface BladeEntryState {
   lockCommonInfo: () => void;
   initBlankGrid: () => void;
   loadFromServer: (detail: WorkOrderDetail) => void;
+  mergeFromServer: (detail: WorkOrderDetail) => void;
   applyServerRow: (row: import("@/services/workOrderService").WorkOrderRow) => void;
   setCellValue: (rowIndex: number, column: GridColumn, value: string) => boolean;
   applyOcrResult: (rowIndex: number, ocrValue: string) => boolean;
@@ -171,6 +172,37 @@ export const useBladeEntryStore = create<BladeEntryState>((set, get) => ({
       isEntryComplete: detail.is_entry_complete,
       focusedRowIndex: focusIndex,
       focusedColumn: "melt_number",
+    });
+  },
+
+  // Periodic sync while the grid is open: pulls in rows saved by *other*
+  // clients on the same Work Order (e.g. a second browser/station) without
+  // disturbing whatever the local operator is actively typing — a row is
+  // only overwritten if it's untouched locally (not dirty/saving) and not
+  // the currently focused cell.
+  mergeFromServer: (detail) => {
+    set((s) => {
+      const rows = s.rows.map((row, idx) => {
+        if (row.status === "dirty" || row.status === "saving") return row;
+        if (idx === s.focusedRowIndex) return row;
+        const serverRow = detail.rows.find((r) => r.s_no === row.s_no);
+        if (!serverRow || !serverRow.is_complete) return row;
+        if (row.status === "saved" && row.blade_id === serverRow.blade_id) return row;
+        return {
+          ...row,
+          blade_id: serverRow.blade_id,
+          melt_number: serverRow.melt_number ?? "",
+          ocr_melt_number: serverRow.ocr_melt_number ?? "",
+          ocr_mismatch_flag: serverRow.ocr_mismatch_flag,
+          raw_weight: serverRow.raw_weight != null ? String(serverRow.raw_weight) : "",
+          weight_grams: serverRow.weight_grams,
+          static_moment_gcm: serverRow.static_moment_gcm,
+          status: "saved" as const,
+          locked: true,
+          error_message: null,
+        };
+      });
+      return { rows, isEntryComplete: detail.is_entry_complete };
     });
   },
 

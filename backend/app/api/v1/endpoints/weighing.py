@@ -67,6 +67,28 @@ async def push_weight(body: WeightReading, request: Request) -> dict[str, Any]:
 
 # ─── WS /ws ───────────────────────────────────────────────────────────────────
 
+async def _ws_send_weights(websocket: WebSocket, pubsub) -> None:
+    async for message in pubsub.listen():
+        if message["type"] != "message":
+            continue
+        data = json.loads(message["data"])
+        await websocket.send_json({"type": "weight", "value": data["value"]})
+
+
+async def _ws_ping(websocket: WebSocket) -> None:
+    while True:
+        await asyncio.sleep(30)
+        await websocket.send_json({"type": "ping"})
+
+
+async def _ws_receive(websocket: WebSocket) -> None:
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+
+
 @router.websocket("/ws")
 async def weighing_ws(websocket: WebSocket) -> None:
     """
@@ -99,28 +121,9 @@ async def weighing_ws(websocket: WebSocket) -> None:
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(_CHANNEL)
 
-    async def _send_weights() -> None:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            data = json.loads(message["data"])
-            await websocket.send_json({"type": "weight", "value": data["value"]})
-
-    async def _ping() -> None:
-        while True:
-            await asyncio.sleep(30)
-            await websocket.send_json({"type": "ping"})
-
-    async def _receive() -> None:
-        try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            pass
-
     try:
         await asyncio.gather(
-            _send_weights(), _ping(), _receive(),
+            _ws_send_weights(websocket, pubsub), _ws_ping(websocket), _ws_receive(websocket),
             return_exceptions=True,
         )
     except WebSocketDisconnect:

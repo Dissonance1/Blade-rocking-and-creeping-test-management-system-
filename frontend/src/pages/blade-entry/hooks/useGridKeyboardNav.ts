@@ -54,6 +54,43 @@ export function useGridKeyboardNav({
     el?.select?.();
   }, [rowCount]);
 
+  const handleEnterKey = useCallback(
+    (input: HTMLInputElement, rowIndex: number, column: GridColumn) => {
+      if (column === "melt_number") {
+        if (input.value.trim().length === 0) {
+          onTriggerOcr(rowIndex);
+        } else {
+          focusCell(rowIndex, "weight");
+        }
+        return;
+      }
+      // weight column
+      if (input.value.trim().length > 0) {
+        onConfirmRow(rowIndex);
+        focusCell(rowIndex + 1, "melt_number");
+      }
+    },
+    [focusCell, onTriggerOcr, onConfirmRow]
+  );
+
+  /** Move to the next/previous column, only when the caret sits at that edge of the field. Returns whether it moved focus. */
+  const handleHorizontalArrow = useCallback(
+    (input: HTMLInputElement, rowIndex: number, column: GridColumn, forward: boolean): boolean => {
+      const atEdge = forward
+        ? input.selectionStart === input.value.length && input.selectionEnd === input.value.length
+        : input.selectionStart === 0 && input.selectionEnd === 0;
+      if (!atEdge) return false;
+
+      const colIdx = COLUMNS.indexOf(column);
+      const next = forward ? COLUMNS[colIdx + 1] : colIdx > 0 ? COLUMNS[colIdx - 1] : undefined;
+      if (!next) return false;
+
+      focusCell(rowIndex, next);
+      return true;
+    },
+    [focusCell]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, column: GridColumn) => {
       const input = e.currentTarget;
@@ -66,19 +103,7 @@ export function useGridKeyboardNav({
 
       if (e.key === "Enter") {
         e.preventDefault();
-        if (column === "melt_number") {
-          if (input.value.trim().length === 0) {
-            onTriggerOcr(rowIndex);
-          } else {
-            focusCell(rowIndex, "weight");
-          }
-        } else {
-          // weight column
-          if (input.value.trim().length > 0) {
-            onConfirmRow(rowIndex);
-            focusCell(rowIndex + 1, "melt_number");
-          }
-        }
+        handleEnterKey(input, rowIndex, column);
         return;
       }
 
@@ -94,31 +119,15 @@ export function useGridKeyboardNav({
       }
 
       if (e.key === "ArrowRight") {
-        const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
-        if (atEnd) {
-          const colIdx = COLUMNS.indexOf(column);
-          const next = COLUMNS[colIdx + 1];
-          if (next) {
-            e.preventDefault();
-            focusCell(rowIndex, next);
-          }
-        }
+        if (handleHorizontalArrow(input, rowIndex, column, true)) e.preventDefault();
         return;
       }
       if (e.key === "ArrowLeft") {
-        const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
-        if (atStart) {
-          const colIdx = COLUMNS.indexOf(column);
-          const prev = colIdx > 0 ? COLUMNS[colIdx - 1] : undefined;
-          if (prev) {
-            e.preventDefault();
-            focusCell(rowIndex, prev);
-          }
-        }
+        if (handleHorizontalArrow(input, rowIndex, column, false)) e.preventDefault();
         return;
       }
     },
-    [focusCell, onTriggerOcr, onConfirmRow, onOpenRussianKeyboard]
+    [focusCell, onOpenRussianKeyboard, handleEnterKey, handleHorizontalArrow]
   );
 
   return { registerCell, focusCell, handleKeyDown };

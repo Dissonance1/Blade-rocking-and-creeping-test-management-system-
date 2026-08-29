@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Check, Loader2, AlertCircle, X, Camera, RefreshCw, Cpu, Video } from "lucide-react";
+import { Check, Loader2, AlertCircle, X, Camera, RefreshCw, Cpu, Video, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
+import type { LocalSaveFolderStatus } from "@/hooks/useLocalSaveFolder";
 
 type CameraSource = "browser" | "oak1";
 
@@ -15,6 +16,11 @@ export default function CameraModal({
   autoCapture = false,
   onCapture,
   onClose,
+  saveFolderSupported = false,
+  saveFolderStatus = "unsupported",
+  saveFolderName = null,
+  onChooseSaveFolder,
+  onReconnectSaveFolder,
 }: {
   open: boolean;
   fieldLabel: string;
@@ -22,6 +28,12 @@ export default function CameraModal({
   autoCapture?: boolean;
   onCapture: (file: File, blob: Blob) => void;
   onClose: () => void;
+  /** Whether this browser supports picking a local save folder (File System Access API). */
+  saveFolderSupported?: boolean;
+  saveFolderStatus?: LocalSaveFolderStatus;
+  saveFolderName?: string | null;
+  onChooseSaveFolder?: () => void;
+  onReconnectSaveFolder?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -273,8 +285,37 @@ export default function CameraModal({
         <p className="text-center text-xs text-slate-400 dark:text-slate-500 mt-2">
           {autoCapture
             ? "Auto-capturing — press Enter/Escape after review to confirm or retake"
-            : "Photo + OCR result will be saved to your selected folder"}
+            : "Photo + OCR result are saved to the server"}
         </p>
+
+        {saveFolderSupported && (
+          <p className="text-center text-xs mt-1">
+            {saveFolderStatus === "ready" && (
+              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                <FolderOpen className="w-3 h-3" />
+                Also saving a local copy to “{saveFolderName}”
+              </span>
+            )}
+            {saveFolderStatus === "permission-needed" && (
+              <button
+                type="button"
+                onClick={onReconnectSaveFolder}
+                className="text-amber-600 dark:text-amber-400 underline underline-offset-2"
+              >
+                Reconnect “{saveFolderName}” to also save a local copy
+              </button>
+            )}
+            {(saveFolderStatus === "not-set" || saveFolderStatus === "checking") && (
+              <button
+                type="button"
+                onClick={onChooseSaveFolder}
+                className="text-slate-400 dark:text-slate-500 underline underline-offset-2"
+              >
+                Choose a folder to also save a local copy
+              </button>
+            )}
+          </p>
+        )}
       </div>
     </div>
   );

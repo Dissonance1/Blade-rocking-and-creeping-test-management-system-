@@ -20,7 +20,6 @@ export type BladeStatus =
   | "FINAL_VERIFICATION"
   | "COMPLETED"
   | "REJECTED"
-  | "ON_HOLD"
   | "REOPENED";
 
 export type UserRole =
@@ -99,7 +98,6 @@ export interface Blade {
   work_order_number: string;
   shop_order_number: string;
   part_number: string;
-  nomenclature: string;
   engine_number?: string | null;
   engine_hours?: string | null;
   component_hours?: string | null;
@@ -111,8 +109,6 @@ export interface Blade {
   ocr_serial_number?: string | null;
   ocr_mismatch_flag: boolean;
   ocr_mismatch_notes?: string | null;
-  rejection_reason_id?: string | null;
-  rejection_notes?: string | null;
   created_at: string;
   updated_at: string;
   // Optional eager-loaded relations (present when fetched via GET /blades/{id})
@@ -126,7 +122,6 @@ export interface BladeListItem {
   serial_number: string;
   melt_number: string;
   part_number: string;
-  nomenclature: string;
   blade_type: BladeType;
   status: BladeStatus;
   work_order_number?: string | null;
@@ -147,7 +142,6 @@ export interface BladeCreateRequest {
   work_order_number: string;
   shop_order_number: string;
   part_number: string;
-  nomenclature?: string;
   engine_number?: string;
   engine_hours?: string;
   component_hours?: string;
@@ -164,11 +158,6 @@ export interface BladeUpdateRequest {
 
 export interface BladeActionRequest {
   remarks?: string;
-}
-
-export interface BladeRejectRequest {
-  rejection_reason_id: string;
-  notes: string;
 }
 
 // ─── Measurements ─────────────────────────────────────────────────────────────
@@ -372,15 +361,6 @@ export interface Station {
   station_type: "OH" | "ASSEMBLY" | "QA" | "ADMIN";
   is_active: boolean;
   location?: string | null;
-}
-
-// ─── Rejection Reason ─────────────────────────────────────────────────────────
-
-export interface RejectionReason {
-  id: string;
-  code: string;
-  description: string;
-  is_active: boolean;
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

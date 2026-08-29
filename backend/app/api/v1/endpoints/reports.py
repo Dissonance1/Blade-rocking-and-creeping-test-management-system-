@@ -32,15 +32,21 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 # MIME types per report format
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MIME_TYPES: dict[ReportType, str] = {
     ReportType.PDF: "application/pdf",
-    ReportType.EXCEL: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ReportType.EXCEL: _XLSX_MIME,
 }
 
 _FILE_EXTENSIONS: dict[ReportType, str] = {
     ReportType.PDF: ".pdf",
     ReportType.EXCEL: ".xlsx",
 }
+
+_OPENPYXL_MISSING_MSG = "openpyxl is not installed. Install it to use Excel export."
+
+_COL_BLADE_SERIAL = "Blade Serial"
+_SLOT_TABLE_HEADERS = ["Slot", _COL_BLADE_SERIAL, "Melt No.", "Weight (g)", "Static Moment (g·cm)"]
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +325,7 @@ async def delete_report(
         200: {
             "content": {
                 "application/pdf": {},
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                _XLSX_MIME: {},
             },
             "description": "The generated report file",
         }
@@ -409,7 +415,7 @@ async def download_report(
     responses={
         200: {
             "content": {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+                _XLSX_MIME: {}
             },
             "description": "Excel workbook with blade records",
         }
@@ -444,7 +450,7 @@ async def export_blades_excel(
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="openpyxl is not installed. Install it to use Excel export.",
+            detail=_OPENPYXL_MISSING_MSG,
         )
 
     from app.models.blade import Blade
@@ -518,7 +524,7 @@ async def export_blades_excel(
 
     return StreamingResponse(
         content=iter([buffer.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=_XLSX_MIME,
         headers={
             "Content-Disposition": 'attachment; filename="blade_export.xlsx"',
         },
@@ -537,7 +543,7 @@ async def export_blades_excel(
     responses={
         200: {
             "content": {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                _XLSX_MIME: {},
                 "application/pdf": {},
             },
             "description": "Excel or PDF file with one row per blade in the work order",
@@ -571,7 +577,7 @@ async def export_batch_report(
             ext = "pdf"
         else:
             content = await generator.generate_batch_report_excel(work_order_number, db)
-            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            media_type = _XLSX_MIME
             ext = "xlsx"
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -599,6 +605,47 @@ async def export_batch_report(
 # ---------------------------------------------------------------------------
 
 
+def _hptr_slot_num(pair: tuple) -> int:
+    s = pair[1].slot_number
+    return int(s) if s.isdigit() else 0
+
+
+def _slot_row_values(blade, alloc, meas_map: dict) -> list:
+    meas = meas_map.get(blade.id)
+    return [
+        int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number,
+        blade.serial_number,
+        blade.melt_number,
+        float(meas.weight_grams) if meas and meas.weight_grams is not None else None,
+        float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None,
+    ]
+
+
+def _write_slot_row_cells(ws, r: int, col_start: int, values: list, data_font, all_borders, center_nowrap, left) -> None:
+    for i, value in enumerate(values):
+        cell = ws.cell(row=r, column=col_start + i, value=value)
+        cell.font = data_font
+        cell.border = all_borders
+        cell.alignment = left if i == 2 else center_nowrap
+        if i in (3, 4):  # Weight (g), Static Moment (g-cm)
+            cell.number_format = "0.00"
+
+
+def _write_hptr_slot_table(
+    ws, col_start: int, table_rows: list, meas_map: dict, table_headers: list,
+    header_row: int, header_font, data_font, all_borders, center, center_nowrap, left,
+) -> None:
+    for i, header in enumerate(table_headers):
+        cell = ws.cell(row=header_row, column=col_start + i, value=header)
+        cell.font = header_font
+        cell.alignment = center
+        cell.border = all_borders
+    for row_offset, (blade, alloc) in enumerate(table_rows, start=1):
+        r = header_row + row_offset
+        values = _slot_row_values(blade, alloc, meas_map)
+        _write_slot_row_cells(ws, r, col_start, values, data_font, all_borders, center_nowrap, left)
+
+
 @router.post(
     "/export/hptr-slots",
     status_code=status.HTTP_200_OK,
@@ -606,7 +653,7 @@ async def export_batch_report(
     responses={
         200: {
             "content": {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+                _XLSX_MIME: {}
             },
             "description": "Excel workbook with all 90 of the work order's saved HPTR slot assignments in one sheet",
         }
@@ -632,7 +679,7 @@ async def export_hptr_slots_excel(
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="openpyxl is not installed. Install it to use Excel export.",
+            detail=_OPENPYXL_MISSING_MSG,
         )
 
     from app.models.blade import Blade
@@ -692,16 +739,8 @@ async def export_hptr_slots_excel(
     # once a saved batch is reopened in a fresh session.
     half = 45
 
-    def _slot_num(pair: tuple) -> int:
-        s = pair[1].slot_number
-        return int(s) if s.isdigit() else 0
-
-    def _weight(pair: tuple) -> float:
-        meas = meas_map.get(pair[0].id)
-        return float(meas.weight_grams) if meas and meas.weight_grams is not None else 0.0
-
-    w1_rows = sorted((r for r in rows if _slot_num(r) <= half), key=_slot_num)
-    w2_rows = sorted((r for r in rows if _slot_num(r) > half), key=_slot_num)
+    w1_rows = sorted((r for r in rows if _hptr_slot_num(r) <= half), key=_hptr_slot_num)
+    w2_rows = sorted((r for r in rows if _hptr_slot_num(r) > half), key=_hptr_slot_num)
 
     # ── Styling matched to the original HPTR_*.xls shop-floor sheets: a
     # bold, merged, centered title row; bold header labels wrapped onto two
@@ -717,7 +756,7 @@ async def export_hptr_slots_excel(
     center_nowrap = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
 
-    table_headers = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"]
+    table_headers = _SLOT_TABLE_HEADERS
     n_cols = len(table_headers)
     w1_col_start, w2_col_start = 1, n_cols + 2  # one blank spacer column between the two blocks
     total_cols = w2_col_start + n_cols - 1
@@ -736,32 +775,14 @@ async def export_hptr_slots_excel(
     header_row = 2
     ws.row_dimensions[header_row].height = 36
 
-    def _write_table(col_start: int, table_rows: list) -> None:
-        for i, header in enumerate(table_headers):
-            cell = ws.cell(row=header_row, column=col_start + i, value=header)
-            cell.font = header_font
-            cell.alignment = center
-            cell.border = all_borders
-        for row_offset, (blade, alloc) in enumerate(table_rows, start=1):
-            meas = meas_map.get(blade.id)
-            r = header_row + row_offset
-            values = [
-                int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number,
-                blade.serial_number,
-                blade.melt_number,
-                float(meas.weight_grams) if meas and meas.weight_grams is not None else None,
-                float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None,
-            ]
-            for i, value in enumerate(values):
-                cell = ws.cell(row=r, column=col_start + i, value=value)
-                cell.font = data_font
-                cell.border = all_borders
-                cell.alignment = left if i == 2 else center_nowrap
-                if i in (3, 4):  # Weight (g), Static Moment (g-cm)
-                    cell.number_format = "0.00"
-
-    _write_table(w1_col_start, w1_rows)
-    _write_table(w2_col_start, w2_rows)
+    _write_hptr_slot_table(
+        ws, w1_col_start, w1_rows, meas_map, table_headers,
+        header_row, header_font, data_font, all_borders, center, center_nowrap, left,
+    )
+    _write_hptr_slot_table(
+        ws, w2_col_start, w2_rows, meas_map, table_headers,
+        header_row, header_font, data_font, all_borders, center, center_nowrap, left,
+    )
 
     # Column widths approximating the source sheet's proportions.
     col_widths = [12, 14, 10, 13, 15]
@@ -784,7 +805,7 @@ async def export_hptr_slots_excel(
 
     return StreamingResponse(
         content=iter([buffer.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=_XLSX_MIME,
         headers={
             "Content-Disposition": f'attachment; filename="hptr_slots_{work_order_number}.xlsx"',
         },
@@ -796,6 +817,123 @@ async def export_hptr_slots_excel(
 # ---------------------------------------------------------------------------
 
 
+def _lptr_slot_num(pair: tuple) -> int:
+    s = pair[1].slot_number
+    return int(s) if s.isdigit() else 0
+
+
+def _write_lptr_slot_sheet(
+    ws, all_rows: list, meas_map: dict, table_headers: list, header_row: int,
+    header_font, data_font, all_borders, center, center_nowrap, left,
+) -> None:
+    for i, header in enumerate(table_headers):
+        cell = ws.cell(row=header_row, column=1 + i, value=header)
+        cell.font = header_font
+        cell.alignment = center
+        cell.border = all_borders
+
+    for row_offset, (blade, alloc) in enumerate(all_rows, start=1):
+        r = header_row + row_offset
+        values = _slot_row_values(blade, alloc, meas_map)
+        _write_slot_row_cells(ws, r, 1, values, data_font, all_borders, center_nowrap, left)
+
+
+async def _fetch_lptr_audit_data(db: AsyncSession, work_order_number: str):
+    from app.models.lptr_balancing_check import LptrBalancingCheck
+    from app.models.lptr_empty_rotor_reading import LptrEmptyRotorReading
+    from app.models.lptr_manual_correction import LptrManualCorrection
+
+    reading = (
+        await db.execute(
+            select(LptrEmptyRotorReading).where(
+                LptrEmptyRotorReading.work_order_number == work_order_number
+            )
+        )
+    ).scalar_one_or_none()
+    checks = (
+        await db.execute(
+            select(LptrBalancingCheck)
+            .where(LptrBalancingCheck.work_order_number == work_order_number)
+            .order_by(LptrBalancingCheck.stage, LptrBalancingCheck.recorded_at)
+        )
+    ).scalars().all()
+    corrections = (
+        await db.execute(
+            select(LptrManualCorrection)
+            .where(LptrManualCorrection.work_order_number == work_order_number)
+            .order_by(LptrManualCorrection.stage, LptrManualCorrection.recorded_at)
+        )
+    ).scalars().all()
+    return reading, checks, corrections
+
+
+def _write_empty_rotor_block(ws_audit, reading, header_font, data_font, r: int) -> int:
+    ws_audit.cell(row=r, column=1, value="Empty Rotor Reading").font = header_font
+    r += 1
+    if reading:
+        ws_audit.cell(row=r, column=1, value="Unbalance Slot").font = data_font
+        ws_audit.cell(row=r, column=2, value=reading.unbalance_slot).font = data_font
+        ws_audit.cell(row=r, column=3, value="Unbalance Value (g)").font = data_font
+        ws_audit.cell(row=r, column=4, value=float(reading.unbalance_value)).font = data_font
+    else:
+        ws_audit.cell(row=r, column=1, value="Not recorded").font = data_font
+    return r + 2
+
+
+def _write_balancing_checks_table(ws_audit, checks: list, header_font, data_font, r: int) -> int:
+    ws_audit.cell(row=r, column=1, value="Balancing Checks").font = header_font
+    r += 1
+    for i, h in enumerate(["Stage", "Measured Unbalance (g)", "Pass?", "Remarks", "Recorded By", "Recorded At"]):
+        ws_audit.cell(row=r, column=1 + i, value=h).font = header_font
+    r += 1
+    for check in checks:
+        values = [
+            check.stage,
+            float(check.measured_unbalance),
+            "PASS" if check.is_pass else "FAIL",
+            check.remarks or "",
+            check.recorded_by.full_name or check.recorded_by.username,
+            check.recorded_at.strftime("%Y-%m-%d %H:%M"),
+        ]
+        for i, value in enumerate(values):
+            ws_audit.cell(row=r, column=1 + i, value=value).font = data_font
+        r += 1
+    return r + 1
+
+
+def _write_manual_corrections_table(ws_audit, corrections: list, header_font, data_font, r: int) -> int:
+    ws_audit.cell(row=r, column=1, value="Manual Corrections / Replacement Requests").font = header_font
+    r += 1
+    for i, h in enumerate(["Stage", "Type", "Description", _COL_BLADE_SERIAL, "Slot", "Recorded By", "Recorded At"]):
+        ws_audit.cell(row=r, column=1 + i, value=h).font = header_font
+    r += 1
+    for correction in corrections:
+        values = [
+            correction.stage,
+            correction.correction_type.value,
+            correction.description,
+            correction.blade.serial_number if correction.blade else "",
+            correction.slot_number or "",
+            correction.recorded_by.full_name or correction.recorded_by.username,
+            correction.recorded_at.strftime("%Y-%m-%d %H:%M"),
+        ]
+        for i, value in enumerate(values):
+            ws_audit.cell(row=r, column=1 + i, value=value).font = data_font
+        r += 1
+    return r
+
+
+async def _build_lptr_audit_sheet(wb, db: AsyncSession, work_order_number: str, header_font, data_font) -> None:
+    reading, checks, corrections = await _fetch_lptr_audit_data(db, work_order_number)
+    ws_audit = wb.create_sheet(title="Balancing & Corrections")
+    r = 1
+    r = _write_empty_rotor_block(ws_audit, reading, header_font, data_font, r)
+    r = _write_balancing_checks_table(ws_audit, checks, header_font, data_font, r)
+    _write_manual_corrections_table(ws_audit, corrections, header_font, data_font, r)
+    for i, width in enumerate([10, 24, 40, 16, 8, 18, 18]):
+        ws_audit.column_dimensions[ws_audit.cell(row=1, column=1 + i).column_letter].width = width
+
+
 @router.post(
     "/export/lptr-slots",
     status_code=status.HTTP_200_OK,
@@ -803,7 +941,7 @@ async def export_hptr_slots_excel(
     responses={
         200: {
             "content": {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}
+                _XLSX_MIME: {}
             },
             "description": "Excel workbook with all 90 slot assignments in one sheet plus a balancing & corrections audit sheet",
         }
@@ -833,14 +971,11 @@ async def export_lptr_slots_excel(
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="openpyxl is not installed. Install it to use Excel export.",
+            detail=_OPENPYXL_MISSING_MSG,
         )
 
     from app.models.blade import Blade
     from app.models.enums import BladeType
-    from app.models.lptr_balancing_check import LptrBalancingCheck
-    from app.models.lptr_empty_rotor_reading import LptrEmptyRotorReading
-    from app.models.lptr_manual_correction import LptrManualCorrection
     from app.models.measurement import Measurement
     from app.models.slot_allocation import SlotAllocation
     from app.models.work_order import WorkOrder
@@ -890,19 +1025,7 @@ async def export_lptr_slots_excel(
     ).all()
     meas_map = {r.blade_id: r for r in meas_rows}
 
-    def _slot_num(pair: tuple) -> int:
-        s = pair[1].slot_number
-        return int(s) if s.isdigit() else 0
-
-    def _weight(pair: tuple) -> float | None:
-        meas = meas_map.get(pair[0].id)
-        return float(meas.weight_grams) if meas and meas.weight_grams is not None else None
-
-    def _static_moment(pair: tuple) -> float | None:
-        meas = meas_map.get(pair[0].id)
-        return float(meas.static_moment_gcm) if meas and meas.static_moment_gcm is not None else None
-
-    all_rows = sorted(rows, key=_slot_num)
+    all_rows = sorted(rows, key=_lptr_slot_num)
 
     thin = Side(style="thin")
     all_borders = Border(top=thin, bottom=thin, left=thin, right=thin)
@@ -913,7 +1036,7 @@ async def export_lptr_slots_excel(
     center_nowrap = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
 
-    table_headers = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"]
+    table_headers = _SLOT_TABLE_HEADERS
     col_widths = [10, 16, 12, 12, 15]
 
     wb = openpyxl.Workbook()
@@ -928,28 +1051,10 @@ async def export_lptr_slots_excel(
     ws.row_dimensions[1].height = 22
 
     header_row = 2
-    for i, header in enumerate(table_headers):
-        cell = ws.cell(row=header_row, column=1 + i, value=header)
-        cell.font = header_font
-        cell.alignment = center
-        cell.border = all_borders
-
-    for row_offset, (blade, alloc) in enumerate(all_rows, start=1):
-        r = header_row + row_offset
-        values = [
-            int(alloc.slot_number) if alloc.slot_number.isdigit() else alloc.slot_number,
-            blade.serial_number,
-            blade.melt_number,
-            _weight((blade, alloc)),
-            _static_moment((blade, alloc)),
-        ]
-        for i, value in enumerate(values):
-            cell = ws.cell(row=r, column=1 + i, value=value)
-            cell.font = data_font
-            cell.border = all_borders
-            cell.alignment = left if i == 2 else center_nowrap
-            if i in (3, 4):
-                cell.number_format = "0.00"
+    _write_lptr_slot_sheet(
+        ws, all_rows, meas_map, table_headers, header_row,
+        header_font, data_font, all_borders, center, center_nowrap, left,
+    )
 
     for i, width in enumerate(col_widths):
         ws.column_dimensions[ws.cell(row=header_row, column=1 + i).column_letter].width = width
@@ -966,81 +1071,7 @@ async def export_lptr_slots_excel(
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     # ── Balancing & Corrections audit sheet ────────────────────────────────
-    reading = (
-        await db.execute(
-            select(LptrEmptyRotorReading).where(
-                LptrEmptyRotorReading.work_order_number == work_order_number
-            )
-        )
-    ).scalar_one_or_none()
-    checks = (
-        await db.execute(
-            select(LptrBalancingCheck)
-            .where(LptrBalancingCheck.work_order_number == work_order_number)
-            .order_by(LptrBalancingCheck.stage, LptrBalancingCheck.recorded_at)
-        )
-    ).scalars().all()
-    corrections = (
-        await db.execute(
-            select(LptrManualCorrection)
-            .where(LptrManualCorrection.work_order_number == work_order_number)
-            .order_by(LptrManualCorrection.stage, LptrManualCorrection.recorded_at)
-        )
-    ).scalars().all()
-
-    ws_audit = wb.create_sheet(title="Balancing & Corrections")
-    r = 1
-    ws_audit.cell(row=r, column=1, value="Empty Rotor Reading").font = header_font
-    r += 1
-    if reading:
-        ws_audit.cell(row=r, column=1, value="Unbalance Slot").font = data_font
-        ws_audit.cell(row=r, column=2, value=reading.unbalance_slot).font = data_font
-        ws_audit.cell(row=r, column=3, value="Unbalance Value (g)").font = data_font
-        ws_audit.cell(row=r, column=4, value=float(reading.unbalance_value)).font = data_font
-    else:
-        ws_audit.cell(row=r, column=1, value="Not recorded").font = data_font
-    r += 2
-
-    ws_audit.cell(row=r, column=1, value="Balancing Checks").font = header_font
-    r += 1
-    for i, h in enumerate(["Stage", "Measured Unbalance (g)", "Pass?", "Remarks", "Recorded By", "Recorded At"]):
-        ws_audit.cell(row=r, column=1 + i, value=h).font = header_font
-    r += 1
-    for check in checks:
-        values = [
-            check.stage,
-            float(check.measured_unbalance),
-            "PASS" if check.is_pass else "FAIL",
-            check.remarks or "",
-            check.recorded_by.full_name or check.recorded_by.username,
-            check.recorded_at.strftime("%Y-%m-%d %H:%M"),
-        ]
-        for i, value in enumerate(values):
-            ws_audit.cell(row=r, column=1 + i, value=value).font = data_font
-        r += 1
-    r += 1
-
-    ws_audit.cell(row=r, column=1, value="Manual Corrections / Replacement Requests").font = header_font
-    r += 1
-    for i, h in enumerate(["Stage", "Type", "Description", "Blade Serial", "Slot", "Recorded By", "Recorded At"]):
-        ws_audit.cell(row=r, column=1 + i, value=h).font = header_font
-    r += 1
-    for correction in corrections:
-        values = [
-            correction.stage,
-            correction.correction_type.value,
-            correction.description,
-            correction.blade.serial_number if correction.blade else "",
-            correction.slot_number or "",
-            correction.recorded_by.full_name or correction.recorded_by.username,
-            correction.recorded_at.strftime("%Y-%m-%d %H:%M"),
-        ]
-        for i, value in enumerate(values):
-            ws_audit.cell(row=r, column=1 + i, value=value).font = data_font
-        r += 1
-
-    for i, width in enumerate([10, 24, 40, 16, 8, 18, 18]):
-        ws_audit.column_dimensions[ws_audit.cell(row=1, column=1 + i).column_letter].width = width
+    await _build_lptr_audit_sheet(wb, db, work_order_number, header_font, data_font)
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -1055,7 +1086,7 @@ async def export_lptr_slots_excel(
 
     return StreamingResponse(
         content=iter([buffer.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=_XLSX_MIME,
         headers={
             "Content-Disposition": f'attachment; filename="lptr_slots_{work_order_number}.xlsx"',
         },

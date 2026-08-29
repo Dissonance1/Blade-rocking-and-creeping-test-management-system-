@@ -84,7 +84,6 @@ CREATED → OH_INSPECTION → MEASUREMENTS_RECORDED → SENT_TO_ASSEMBLY
   → RETURNED_TO_OH → FINAL_VERIFICATION → COMPLETED
 
 Any active state → REJECTED  (SUPER_ADMIN can → REOPENED → OH_INSPECTION)
-Any active state → ON_HOLD
 ```
 
 State transitions are enforced by `WorkflowEngine` in `backend/app/workflows/state_machine.py`. Never update `blade.status` directly — always go through `engine.transition()`.
