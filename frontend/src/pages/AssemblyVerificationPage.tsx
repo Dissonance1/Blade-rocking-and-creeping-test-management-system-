@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { formatDistanceToNow, parseISO } from "date-fns";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -215,9 +216,6 @@ export default function AssemblyVerificationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // ── Auto-init state (useEffect placed after useQuery declarations below) ──
-  const [autoInitDone, setAutoInitDone] = useState(false);
-
   // ── Pagination ──────────────────────────────────────────────────────────
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -288,25 +286,15 @@ export default function AssemblyVerificationPage() {
     refetchInterval: 10_000,
   });
 
-  // Auto-init: if batch has no ASSEMBLY_RECEIVED blades yet, call receiveBatch to transition them
-  useEffect(() => {
-    if (!workOrderNumber || autoInitDone || bladesLoading) return;
-    const hasAssemblyBlades = (bladesData?.items ?? []).some((b) =>
-      ["ASSEMBLY_RECEIVED", "ASSEMBLY_VERIFIED", "REJECTED"].includes(b.status)
-    );
-    if (bladesData && !hasAssemblyBlades) {
-      assemblyService
-        .receiveBatch(workOrderNumber, {})
-        .catch(() => { /* receipt may already exist */ })
-        .finally(() => {
-          setAutoInitDone(true);
-          queryClient.invalidateQueries({ queryKey: ["blades", "batch", workOrderNumber] });
-          queryClient.invalidateQueries({ queryKey: ["assembly", "progress", workOrderNumber] });
-        });
-    } else {
-      setAutoInitDone(true);
-    }
-  }, [bladesData, bladesLoading, workOrderNumber, autoInitDone, queryClient]);
+  // Gate: verification is only allowed once the batch has been explicitly
+  // marked as received at Assembly (the "Mark Received" button in Assembly
+  // Queue). A 404 here means no AssemblyBatchReceipt exists yet.
+  const { data: receipt, isLoading: receiptLoading, isError: notYetReceived } = useQuery({
+    queryKey: ["assembly", "receipt", workOrderNumber],
+    queryFn: () => assemblyService.getBatchReceipt(workOrderNumber!),
+    enabled: !!workOrderNumber,
+    retry: false,
+  });
 
   const { data: progress } = useQuery({
     queryKey: ["assembly", "progress", workOrderNumber],
@@ -331,6 +319,8 @@ export default function AssemblyVerificationPage() {
         ? measurements[measurements.length - 1]
         : null;
   const ohWeight = latestMeasurement?.weight_grams != null ? Number(latestMeasurement.weight_grams) : null;
+  const ohRocking = latestMeasurement?.rocking_value != null ? Number(latestMeasurement.rocking_value) : null;
+  const ohCreep = latestMeasurement?.creep_value != null ? Number(latestMeasurement.creep_value) : null;
 
   // ── Mutations ───────────────────────────────────────────────────────────
 
@@ -474,6 +464,40 @@ export default function AssemblyVerificationPage() {
   const ocrMatchStatus = selectedBlade ? matchScan(ocrNumber, selectedBlade.serial_number) : "empty";
   const meltMatchStatus = selectedBlade ? matchScan(meltScan, selectedBlade.melt_number) : "empty";
 
+  // ── Gate: block entry until the batch has been explicitly marked received ──
+  if (receiptLoading) {
+    return (
+      <div className="h-full flex items-center justify-center text-slate-400 dark:text-slate-500">
+        <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading…
+      </div>
+    );
+  }
+
+  if (notYetReceived) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-center px-6 gap-4 bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background">
+        <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+          <AlertTriangle className="w-8 h-8 text-amber-500" />
+        </div>
+        <div>
+          <p className="font-semibold text-lg text-slate-700 dark:text-slate-300">
+            Work Order <span className="font-mono text-orange-500">{workOrderNumber}</span> hasn't been received at Assembly yet
+          </p>
+          <p className="text-sm mt-2 max-w-md text-slate-500 dark:text-slate-400">
+            Mark it received in Assembly Queue first — verification only unlocks once a batch is received.
+          </p>
+        </div>
+        <Button
+          onClick={() => navigate("/assembly-queue")}
+          className="bg-orange-500 hover:bg-orange-400 text-white"
+        >
+          <ArrowLeft className="w-4 h-4 mr-1.5" />
+          Go to Assembly Queue
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-orange-50/50 dark:bg-background dark:from-background dark:via-background dark:to-background text-slate-900 dark:text-white">
@@ -499,6 +523,7 @@ export default function AssemblyVerificationPage() {
                 <div className="flex flex-wrap items-center gap-3 mt-1">
                   <span className="text-xs text-slate-500 dark:text-slate-400">
                     {verifiedCount}/{totalExpected} verified · {rejectedCount} rejected · {pendingCount} pending
+                    {receipt && ` · received ${formatDistanceToNow(parseISO(receipt.received_at), { addSuffix: true })}`}
                   </span>
                   <div className="flex-1 min-w-[100px] max-w-[200px] bg-slate-200 dark:bg-background rounded-full h-1.5">
                     <div
@@ -545,12 +570,7 @@ export default function AssemblyVerificationPage() {
                     <Loader2 className="w-4 h-4 animate-spin" /> Loading…
                   </div>
                 )}
-                {!bladesLoading && blades.length === 0 && !autoInitDone && (
-                  <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Receiving blades at Assembly…
-                  </div>
-                )}
-                {!bladesLoading && blades.length === 0 && autoInitDone && (
+                {!bladesLoading && blades.length === 0 && (
                   <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">
                     No blades in ASSEMBLY_RECEIVED status. Check that the batch was sent from OH.
                   </p>
@@ -654,6 +674,10 @@ export default function AssemblyVerificationPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <OhValueCell label="Weight" value={ohWeight} unit="g" />
+                      <OhValueCell label="Rocking" value={ohRocking} unit="°" />
+                      {fullBlade?.blade_type !== "HPTR" && (
+                        <OhValueCell label="Creep" value={ohCreep} unit="°" />
+                      )}
                       {latestMeasurement && (
                         <div className="flex flex-col justify-end ml-auto text-right">
                           <span className="text-[10px] text-slate-400 dark:text-slate-500">Tolerance</span>
