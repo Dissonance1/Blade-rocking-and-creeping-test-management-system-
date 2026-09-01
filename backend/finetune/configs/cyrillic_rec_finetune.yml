@@ -4,9 +4,11 @@ Global:
   use_gpu: false  # production runs CPU-only; training also stays CPU on this
                   # machine since no published PaddlePaddle GPU build yet
                   # supports this GPU's architecture (Blackwell/sm_120)
-  epoch_num: 20   # the base recipe's 500 epochs is for training from scratch;
-                  # fine-tuning an already-converged model on ~470 real
-                  # examples needs far fewer, or it will overfit/forget
+  epoch_num: 50   # bumped from 20 — unlike English (which had already
+                  # plateaued by epoch 12-20), Cyrillic's loss/edit-distance
+                  # were still improving when the 20-epoch run ended, so it
+                  # hadn't converged yet. Still far below the base recipe's
+                  # 500 (that's for training from scratch, not fine-tuning).
   log_smooth_window: 20
   print_batch_step: 10
   save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_rec_finetune
