@@ -51,7 +51,7 @@ from pathlib import Path
 
 import cv2
 import depthai as dai
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
@@ -85,15 +85,56 @@ STILL_WIDTH = 1920
 STILL_HEIGHT = 1080
 STILL_JPEG_QUALITY = 92
 FIXED_FOCUS_LENS_POSITION = 105  # 0-255, higher = closer; tuned for ~10-15cm scan distance
-# The OAK-1's lens is fixed-focal-length — there's no optical zoom, so this
-# crops the center of the sensor frame and resizes back up. >1.0 trades FOV
-# for a bigger, more filled-in view of whatever's centered under the lens
-# (the blade marking, in normal use), at the usual digital-zoom cost of a
-# softer, more upscaled image the further past 1.0 it goes.
-DIGITAL_ZOOM = 2.6
+# Every blade sits at the same fixed distance under the lens regardless of
+# type, so focus is the one constant above — never per-blade-type.
+#
+# The OAK-1's lens is fixed-focal-length — there's no optical zoom, so digital
+# zoom (center-crop + resize) is the only way to fill more of the frame with
+# the marking under the lens. HPTR and LPTR blades differ in size (not
+# distance) and in where their melt-number stamp sits, so each blade type
+# gets its own zoom level and its own pan (crop center, as fractional (x, y)
+# of the frame — (0.5, 0.5) is dead center; pan lets the crop follow wherever
+# the marking actually sits instead of always the frame's exact middle).
+#
+# Values below are copied from settings.json in the field-tuning tool used to
+# build the OCR training dataset (scripts/../blade_rocking_images_for_ocr) —
+# they were dialed in live against real LPTR/HPTR blades, not guessed.
+# Adjust here if a physical remeasurement says otherwise.
+BLADE_TYPES = ("LPTR", "HPTR")
+DEFAULT_BLADE_TYPE = "LPTR"
+ZOOM_BY_BLADE_TYPE: dict[str, float] = {"LPTR": 3.1, "HPTR": 3.3}
+PAN_BY_BLADE_TYPE: dict[str, tuple[float, float]] = {
+    "LPTR": (0.481994459833795, 0.5304821867321867),
+    "HPTR": (0.47368421052631576, 0.5796222358722358),
+}
 RETRY_INTERVAL_S = 5
 STREAM_FPS = 24
 FPS_LOG_INTERVAL_S = 10
+
+# Shared "which blade type is being scanned right now" state — set from the
+# ?blade_type= query param on /snapshot or /stream (see create_app below) and
+# read by the camera worker's reader threads on every frame. A single shared
+# value (not per-connection) is correct here: one physical camera serves one
+# operator working one work order — i.e. one blade type — at a time.
+_blade_type_lock = threading.Lock()
+_current_blade_type = DEFAULT_BLADE_TYPE
+
+
+def set_current_blade_type(blade_type: str | None) -> None:
+    global _current_blade_type  # noqa: PLW0603
+    if blade_type in BLADE_TYPES:
+        with _blade_type_lock:
+            _current_blade_type = blade_type
+
+
+def current_zoom() -> float:
+    with _blade_type_lock:
+        return ZOOM_BY_BLADE_TYPE[_current_blade_type]
+
+
+def current_pan() -> tuple[float, float]:
+    with _blade_type_lock:
+        return PAN_BY_BLADE_TYPE[_current_blade_type]
 
 
 # ─── Camera worker ──────────────────────────────────────────────────────────────
@@ -149,15 +190,20 @@ class Oak1CameraWorker:
         return pipeline
 
     @staticmethod
-    def _apply_digital_zoom(frame):
-        """Center-crop by ``DIGITAL_ZOOM`` and resize back to the original
-        frame size — the fixed lens has no optical zoom, so this is the only
-        way to fill more of the frame with whatever's centered under it."""
-        if DIGITAL_ZOOM <= 1.0:
+    def _apply_digital_zoom(frame, zoom: float, pan: tuple[float, float]):
+        """Crop by ``zoom`` around ``pan`` (fractional x, y — (0.5, 0.5) is
+        the frame center) and resize back to the original frame size. The
+        fixed lens has no optical zoom, so this crop+resize is the only way
+        to fill more of the frame with the marking under the lens, and
+        ``pan`` is what lets that crop be centered wherever the marking
+        actually sits for this blade type instead of always dead center."""
+        if zoom <= 1.0:
             return frame
         h, w = frame.shape[:2]
-        crop_w, crop_h = int(w / DIGITAL_ZOOM), int(h / DIGITAL_ZOOM)
-        x0, y0 = (w - crop_w) // 2, (h - crop_h) // 2
+        crop_w, crop_h = int(w / zoom), int(h / zoom)
+        cx, cy = int(pan[0] * w), int(pan[1] * h)
+        x0 = max(0, min(w - crop_w, cx - crop_w // 2))
+        y0 = max(0, min(h - crop_h, cy - crop_h // 2))
         cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
         return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
 
@@ -165,7 +211,7 @@ class Oak1CameraWorker:
         q = device.getOutputQueue(name="preview", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()  # blocks until the next frame — no busy-poll
-            frame = self._apply_digital_zoom(in_frame.getCvFrame())
+            frame = self._apply_digital_zoom(in_frame.getCvFrame(), current_zoom(), current_pan())
             ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY])
             if ok:
                 with self._lock:
@@ -176,7 +222,7 @@ class Oak1CameraWorker:
         q = device.getOutputQueue(name="still", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()
-            frame = self._apply_digital_zoom(in_frame.getCvFrame())
+            frame = self._apply_digital_zoom(in_frame.getCvFrame(), current_zoom(), current_pan())
             with self._lock:
                 self._still_frame = frame
                 self._still_fps_count += 1
@@ -284,6 +330,7 @@ def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
 
     @app.get("/snapshot")
     def snapshot() -> Response:
+        set_current_blade_type(request.args.get("blade_type"))
         jpeg = worker.get_still_jpeg()
         if jpeg is None:
             return jsonify({"error": "OAK-1 not connected or no frame captured yet"}), 503
@@ -291,6 +338,7 @@ def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
 
     @app.get("/stream")
     def stream() -> Response:
+        set_current_blade_type(request.args.get("blade_type"))
         return Response(
             _mjpeg_generator(worker), mimetype="multipart/x-mixed-replace; boundary=frame"
         )

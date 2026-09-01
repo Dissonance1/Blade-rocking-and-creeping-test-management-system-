@@ -18,6 +18,8 @@
  * shop-floor app on a known browser.
  */
 
+import type { BladeType } from "@/types";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const OAK1_SERVICE_URL: string = (import.meta as any).env?.VITE_OAK1_SERVICE_URL ?? "http://localhost:8089";
 
@@ -46,9 +48,20 @@ export async function checkOak1Health(): Promise<boolean> {
   }
 }
 
-/** Fetches the latest frame from the OAK-1 as a JPEG Blob. Throws on failure — callers should catch. */
-export async function captureOak1Snapshot(): Promise<Blob> {
-  const res = await fetchWithTimeout(`${OAK1_SERVICE_URL}/snapshot`, SNAPSHOT_TIMEOUT_MS);
+/**
+ * Fetches the latest frame from the OAK-1 as a JPEG Blob. Throws on failure —
+ * callers should catch.
+ *
+ * `bladeType`, when given, is forwarded as `?blade_type=` so the companion
+ * service applies that blade type's dialed-in digital zoom/pan (HPTR and
+ * LPTR blades differ in size and in where their melt-number stamp sits) —
+ * see ZOOM_BY_BLADE_TYPE/PAN_BY_BLADE_TYPE in oak1_camera_service.py.
+ */
+export async function captureOak1Snapshot(bladeType?: BladeType | null): Promise<Blob> {
+  const url = bladeType
+    ? `${OAK1_SERVICE_URL}/snapshot?blade_type=${bladeType}`
+    : `${OAK1_SERVICE_URL}/snapshot`;
+  const res = await fetchWithTimeout(url, SNAPSHOT_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`OAK-1 snapshot failed with status ${res.status}`);
   }
@@ -62,7 +75,10 @@ export async function captureOak1Snapshot(): Promise<Blob> {
  * over one long-lived connection, instead of polling /snapshot on a timer
  * (which caps the preview at 1/interval fps with up to one interval of
  * staleness on top).
+ *
+ * `bladeType` is forwarded the same way as in captureOak1Snapshot — the
+ * live preview should already show the framing the actual capture will use.
  */
-export function getOak1StreamUrl(): string {
-  return `${OAK1_SERVICE_URL}/stream`;
+export function getOak1StreamUrl(bladeType?: BladeType | null): string {
+  return bladeType ? `${OAK1_SERVICE_URL}/stream?blade_type=${bladeType}` : `${OAK1_SERVICE_URL}/stream`;
 }
