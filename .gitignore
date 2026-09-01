@@ -95,8 +95,21 @@ scripts/oak1-venv/
 *.tar.gz
 Blade_validation_PPv4OCR/
 
-# ─── Downloaded OCR model weights (fetched at runtime, not source) ──────────
-backend/app/ocr/models/
+# ─── OCR model weights ───────────────────────────────────────────────────────
+# Tracked in git deliberately: production has no removable-media/USB deploy
+# path, only `git pull` — so these binaries (~25MB total: det+cls+rec_en+
+# rec_ru) are the only way a fine-tuned model reaches the shop-floor PCs.
+
+# ─── OCR fine-tuning tooling (dev-only; never deployed) ─────────────────────
+# Cloned PaddleOCR training repo, downloaded pretrained checkpoints, the
+# training-only GPU venv, and generated crop+label training datasets are all
+# multi-GB, machine-specific, and reproducible from scratch — never commit
+# them. See backend/finetune/README.md for how to regenerate.
+backend/finetune/PaddleOCR/
+backend/finetune/pretrained/
+backend/finetune/.venv-train/
+backend/finetune/train_data/
+backend/finetune/output/
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/

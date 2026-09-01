@@ -1,0 +1,138 @@
+Global:
+  model_name: cyrillic_PP-OCRv3_mobile_rec_finetune
+  debug: false
+  use_gpu: false  # production runs CPU-only; training also stays CPU on this
+                  # machine since no published PaddlePaddle GPU build yet
+                  # supports this GPU's architecture (Blackwell/sm_120)
+  epoch_num: 20   # the base recipe's 500 epochs is for training from scratch;
+                  # fine-tuning an already-converged model on ~470 real
+                  # examples needs far fewer, or it will overfit/forget
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_rec_finetune
+  save_epoch_step: 5
+  eval_batch_step: [0, 200]
+  cal_metric_during_train: true
+  pretrained_model: /home/amit/src/blead_rocking/backend/finetune/pretrained/cyrillic_PP-OCRv3_rec_train/best_accuracy
+  checkpoints: null
+  save_inference_dir: null
+  use_visualdl: false
+  infer_img: null
+  character_dict_path: /home/amit/src/blead_rocking/backend/finetune/PaddleOCR/ppocr/utils/dict/cyrillic_dict.txt
+  max_text_length: &max_text_length 25
+  infer_mode: false
+  use_space_char: true
+  distributed: false  # single-process CPU run, not a multi-GPU launch
+  export_with_pir: false  # PaddleOCR/paddle 3.x defaults to exporting the new
+                          # PIR format (inference.json) — production's older
+                          # paddlepaddle==2.6.2 runtime only understands the
+                          # legacy inference.pdmodel format, and worse, when it
+                          # can't find that file it silently re-downloads the
+                          # STOCK model instead of erroring. This flag forces
+                          # the legacy export format so it actually loads OUR
+                          # fine-tuned weights.
+  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_rec_finetune/predicts.txt
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.0001  # 10x lower than the from-scratch recipe's 0.001
+    warmup_epoch: 2
+  regularizer:
+    name: L2
+    factor: 3.0e-05
+
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+  Transform: null
+  Backbone:
+    name: MobileNetV1Enhance
+    scale: 0.5
+    last_conv_stride: [1, 2]
+    last_pool_type: avg
+    last_pool_kernel_size: [2, 2]
+  Head:
+    name: MultiHead
+    head_list:
+      - CTCHead:
+          Neck:
+            name: svtr
+            dims: 64
+            depth: 2
+            hidden_dims: 120
+            use_guide: true
+          Head:
+            fc_decay: 0.00001
+      - SARHead:
+          enc_dim: 512
+          max_text_length: *max_text_length
+
+Loss:
+  name: MultiLoss
+  loss_config_list:
+    - CTCLoss: null
+    - SARLoss: null
+
+PostProcess:
+  name: CTCLabelDecode
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  ignore_space: false
+
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    ext_op_transform_idx: 1
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data/train_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 2
+        image_shape: [48, 320, 3]
+    - RecAug: null
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: true
+    batch_size_per_card: 8   # cut further after an OOM kill at batch=32 with
+                             # num_workers=4 on the English config — this host
+                             # only has 15.2GB RAM total, shared with Windows
+    drop_last: true
+    num_workers: 0  # each worker is a separate process with its own full
+                    # PaddlePaddle framework loaded (1-2GB+ overhead each) —
+                    # on a 15GB machine that multiplication is what OOM-killed
+                    # the English attempt before it even started iteration 0
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data/val_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 8
+    num_workers: 0

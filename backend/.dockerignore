@@ -9,3 +9,6 @@ __pycache__
 dist
 build
 .env.local
+
+# OCR fine-tuning tooling — dev-only, never part of the production image
+finetune/
