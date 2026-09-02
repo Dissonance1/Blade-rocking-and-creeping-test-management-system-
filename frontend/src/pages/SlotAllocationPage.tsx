@@ -129,7 +129,10 @@ function determineTabForProgress(stage2Count: number, stage1Count: number, hasEm
 
 // ─── Shared: W1/W2 half-split allocation tables ─────────────────────────────
 
-const HALF_TABLE_HEADERS = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"];
+const HALF_TABLE_HEADERS = [
+  "Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)",
+  "Opposite Δ (g)", "Rotor Angle (°)",
+];
 
 function splitByHalf<T>(items: T[], slotOf: (item: T) => number, totalSlots: number = LPTR_TOTAL_SLOTS) {
   const half = totalSlots / 2;
@@ -138,12 +141,27 @@ function splitByHalf<T>(items: T[], slotOf: (item: T) => number, totalSlots: num
   return { half, w1, w2 };
 }
 
+/** Slot exactly opposite on the rotor — half the total slots away, wrapping around. */
+function oppositeSlotNumber(slot: number, totalSlots: number): number {
+  const half = totalSlots / 2;
+  return ((slot - 1 + half) % totalSlots) + 1;
+}
+
+/** Angular position of a slot around the 360° rotor, slot 1 = 0°. */
+function rotorAngleDegrees(slot: number, totalSlots: number): number {
+  return ((slot - 1) * 360) / totalSlots;
+}
+
 function HalfTable({
   title,
   rows,
+  totalSlots,
+  weightBySlot,
 }: {
   title: string;
   rows: { slot: number; serial: string; melt: string | null | undefined; weight: number | null | undefined; staticMoment: number | null | undefined }[];
+  totalSlots: number;
+  weightBySlot: Map<number, number | null | undefined>;
 }) {
   return (
     <div className="flex-1 min-w-0">
@@ -163,22 +181,33 @@ function HalfTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-            {rows.map((r, idx) => (
-              <tr key={`${r.slot}-${r.serial}`} className={cn(
-                "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
-              )}>
-                <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{r.slot}</td>
-                <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">{r.serial}</td>
-                <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">{r.melt ?? "—"}</td>
-                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                  {r.weight != null ? Number(r.weight).toFixed(1) : "—"}
-                </td>
-                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                  {r.staticMoment != null ? Number(r.staticMoment).toFixed(2) : "—"}
-                </td>
-              </tr>
-            ))}
+            {rows.map((r, idx) => {
+              const oppositeWeight = weightBySlot.get(oppositeSlotNumber(r.slot, totalSlots));
+              const diff = r.weight != null && oppositeWeight != null ? Math.abs(Number(r.weight) - Number(oppositeWeight)) : null;
+              const angle = rotorAngleDegrees(r.slot, totalSlots);
+              return (
+                <tr key={`${r.slot}-${r.serial}`} className={cn(
+                  "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
+                  idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
+                )}>
+                  <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{r.slot}</td>
+                  <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">{r.serial}</td>
+                  <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">{r.melt ?? "—"}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {r.weight != null ? Number(r.weight).toFixed(1) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {r.staticMoment != null ? Number(r.staticMoment).toFixed(2) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {diff != null ? diff.toFixed(2) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-500 dark:text-slate-400 text-xs">
+                    {angle.toFixed(1)}°
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -195,10 +224,11 @@ function AllocationTable({ entries }: { entries: LptrAllocationEntry[] }) {
     weight: e.blade.weight_grams,
     staticMoment: e.blade.static_moment_gcm,
   });
+  const weightBySlot = new Map(entries.map((e) => [e.slot, e.blade.weight_grams]));
   return (
     <div className="flex flex-col lg:flex-row gap-4">
-      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
-      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
     </div>
   );
 }
@@ -214,10 +244,11 @@ function SavedSlotsTable({ rows }: { rows: SavedRow[] }) {
     weight: r.blade?.weight_grams,
     staticMoment: r.blade?.static_moment_gcm,
   });
+  const weightBySlot = new Map(rows.map((r) => [parseInt(r.slot.slot_number, 10) || 0, r.blade?.weight_grams]));
   return (
     <div className="flex flex-col lg:flex-row gap-4">
-      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
-      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
     </div>
   );
 }

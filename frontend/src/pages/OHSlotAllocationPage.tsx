@@ -321,7 +321,7 @@ function HalfColumn({ title, entries }: { title: string; entries: HptrAllocation
         <table className="w-full text-xs whitespace-nowrap">
           <thead className="sticky top-0 bg-slate-50 dark:bg-background">
             <tr>
-              {["Slot", "Serial", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
+              {["Slot", "Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
                 <th key={h} className="px-2 py-2 text-left font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   {h}
                 </th>
@@ -333,6 +333,7 @@ function HalfColumn({ title, entries }: { title: string; entries: HptrAllocation
               <tr key={blade.id}>
                 <td className="px-2 py-1.5 font-mono font-bold text-cyan-600 dark:text-cyan-400">#{slot}</td>
                 <td className="px-2 py-1.5 font-mono text-orange-500 dark:text-orange-400">{blade.serial_number}</td>
+                <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">{blade.melt_number ?? "—"}</td>
                 <td className="px-2 py-1.5 tabular-nums text-slate-700 dark:text-slate-200">
                   {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(2) : "—"}
                 </td>
