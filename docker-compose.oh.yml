@@ -24,6 +24,17 @@ x-backend-common: &backend-common
   env_file: .env.oh
   environment:
     STATION_ROLE: "OH"
+    # Defense-in-depth alongside the SelfAttentionFusePass patch in
+    # paddle_provider.py (see its docstring for the full story): on
+    # 12th/13th-gen Intel consumer CPUs, AVX-512 is fused off in silicon but
+    # PaddlePaddle/oneDNN can still misdetect it as available and crash with
+    # SIGILL. Capping oneDNN's own ISA dispatch to AVX2 is its documented
+    # workaround — it didn't fix the specific crash we hit (that one is
+    # baked into Paddle's own analysis library, not oneDNN's dispatcher),
+    # but it costs nothing and guards against oneDNN hitting the same wall
+    # elsewhere (e.g. if enable_mkldnn is ever turned back on).
+    DNNL_MAX_CPU_ISA: "AVX2"
+    ONEDNN_MAX_CPU_ISA: "AVX2"
   depends_on:
     oh_postgres:
       condition: service_healthy

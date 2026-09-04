@@ -177,10 +177,50 @@ class PaddleOCRProvider(OCRProvider):
     # Engine init
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _disable_crashing_ir_pass() -> None:
+        """
+        Work around a PaddlePaddle 2.6.2 crash: SelfAttentionFusePass — one
+        of the IR graph-fusion passes run during predictor creation — hits a
+        compiled-in AVX-512 code path that doesn't exist on 12th/13th-gen
+        Intel consumer CPUs (Alder Lake/Raptor Lake fuse AVX-512 off in
+        silicon), crashing the whole process with SIGILL the instant any
+        PaddleOCR engine is built.
+
+        The public lever for this — ``PaddleOCR(ir_optim=False)`` — does
+        nothing: paddleocr's own predictor builder
+        (``tools/infer/utility.py::create_predictor``) hardcodes
+        ``config.switch_ir_optim(True)`` regardless of that kwarg. But the
+        same function also calls ``config.delete_pass(...)`` for a couple of
+        other passes right before that line, proving pass deletion is a live
+        API on the Config object right up until the predictor is actually
+        built. So instead of trying to turn IR optimization off, we hook
+        ``Config.switch_ir_optim`` — which paddleocr always calls just
+        before ``inference.create_predictor(config)`` — to also delete the
+        one crashing pass at that point. This drops a single graph-fusion
+        rewrite (fusion passes are speed optimizations, not behavior
+        changes); it does not touch model weights, so the fine-tuned
+        det/rec_en/rec_ru models load and score identically.
+        """
+        import paddle.inference as pi
+
+        if getattr(pi.Config, "_blade_rocking_avx512_patch", False):
+            return
+        original_switch_ir_optim = pi.Config.switch_ir_optim
+
+        def patched_switch_ir_optim(self: Any, *args: Any, **kwargs: Any) -> Any:
+            result = original_switch_ir_optim(self, *args, **kwargs)
+            self.delete_pass("self_attention_fuse_pass")
+            return result
+
+        pi.Config.switch_ir_optim = patched_switch_ir_optim
+        pi.Config._blade_rocking_avx512_patch = True
+
     @classmethod
     def _get_engines(cls) -> tuple[Any, Any]:
         """Lazily create the shared English + Cyrillic PaddleOCR engines."""
         if cls._ocr_en is None or cls._ocr_ru is None:
+            cls._disable_crashing_ir_pass()
             from paddleocr import PaddleOCR  # type: ignore[import]
 
             common: dict[str, Any] = {
