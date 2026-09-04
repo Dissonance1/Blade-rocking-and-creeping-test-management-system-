@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
+import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -279,18 +280,15 @@ function BatchSelectorCard({
             <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
               Select Batch <span className="text-xs font-normal text-slate-400">(accepted batches only)</span>
             </Label>
-            <select
+            <WorkOrderCombobox
               value={selectedBatch}
-              onChange={(e) => onBatchChange(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-            >
-              <option value="">— Select an accepted batch —</option>
-              {eligibleBatches.map((b) => (
-                <option key={b.work_order_number} value={b.work_order_number}>
-                  {b.work_order_number}{` · ${b.current_status_label}`}
-                </option>
-              ))}
-            </select>
+              onChange={onBatchChange}
+              options={eligibleBatches.map((b) => ({
+                value: b.work_order_number,
+                label: `${b.work_order_number} · ${b.current_status_label}`,
+              }))}
+              placeholder="— Select an accepted batch —"
+            />
             {eligibleBatches.length === 0 && (
               <p className="text-xs text-amber-500 mt-1.5">
                 No accepted batches found. Batches must be accepted by Assembly before slot assignment.
@@ -917,12 +915,18 @@ export default function SlotAllocationPage() {
   }
 
   // ── Empty rotor ──────────────────────────────────────────────────────────
+  // Editing an already-saved reading must NOT bounce the user to the Stage 1
+  // tab — only the very first save (no prior reading) advances the guided
+  // flow. Otherwise a correction looks like it silently failed / got locked.
   const saveEmptyRotorMutation = useMutation({
     mutationFn: () => lptrService.saveEmptyRotorReading(selectedBatch, Number(unbalanceSlotInput), Number(unbalanceValueInput)),
     onSuccess: () => {
+      const wasFirstSave = !emptyRotor;
       qc.invalidateQueries({ queryKey: ["lptr-empty-rotor", selectedBatch] });
-      toast.success("Empty rotor reading saved");
-      setActiveTab("stage1");
+      toast.success(wasFirstSave ? "Empty rotor reading saved" : "Empty rotor reading updated");
+      setUnbalanceSlotInput("");
+      setUnbalanceValueInput("");
+      if (wasFirstSave) setActiveTab("stage1");
     },
     onError: () => toast.error("Failed to save empty rotor reading"),
   });
@@ -1089,8 +1093,17 @@ export default function SlotAllocationPage() {
   // an already-fully-slotted batch should land straight on Balancing instead
   // of making the user click back through Empty Rotor → Stage 1 → Stage 2
   // every time. Mirrors OHSlotAllocationPage's equivalent behavior for HPTR.
+  //
+  // Only auto-route ONCE per work order selection (tracked via the ref) —
+  // otherwise a background refetch of emptyRotor/slots while the user is
+  // mid-edit on an earlier tab (e.g. correcting the Empty Rotor reading)
+  // would snap them straight back out to Stage 1/2, making the field look
+  // locked even though the save itself went through fine.
+  const autoRoutedBatchRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedBatch || isLoading || emptyRotorLoading) return;
+    if (autoRoutedBatchRef.current === selectedBatch) return;
+    autoRoutedBatchRef.current = selectedBatch;
     const tab = determineTabForProgress(stage2Slots.length, stage1Slots.length, !!emptyRotor);
     if (tab) setActiveTab(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
