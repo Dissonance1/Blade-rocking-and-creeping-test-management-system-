@@ -1,5 +1,0 @@
-# OH PC override — exposes PostgreSQL port to LAN so Assembly PC can connect
-services:
-  oh_postgres:
-    ports:
-      - "5432:5432"

@@ -1425,17 +1425,28 @@ Sourced from `WorkflowLog` entries for the blade, ordered by timestamp:
 
 ### Deployment Modes
 
-Three Docker Compose configurations cover the deployment scenarios:
+Two Docker Compose configurations cover the deployment scenarios:
 
 | File | Use Case | Database |
 |------|----------|----------|
 | `docker-compose.yml` | Single-machine (dev, testing, all-in-one) | Postgres runs locally |
-| `docker-compose.oh.yml` | OH Station (701 Hanger) production | Postgres runs here; exposes `/api/v1/sync/*` to LAN |
-| `docker-compose.assembly.yml` | Assembly Station (720 Hanger) production | Connects to OH PC Postgres; sets `STATION_ROLE=ASSEMBLY` and `OH_SYNC_URL` |
+| `docker-compose.oh.yml` | Plant production — the OH PC (701 Hanger) runs the entire stack and is the server for the whole plant | Postgres runs here |
 
-For the two-station deployment:
-1. Start OH PC with `docker-compose.oh.yml` — this hosts the database
-2. Start Assembly PC with `docker-compose.assembly.yml` — set `DATABASE_URL` and `OH_SYNC_URL` to point at OH PC's LAN IP
+There used to be a third file, `docker-compose.assembly.yml`, running a
+second full stack on a separate Assembly PC (720 Hanger) with its own
+backend pointed at the OH PC's Postgres over LAN (`STATION_ROLE=ASSEMBLY`,
+`OH_SYNC_URL`, and the `/api/v1/sync/*` endpoints below to pull data across).
+It's been removed: Assembly has no local hardware (no OCR camera, scale, or
+DTI gauge) that needs a local backend to bridge into, so that second stack
+bought nothing but duplication. Assembly staff (and every other PC on the
+plant LAN) now just point a browser at the OH PC directly — role-based
+access control (`ASSEMBLY_OPERATOR` vs `OH_OPERATOR`, see Auth & Roles)
+is what actually restricts what they can do, not which PC they're on.
+
+`STATION_ROLE` (`OH`/`ASSEMBLY`) and the `/sync/*` endpoints below still
+exist in the codebase — a second backend instance could use them again if
+one's ever needed — but neither is exercised by the current single-server
+deployment.
 
 ### Docker Compose Services
 
@@ -1634,7 +1645,9 @@ CORS_ORIGINS=["https://your-domain.internal"]
 ### Optional Environment Variables
 
 ```bash
-# Two-station deployment (Assembly PC only)
+# Second-backend deployment only — not used by the current single-server
+# setup (see Deployment Modes above). Would matter again only if a second
+# backend instance is ever stood up.
 STATION_ROLE=ASSEMBLY          # "OH" or "ASSEMBLY" — controls sync/status response
 STATION_NAME="Assembly Station — 720 Hanger"   # Used in /sync/status response
 OH_SYNC_URL=http://192.168.1.50

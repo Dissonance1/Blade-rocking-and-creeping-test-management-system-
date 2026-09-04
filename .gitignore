@@ -77,9 +77,7 @@ pip-delete-this-directory.txt
 secrets/
 ssl/
 .env.oh
-.env.assembly
 !.env.oh.example
-!.env.assembly.example
 
 # ─── Claude Code session data ────────────────────────────────────────────────
 .claude/
