@@ -31,6 +31,13 @@ import type { WorkOrderBulkImportResult } from "@/services/workOrderService";
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const SAVE_RETRY_DELAYS_MS = [500, 1500, 4000];
 
+// Below this, the reader didn't match the expected melt-number grammar and
+// fell back to its best-guess line (see paddle_provider._resolve_value) —
+// a pattern-matched or confusion-corrected read scores 0.75+. Below that,
+// the value in the cell is a guess, not a confident read, so the operator
+// needs to be told to double-check it rather than trust it silently.
+const LOW_OCR_CONFIDENCE_THRESHOLD = 0.75;
+
 export default function BladeEntryGrid() {
   const {
     commonInfo,
@@ -230,12 +237,26 @@ export default function BladeEntryGrid() {
       if (rowIndex == null) return;
       try {
         const result = await ocrService.scanMelt(file);
+        const confidencePct = Math.round((result.confidence ?? 0) * 100);
         if (!result.value) {
           // OCR ran but found nothing readable in the frame — leave the
           // row's existing value untouched and tell the operator explicitly
-          // instead of silently applying an empty string.
-          toast.warning(`Row ${rowIndex + 1}: no melt number detected — try retaking with better lighting/focus.`);
+          // instead of silently applying an empty string. Confidence is
+          // shown too (usually near 0%) so it's clear this isn't a borderline
+          // call the operator could second-guess — nothing was read at all.
+          toast.warning(
+            `Row ${rowIndex + 1}: no melt number detected (confidence ${confidencePct}%) — try retaking with better lighting/focus.`
+          );
           return;
+        }
+        if (result.confidence < LOW_OCR_CONFIDENCE_THRESHOLD) {
+          // A value was read, but it didn't match the expected melt-number
+          // grammar — it's the OCR's best guess, not a confident detection.
+          // Still fill the cell (faster than a blank one to correct), but
+          // flag it so the operator doesn't trust it at face value.
+          toast.warning(
+            `Row ${rowIndex + 1}: low-confidence read "${result.value}" (${confidencePct}%) — please verify carefully.`
+          );
         }
         const readyToSave = applyOcrResult(rowIndex, result.value);
         const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
