@@ -52,6 +52,15 @@ services:
   oh_postgres:
     image: postgres:15-alpine
     container_name: oh_postgres
+    # Default max_connections (100) sat below the backend's own worst-case
+    # demand: uvicorn --workers 4 x (pool_size=10 + max_overflow=20) = 120
+    # from oh_backend alone, before oh_celery's own pool is even counted.
+    # 200 gives real headroom above that combined peak (~150) rather than
+    # sitting at the edge — this PC now serves both stations directly, so
+    # that peak is the realistic ceiling, not a rare edge case. shared_buffers
+    # bumped modestly to match; both stay well under the RAM this host has
+    # to spare (7.5GB given to Docker, ~6GB free at idle).
+    command: postgres -c max_connections=200 -c shared_buffers=256MB
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-blade_rocking_oh}
       POSTGRES_USER: ${POSTGRES_USER:-blade_user}
