@@ -113,6 +113,18 @@ EXTRA_TRANSITIONS_BY_TYPE: dict[BladeType, dict[BladeStatus, set[BladeStatus]]] 
         BladeStatus.SLOT_ASSIGNED: {BladeStatus.MEASUREMENTS_RECORDED},
         BladeStatus.BALANCING_IN_PROGRESS: {BladeStatus.MEASUREMENTS_RECORDED},
     },
+    BladeType.LPTR: {
+        # Undo a saved slot allocation — including one Assembly has already
+        # confirmed balanced — so it can be redone from scratch, as long as
+        # the work order hasn't been handed back to OH yet (RETURNED_TO_OH).
+        # Mirrors HPTR's BALANCING_COMPLETED -> MEASUREMENTS_RECORDED reset
+        # edge above. Lands back on ASSEMBLY_RECEIVED rather than
+        # ASSEMBLY_VERIFIED since bulk slot assignment normally skips the
+        # per-blade verify step (see ASSEMBLY_RECEIVED -> SLOT_ASSIGNED).
+        BladeStatus.SLOT_ASSIGNED: {BladeStatus.ASSEMBLY_RECEIVED},
+        BladeStatus.BALANCING_IN_PROGRESS: {BladeStatus.ASSEMBLY_RECEIVED},
+        BladeStatus.BALANCING_COMPLETED: {BladeStatus.ASSEMBLY_RECEIVED},
+    },
 }
 
 # ---------------------------------------------------------------------------

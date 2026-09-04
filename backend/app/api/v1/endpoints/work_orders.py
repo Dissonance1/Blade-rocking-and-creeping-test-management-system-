@@ -12,6 +12,7 @@ POST /work-orders/{work_order_number}/return-to-oh              — Assembly rep
 POST /work-orders/{work_order_number}/accept-return             — OH accepts a work order returned from Assembly
 POST /work-orders/{work_order_number}/complete-final-verification — OH completes final verification for a work order
 POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved HPTR slot allocation, redo from scratch
+POST /work-orders/{work_order_number}/reset-lptr-slots          — undo a saved LPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/complete-rocking-creep    — confirm Rocking & Creep entry complete for a work order
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
@@ -2448,6 +2449,131 @@ async def reset_hptr_slots(
         "work_order_number": work_order_number,
         "blades_reset": len(blades),
         "message": f"{len(blades)} HPTR blade(s) reset to Measurements Recorded — ready for a fresh Slot Allocation.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/reset-lptr-slots
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/reset-lptr-slots",
+    status_code=status.HTTP_200_OK,
+    summary="Reset a work order's LPTR slot allocation so it can be redone from scratch",
+)
+async def reset_lptr_slots(
+    work_order_number: str,
+    body: dict,
+    current_user: Annotated[Any, Depends(require_roles("ASSEMBLY_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Deactivates the work order's active LPTR slot allocations (either or both
+    stages) and transitions every affected blade back to ASSEMBLY_RECEIVED —
+    the state bulk slot assignment normally starts from — making the work
+    order eligible for a fresh Stage 1 / Stage 2 allocation.
+
+    Only applies to LPTR work orders, and only to blades still at
+    SLOT_ASSIGNED, BALANCING_IN_PROGRESS, or BALANCING_COMPLETED — i.e.
+    before the work order has been handed back to OH (RETURNED_TO_OH). A
+    blade already at RETURNED_TO_OH or later is not resettable through this
+    endpoint (undoing a batch Assembly has already sent back is a separate,
+    more deliberate action).
+
+    Logs an ACCEPTED work-order event afterward (not a made-up "reset" type)
+    so `_check_work_order_accepted_for_slots` still lets a fresh assign-slot
+    call through — only ACCEPTED/MODIFIED/SLOTS_ALLOCATED satisfy that gate.
+    """
+    from app.models.blade import Blade
+    from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+    from app.workflows.state_machine import WorkflowEngine
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.blade_type != BladeType.LPTR:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Work Order '{work_order_number}' is {work_order.blade_type.value} — "
+                "this endpoint only applies to LPTR work orders."
+            ),
+        )
+
+    remarks = (body or {}).get("remarks") or "LPTR slot allocation reset — redoing from scratch"
+
+    _RESETTABLE_STATUSES = [
+        BladeStatus.SLOT_ASSIGNED,
+        BladeStatus.BALANCING_IN_PROGRESS,
+        BladeStatus.BALANCING_COMPLETED,
+    ]
+    blades = (
+        await db.execute(
+            select(Blade).where(
+                Blade.work_order_number == work_order_number,
+                Blade.deleted_at.is_(None),
+                Blade.status.in_(_RESETTABLE_STATUSES),
+            )
+        )
+    ).scalars().all()
+
+    if not blades:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No resettable LPTR blades found for Work Order '{work_order_number}' — "
+                "blades must be at Slot Assigned, Balancing In Progress, or Balancing Completed "
+                "(not yet Returned to OH)."
+            ),
+        )
+
+    engine = WorkflowEngine(db)
+    for blade in blades:
+        alloc = (
+            await db.execute(
+                select(SlotAllocation).where(
+                    SlotAllocation.blade_id == blade.id,
+                    SlotAllocation.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if alloc:
+            alloc.is_active = False
+            alloc.previous_slot_number = alloc.slot_number
+        await engine.transition(
+            blade=blade,
+            to_status=BladeStatus.ASSEMBLY_RECEIVED,
+            user=current_user,
+            station_id=None,
+            remarks=remarks,
+        )
+
+    await db.commit()
+
+    db.add(WorkOrderEvent(
+        work_order_number=work_order_number,
+        event_type=BatchEventType.ACCEPTED,
+        action_by_id=current_user.id,
+        remarks=f"{len(blades)} LPTR blade(s) reset — slot allocation redone from scratch. {remarks}",
+        changes={"blades_reset": len(blades)},
+    ))
+    await db.commit()
+
+    logger.info("work_order_lptr_slots_reset", work_order=work_order_number, blades=len(blades))
+    return {
+        "work_order_number": work_order_number,
+        "blades_reset": len(blades),
+        "message": f"{len(blades)} LPTR blade(s) reset to Assembly Received — ready for a fresh Slot Allocation.",
     }
 
 

@@ -334,4 +334,17 @@ export const batchService = {
     const { data } = await api.post(`/work-orders/${batchNumber}/reset-hptr-slots`, { remarks });
     return data;
   },
+
+  /**
+   * Undoes a saved LPTR slot allocation (blades still at Slot Assigned or
+   * Balancing In Progress — not yet Balancing Completed) so the work order
+   * can go through Slot Allocation again from scratch.
+   */
+  resetLptrSlots: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/reset-lptr-slots`, { remarks });
+    return data;
+  },
 };

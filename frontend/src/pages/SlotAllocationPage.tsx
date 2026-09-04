@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
-  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send, ArrowLeftRight,
+  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send, ArrowLeftRight, RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
@@ -60,7 +60,8 @@ function isPendingSendBackBatch(b: BatchSummary): boolean {
 function runStage1(
   eligibleBlades: BladeListItem[],
   unbalanceSlot: number | undefined,
-  unbalanceValue: number | undefined
+  unbalanceValue: number | undefined,
+  forceFourBladeAnchor: boolean = false
 ): LptrStage1Result | null {
   if (!unbalanceSlot || unbalanceValue == null) {
     toast.error("Record the empty rotor reading first");
@@ -70,7 +71,7 @@ function runStage1(
     toast.error(`Need at least ${LPTR_STAGE1_COUNT} eligible blades, found ${eligibleBlades.length}`);
     return null;
   }
-  return computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS);
+  return computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS, LPTR_STAGE1_COUNT, forceFourBladeAnchor);
 }
 
 function swapStage1Preview(preview: LptrStage1Result | null, swapA: string, swapB: string): LptrStage1Result | null {
@@ -515,6 +516,8 @@ function Stage1TabContent({
   setSwapA1,
   swapB1,
   setSwapB1,
+  forceFourBladeAnchor,
+  setForceFourBladeAnchor,
 }: {
   stage1Slots: unknown[];
   stage1SavedRows: SavedRow[];
@@ -530,6 +533,8 @@ function Stage1TabContent({
   setSwapA1: (v: string) => void;
   swapB1: string;
   setSwapB1: (v: string) => void;
+  forceFourBladeAnchor: boolean;
+  setForceFourBladeAnchor: (v: boolean) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -552,6 +557,15 @@ function Stage1TabContent({
                 <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
                   {eligibleBlades.length} of {blades.length} LPTR blades ready. Stage 1 requires exactly {LPTR_STAGE1_COUNT}.
                 </p>
+                <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceFourBladeAnchor}
+                    onChange={(e) => setForceFourBladeAnchor(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-orange-500"
+                  />
+                  Use 4-blade set making (normally only triggers automatically when the closest match is also the lightest blade left in the batch)
+                </label>
                 <Button onClick={onRunStage1} disabled={eligibleBlades.length < LPTR_STAGE1_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
                   <Play className="w-4 h-4 mr-1.5" />Run Stage 1 Allocation
                 </Button>
@@ -567,6 +581,11 @@ function Stage1TabContent({
             <CardTitle className="text-base">
               Stage 1 Preview
               <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+              {stage1Preview.usedFourBladeAnchor && (
+                <span className="ml-2 text-xs font-normal text-orange-600 bg-orange-50 dark:bg-orange-900/20 px-2 py-0.5 rounded-full">
+                  4-blade anchor: slots {stage1Preview.anchorSlots.join(", ")}
+                </span>
+              )}
             </CardTitle>
             <div className="flex gap-2">
               <Button size="sm" onClick={onSaveStage1} disabled={isSavingStage1} className="bg-emerald-500 hover:bg-emerald-600 text-white">
@@ -577,7 +596,7 @@ function Stage1TabContent({
           </CardHeader>
           <CardContent className="pt-0 space-y-2">
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
+              Target weight per opposite blade: {stage1Preview.targetWeight.toFixed(2)} g
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1">
@@ -828,6 +847,11 @@ export default function SlotAllocationPage() {
 
   const [stage1Preview, setStage1Preview] = useState<LptrStage1Result | null>(null);
   const [stage2Preview, setStage2Preview] = useState<LptrAllocationEntry[] | null>(null);
+  // Manual override: normally the 4-blade anchor fallback only kicks in
+  // automatically when the closest available blade is also the lightest
+  // blade left in the batch, but the operator can force it on for a run
+  // even when the normal 2-blade anchor would work.
+  const [forceFourBladeAnchor, setForceFourBladeAnchor] = useState(false);
 
   const [swapA1, setSwapA1] = useState("");
   const [swapB1, setSwapB1] = useState("");
@@ -905,7 +929,7 @@ export default function SlotAllocationPage() {
 
   // ── Stage 1 ──────────────────────────────────────────────────────────────
   function handleRunStage1() {
-    const result = runStage1(eligibleBlades, unbalanceSlot, unbalanceValue);
+    const result = runStage1(eligibleBlades, unbalanceSlot, unbalanceValue, forceFourBladeAnchor);
     if (result) setStage1Preview(result);
   }
 
@@ -1000,6 +1024,33 @@ export default function SlotAllocationPage() {
     },
   });
 
+  // Undoes a saved slot allocation (including one Assembly has already
+  // confirmed balanced) so Stage 1 can be redone from scratch — e.g. after
+  // fixing a bug in the balancing algorithm. Blocked server-side once the
+  // work order has been sent back to OH.
+  const resetSlotsMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.resetLptrSlots(workOrderNumber),
+    onSuccess: (res) => {
+      refresh();
+      toast.success(res.message ?? "LPTR slot allocation reset");
+      setActiveTab("empty-rotor");
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to reset slot allocation";
+      toast.error(msg);
+    },
+  });
+
+  function handleResetSlots() {
+    if (!selectedBatch) return;
+    if (!window.confirm(
+      `Reset slot allocation for ${selectedBatch}? This clears all saved slot assignments (both stages) and returns the blades to Assembly Received so Stage 1 can be run again. This cannot be undone once you save a new allocation.`
+    )) {
+      return;
+    }
+    resetSlotsMutation.mutate(selectedBatch);
+  }
+
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
     setExporting(true);
@@ -1019,6 +1070,7 @@ export default function SlotAllocationPage() {
     setStage2Preview(null);
     setUnbalanceSlotInput("");
     setUnbalanceValueInput("");
+    setForceFourBladeAnchor(false);
   }
 
   const stage1SavedRows: SavedRow[] = useMemo(
@@ -1058,9 +1110,27 @@ export default function SlotAllocationPage() {
             </p>
           </div>
           {selectedBatch && (
-            <Button variant="outline" size="sm" onClick={refresh} className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
-              <RefreshCw className="w-4 h-4 mr-1.5" />Refresh
-            </Button>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {stage1Slots.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleResetSlots}
+                  disabled={resetSlotsMutation.isPending}
+                  className="w-full sm:w-auto justify-center border-red-300 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                >
+                  {resetSlotsMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4 mr-1.5" />
+                  )}
+                  Reset Slot Allocation
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={refresh} className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
+                <RefreshCw className="w-4 h-4 mr-1.5" />Refresh
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -1143,6 +1213,8 @@ export default function SlotAllocationPage() {
                 setSwapA1={setSwapA1}
                 swapB1={swapB1}
                 setSwapB1={setSwapB1}
+                forceFourBladeAnchor={forceFourBladeAnchor}
+                setForceFourBladeAnchor={setForceFourBladeAnchor}
               />
             </TabsContent>
 
