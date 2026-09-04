@@ -195,6 +195,26 @@ services:
       timeout: 5s
       retries: 3
 
+  # --------------------------------------------------------------------------
+  # Autoheal — every service above has a healthcheck, but `restart:
+  # unless-stopped` alone only reacts once a container's process actually
+  # exits. A container that's alive but stuck (deadlocked, hung, healthcheck
+  # failing) won't restart itself — nothing else here watches for that. This
+  # container watches Docker's own healthcheck status via the Docker socket
+  # and force-restarts anything reporting "unhealthy" for too long.
+  # --------------------------------------------------------------------------
+  oh_autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: oh_autoheal
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: all   # watch every container with a healthcheck, no per-service opt-in label needed
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 60
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
 networks:
   oh_network:
     driver: bridge
