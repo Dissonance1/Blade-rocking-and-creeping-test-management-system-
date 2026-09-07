@@ -2,9 +2,10 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Search,
   ExternalLink,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
   RotateCcw,
   Download,
   Inbox,
@@ -17,11 +18,11 @@ import {
   Pencil,
 } from "lucide-react";
 import { OhQueueIcon } from "@/components/common/CustomIcons";
+import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 import { formatDistanceToNow, differenceInDays, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -204,9 +205,9 @@ function SendBatchDialog({
 export default function OHQueuePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchFilter, setBatchFilter] = useState<string>("");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [sendBatchTarget, setSendBatchTarget] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -278,24 +279,25 @@ export default function OHQueuePage() {
   // Only populated when a batch is selected — no pagination issues
   const allBlades = data?.items ?? [];
 
-  // All work order numbers from the batch list — not limited by blade pagination
-  const workOrderNumbers = useMemo(
+  // Work order options for the searchable combobox — not limited by blade pagination
+  const workOrderOptions = useMemo(
     () =>
-      [...new Set(batches.map((b) => b.work_order_number))].sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true })
-      ),
+      batches
+        .map((b) => ({
+          value: b.work_order_number,
+          label: b.part_number ? `${b.work_order_number} · ${b.part_number}` : b.work_order_number,
+        }))
+        .sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true })),
     [batches]
   );
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return allBlades.filter(
-      (b) =>
-        !q ||
-        b.serial_number.toLowerCase().includes(q) ||
-        (b.melt_number ?? "").toLowerCase().includes(q)
+    const sorted = [...allBlades].sort((a, b) =>
+      a.serial_number.localeCompare(b.serial_number, undefined, { numeric: true })
     );
-  }, [allBlades, search]);
+    if (sortOrder === "desc") sorted.reverse();
+    return sorted;
+  }, [allBlades, sortOrder]);
 
   // Rows actually entered (Melt Number + Weight stored) in the selected batch —
   // NOT blade_count, which is the fixed 90-row scaffold present from the start.
@@ -384,32 +386,16 @@ export default function OHQueuePage() {
       <div className="w-full px-4 sm:px-6 py-6">
         {/* Filters row */}
         <div className="flex flex-wrap gap-3 mb-5">
-          {/* Search */}
-          <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 dark:text-slate-400" />
-            <Input
-              placeholder="Search serial or melt number…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 bg-slate-50 dark:bg-background border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500"
-            />
-          </div>
-
-          {/* Batch filter */}
-          <div className="flex items-center gap-2">
+          {/* Work order search */}
+          <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-sm">
             <Package className="w-4 h-4 text-slate-500 dark:text-slate-400 flex-shrink-0" />
-            <select
+            <WorkOrderCombobox
               value={batchFilter}
-              onChange={(e) => setBatchFilter(e.target.value)}
-              className="rounded-md border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 min-w-[160px]"
-            >
-              <option value="">All Batches</option>
-              {workOrderNumbers.map((bn) => (
-                <option key={bn} value={bn}>
-                  {bn}
-                </option>
-              ))}
-            </select>
+              onChange={setBatchFilter}
+              options={workOrderOptions}
+              placeholder="Search work order number…"
+              className="bg-slate-50 dark:bg-background"
+            />
           </div>
 
           {/* Batch info chip */}
@@ -542,9 +528,7 @@ export default function OHQueuePage() {
                     <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-slate-500">
                       <Inbox className="w-12 h-12 mb-3 opacity-30" />
                       <p className="font-medium">No blades in this queue</p>
-                      <p className="text-sm mt-1">
-                        {search ? "Try adjusting your search" : "All caught up!"}
-                      </p>
+                      <p className="text-sm mt-1">All caught up!</p>
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -568,7 +552,19 @@ export default function OHQueuePage() {
                               />
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
-                              Serial Number
+                              <button
+                                type="button"
+                                onClick={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+                                className="flex items-center gap-1 hover:text-orange-300"
+                                title="Sort by serial number"
+                              >
+                                Serial Number
+                                {sortOrder === "asc" ? (
+                                  <ArrowUp className="w-3 h-3" />
+                                ) : (
+                                  <ArrowDown className="w-3 h-3" />
+                                )}
+                              </button>
                             </th>
                             <th className="text-left px-4 py-3 text-slate-100 font-semibold tracking-wide text-xs uppercase">
                               Melt Number
