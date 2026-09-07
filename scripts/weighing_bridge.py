@@ -6,12 +6,16 @@ Blade Rocking backend so every open browser tab auto-fills the weight field.
 
 Scales (this deployment):
     Two Adam Equipment iScale i-04, 0.1 g resolution, each connected via an
-    RS-232-to-Bluetooth SPP adapter. Only one is ever powered on at a time.
-    Windows assigns whichever COM port is free at pairing time, and that
-    assignment can shift after a re-pair — so this bridge auto-discovers the
-    live scale by its stable Bluetooth MAC address (see KNOWN_SCALES) rather
-    than a hard-coded COM port. Whichever scale is actually powered on gets
-    picked up automatically; no need to know or care which COM it landed on.
+    RS-232-to-Bluetooth SPP adapter. Normally only one is powered on at a
+    time. Windows assigns whichever COM port is free at pairing time, and
+    that assignment can shift after a re-pair — so this bridge auto-discovers
+    the live scale by its stable Bluetooth MAC address (see KNOWN_SCALES)
+    rather than a hard-coded COM port. Whichever scale is actually powered on
+    gets picked up automatically; no need to know or care which COM it landed
+    on. If both happen to be on at once, whichever answers first wins (see
+    _race_open) — the readings still all funnel into one global weighing
+    channel with no per-scale identity, so don't rely on both being live at
+    the same time for two different blades.
 
 Usage:
     python weighing_bridge.py                          # auto-discover, server = http://localhost
@@ -28,6 +32,7 @@ import argparse
 import logging
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -113,12 +118,54 @@ def _open_port(port: str, baud: int):
     return None
 
 
+def _race_open(candidates: list[tuple[str, str]]):
+    """Try every candidate port concurrently; whichever answers first wins.
+
+    Both scales can be powered on at once. Probing candidates one at a time
+    would always favor whichever port happens to be enumerated first (in
+    practice, the lower COM number) — not what "whichever is on" should mean.
+    Racing them in parallel threads makes it genuinely first-come-first-served:
+    whichever scale actually starts sending data first is the one used. The
+    loser's port (if it also answers, just slightly later) is closed
+    immediately rather than left open.
+
+    Returns ``(ser, label, port)`` for the winner, or ``(None, None, None)``
+    if nothing answered.
+    """
+    winner: dict = {}
+    lock = threading.Lock()
+
+    def _probe(port: str, label: str) -> None:
+        for baud in BAUD_RATES:
+            if winner:
+                return
+            ser = _open_port(port, baud)
+            if ser:
+                with lock:
+                    if "ser" not in winner:
+                        winner.update(ser=ser, label=label, port=port)
+                    else:
+                        ser.close()
+                return
+
+    threads = [threading.Thread(target=_probe, args=(port, label), daemon=True) for port, label in candidates]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    if "ser" in winner:
+        return winner["ser"], winner["label"], winner["port"]
+    return None, None, None
+
+
 def _connect(port_override: str | None):
     """Open a scale's port, retrying forever until it succeeds.
 
     With no override, each attempt re-resolves KNOWN_SCALES to whichever COM
-    ports are currently paired/visible and tries all of them — so it doesn't
-    matter which scale is powered on, or which COM port Windows assigned it.
+    ports are currently paired/visible and races all of them concurrently
+    (see _race_open) — so it doesn't matter which scale is powered on, which
+    COM port Windows assigned it, or whether both happen to be on at once.
     A failed attempt must keep retrying rather than giving up — otherwise the
     bridge process exits and never notices when a scale comes on (or switches
     from one scale to the other).
@@ -132,21 +179,22 @@ def _connect(port_override: str | None):
                 "[serial] no known scale currently paired/visible (attempt %d) — "
                 "retrying in %ds. Is a scale powered on?", attempt, RETRY_INTERVAL_S,
             )
-        for port, label in candidates:
-            log.info("[serial] trying %s (%s), attempt %d …", port, label, attempt)
-            for baud in BAUD_RATES:
-                ser = _open_port(port, baud)
-                if ser:
-                    log.info("[serial] %s is active on %s", label, port)
-                    return ser
-        if candidates:
-            log.warning(
-                "[serial] no known scale responded — retrying in %ds.\n"
-                "  • Is a scale plugged in and powered on?\n"
-                "  • Is it paired in Windows Bluetooth settings?\n"
-                "  • Is another application (e.g. the scale software) using the port?",
-                RETRY_INTERVAL_S,
-            )
+            time.sleep(RETRY_INTERVAL_S)
+            continue
+
+        log.info("[serial] racing %d candidate port(s), attempt %d …", len(candidates), attempt)
+        ser, label, port = _race_open(candidates)
+        if ser:
+            log.info("[serial] %s is active on %s (first to respond)", label, port)
+            return ser
+
+        log.warning(
+            "[serial] no known scale responded — retrying in %ds.\n"
+            "  • Is a scale plugged in and powered on?\n"
+            "  • Is it paired in Windows Bluetooth settings?\n"
+            "  • Is another application (e.g. the scale software) using the port?",
+            RETRY_INTERVAL_S,
+        )
         time.sleep(RETRY_INTERVAL_S)
 
 
