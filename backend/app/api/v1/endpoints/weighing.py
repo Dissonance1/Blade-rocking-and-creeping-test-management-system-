@@ -32,6 +32,7 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from app.core.security import decode_token
+from app.middleware.rate_limit import rate_limit_hardware_bridge
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -46,6 +47,7 @@ class WeightReading(BaseModel):
 
 
 @router.post("/push", status_code=200)
+@rate_limit_hardware_bridge()
 async def push_weight(body: WeightReading, request: Request) -> dict[str, Any]:
     """
     Receive a weight reading from the local Windows bridge script and

@@ -63,6 +63,13 @@ limiter = Limiter(
 AUTHENTICATED_LIMIT: str = "100/minute"
 ANONYMOUS_LIMIT: str = "20/minute"
 AUTH_ENDPOINT_LIMIT: str = "5/minute"
+# Local hardware bridges (weighing scale, DTI gauge) stream a reading every
+# time the value changes, which for a live scale/gauge is routinely several
+# per second — comfortably over the default 100/minute. These endpoints are
+# unauthenticated but already restricted to localhost at the nginx layer
+# (see their docstrings), so a much higher cap here is just a safety valve
+# against a runaway bridge process, not a real abuse control.
+HARDWARE_BRIDGE_LIMIT: str = "3000/minute"
 
 
 # ---------------------------------------------------------------------------
@@ -100,4 +107,9 @@ def rate_limit_anonymous(limit: str = ANONYMOUS_LIMIT) -> Callable:
 
 def rate_limit_auth_endpoint(limit: str = AUTH_ENDPOINT_LIMIT) -> Callable:
     """Strict rate limit for login / token-refresh endpoints."""
+    return limiter.limit(limit, key_func=get_remote_address)
+
+
+def rate_limit_hardware_bridge(limit: str = HARDWARE_BRIDGE_LIMIT) -> Callable:
+    """High-throughput limit for local weighing/DTI bridge push endpoints."""
     return limiter.limit(limit, key_func=get_remote_address)

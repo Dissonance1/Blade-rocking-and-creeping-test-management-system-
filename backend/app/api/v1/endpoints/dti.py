@@ -41,6 +41,7 @@ from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import decode_token
+from app.middleware.rate_limit import rate_limit_hardware_bridge
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -121,6 +122,7 @@ async def reset_dti_cycle(request: Request, station: str = Query(default="1")) -
 
 
 @router.post("/push", status_code=200)
+@rate_limit_hardware_bridge()
 async def push_dti(body: DtiReading, request: Request) -> dict[str, Any]:
     """
     Receive a single DTI height-position reading from the local Windows bridge
