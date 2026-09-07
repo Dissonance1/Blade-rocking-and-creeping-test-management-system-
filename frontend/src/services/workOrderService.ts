@@ -7,8 +7,8 @@ export interface WorkOrderCreatePayload {
   shop_order_number: string;
   part_number: string;
   blade_type: BladeType;
-  engine_number?: string | null;
-  engine_hours: string;
+  engine_number: string;
+  engine_hours?: string | null;
   component_hours?: string | null;
 }
 
@@ -36,7 +36,7 @@ export interface WorkOrderDetail {
   part_number: string;
   blade_type: BladeType;
   engine_number: string | null;
-  engine_hours: string;
+  engine_hours: string | null;
   component_hours: string | null;
   is_entry_complete: boolean;
   entry_completed_at: string | null;

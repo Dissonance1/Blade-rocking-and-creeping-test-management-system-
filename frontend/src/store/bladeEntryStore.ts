@@ -163,7 +163,7 @@ export const useBladeEntryStore = create<BladeEntryState>((set, get) => ({
         part_number: detail.part_number,
         blade_type: detail.blade_type,
         engine_number: detail.engine_number ?? "",
-        engine_hours: detail.engine_hours,
+        engine_hours: detail.engine_hours ?? "",
         component_hours: detail.component_hours ?? "",
       },
       commonInfoLocked: true,

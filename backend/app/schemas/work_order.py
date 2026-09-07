@@ -24,14 +24,15 @@ class WorkOrderCreate(BaseSchema):
     shop_order_number: str = Field(..., min_length=1, max_length=64, examples=["SO-0456"])
     part_number: str = Field(..., min_length=1, max_length=64, examples=["PT-JT9D-1A"])
     blade_type: BladeType = Field(..., description="HPTR or LPTR — fixed for all 90 blades")
-    engine_number: str | None = Field(
-        default=None,
+    engine_number: str = Field(
+        ...,
+        min_length=1,
         max_length=64,
         description="Append _1, _2, ... for repeat visits of the same engine",
         examples=["ENG-20240012", "ENG-20240012_1"],
     )
-    engine_hours: str = Field(
-        ..., max_length=64, description="Engine hours in HH:MM:SS format"
+    engine_hours: str | None = Field(
+        default=None, max_length=64, description="Engine hours in HH:MM:SS format"
     )
     component_hours: str | None = Field(
         default=None,
@@ -39,7 +40,7 @@ class WorkOrderCreate(BaseSchema):
         description="Component hours in HH:MM:SS format; defaults to engine_hours if not set",
     )
 
-    @field_validator("work_order_number", "shop_order_number", "part_number")
+    @field_validator("work_order_number", "shop_order_number", "part_number", "engine_number")
     @classmethod
     def strip_required(cls, v: str) -> str:
         v = v.strip()
@@ -96,8 +97,8 @@ class WorkOrderDetailResponse(BaseSchema):
     shop_order_number: str
     part_number: str
     blade_type: BladeType
-    engine_number: str | None = None
-    engine_hours: str
+    engine_number: str
+    engine_hours: str | None = None
     component_hours: str | None = None
     is_entry_complete: bool
     entry_completed_at: datetime | None = None
