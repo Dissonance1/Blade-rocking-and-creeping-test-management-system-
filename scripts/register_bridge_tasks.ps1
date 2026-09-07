@@ -8,7 +8,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$py = "C:\Users\ADMIN\AppData\Local\Python\bin\python.exe"
+$py = "C:\Users\ADMIN\AppData\Local\Python\bin\pythonw.exe"   # windowless — python.exe would pop a visible console
 $scriptsDir = "C:\blade-rocking\scripts"
 
 function Register-BridgeTask {
