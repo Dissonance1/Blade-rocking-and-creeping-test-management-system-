@@ -27,12 +27,17 @@ function Register-BridgeTask {
     Write-Host "Registered: $Name"
 }
 
-# COM3 confirmed as the iScale-BT-91 weighing scale (Bluetooth MAC 0025020126B1
-# matches its PnP instance ID). COM4 is unconfirmed for the Sylvac DTI gauge —
-# if it doesn't connect, re-pair the gauge in Windows Bluetooth settings and
-# check its actual COM port with: python -m serial.tools.list_ports
+# Two iScale scales share the OH station (iScale-BT-91, MAC 0025020126B1, and
+# iScale-BT-0111, MAC 00250201225E) but only one is ever powered on at a time.
+# weighing_bridge.py auto-discovers whichever one is live by Bluetooth MAC
+# (see KNOWN_SCALES in that script) rather than a hard-coded COM port, so a
+# single task covers both — no --port needed, and no action required when
+# Windows reassigns a COM letter after a re-pair.
+# COM4 is unconfirmed for the Sylvac DTI gauge — if it doesn't connect,
+# re-pair the gauge in Windows Bluetooth settings and check its actual COM
+# port with: python -m serial.tools.list_ports
 Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py"
-Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --port COM3 --server http://localhost"
+Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server http://localhost"
 Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server http://localhost"
 
 Write-Host ""
