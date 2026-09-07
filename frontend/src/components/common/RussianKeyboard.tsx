@@ -28,7 +28,7 @@ interface RussianKeyboardProps {
 
 export default function RussianKeyboard({ initialValue, onConfirm, onClose }: RussianKeyboardProps) {
   const [value, setValue] = useState(initialValue);
-  const [shift, setShift] = useState(false);
+  const [shift, setShift] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selection = () => {
