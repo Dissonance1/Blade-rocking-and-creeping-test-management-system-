@@ -108,9 +108,15 @@ _SHAPE_RE = re.compile(r"^\d{2,4}[A-ZА-ЯЁ]\d{2,4}$", re.IGNORECASE)
 # "9"/"1"/"0", and an embossed "B" (the single most common letter on these
 # stamps) is routinely misread as "3"/"8"/"5"/"0". "/" and "*" are included
 # because a stray diagonal stroke (most often a real "1") recognizes as one
-# or the other on this font. Used only as a last-resort, single-substitution
-# repair when a read is otherwise one character away from the expected
-# digits-letter-digits shape — never applied blindly.
+# or the other on this font. "A" -> "Л" is a font quirk, not a lighting/
+# resolution problem: this stamp draws "Л" as a plain peaked stroke (∧)
+# rather than the standard printed Cyrillic form, which is exactly what "A"
+# looks like without its crossbar — rec_ru's training data doesn't cover
+# that stylised glyph, so it's read as the visually nearer Latin "A" every
+# time rather than being a fuzzy per-instance misread. Used only as a
+# last-resort, single-substitution repair when a read is otherwise one
+# character away from the expected digits-letter-digits shape — never
+# applied blindly.
 _LIKELY_MISREAD_OF: dict[str, list[str]] = {
     "7": ["1", "4", "Г"],
     "3": ["B", "5"],
@@ -122,7 +128,7 @@ _LIKELY_MISREAD_OF: dict[str, list[str]] = {
     "5": ["Г", "3"],
     "6": ["Б"],
     "H": ["4"],
-    "A": ["1"],
+    "A": ["1", "Л"],
     "/": ["1"],
     "*": ["1"],
 }
