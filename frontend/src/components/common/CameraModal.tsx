@@ -19,10 +19,9 @@ export default function CameraModal({
   onCapture,
   onClose,
   saveFolderSupported = false,
-  saveFolderStatus = "unsupported",
+  saveFolderStatus = "unavailable",
   saveFolderName = null,
   onChooseSaveFolder,
-  onReconnectSaveFolder,
 }: {
   open: boolean;
   fieldLabel: string;
@@ -33,12 +32,11 @@ export default function CameraModal({
   autoCapture?: boolean;
   onCapture: (file: File, blob: Blob) => void;
   onClose: () => void;
-  /** Whether this browser supports picking a local save folder (File System Access API). */
+  /** Whether the local save-folder companion service is reachable. */
   saveFolderSupported?: boolean;
   saveFolderStatus?: LocalSaveFolderStatus;
   saveFolderName?: string | null;
   onChooseSaveFolder?: () => void;
-  onReconnectSaveFolder?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -300,15 +298,6 @@ export default function CameraModal({
                 <FolderOpen className="w-3 h-3" />
                 Also saving a local copy to “{saveFolderName}”
               </span>
-            )}
-            {saveFolderStatus === "permission-needed" && (
-              <button
-                type="button"
-                onClick={onReconnectSaveFolder}
-                className="text-amber-600 dark:text-amber-400 underline underline-offset-2"
-              >
-                Reconnect “{saveFolderName}” to also save a local copy
-              </button>
             )}
             {(saveFolderStatus === "not-set" || saveFolderStatus === "checking") && (
               <button

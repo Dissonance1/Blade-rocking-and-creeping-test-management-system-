@@ -1,90 +1,68 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  chooseFolder,
-  forgetFolder,
-  getStoredFolderHandle,
-  hasReadWritePermission,
-  isFolderPickerSupported,
-  requestReadWritePermission,
+  chooseSaveFolder,
+  forgetSaveFolder,
+  getSaveFolder,
   saveCaptureToFolder,
   type OcrCaptureForSave,
 } from "@/services/localSaveFolder";
 
-export type LocalSaveFolderStatus =
-  | "unsupported"
-  | "checking"
-  | "not-set"
-  | "ready"
-  | "permission-needed";
+export type LocalSaveFolderStatus = "unavailable" | "checking" | "not-set" | "ready";
 
 /**
  * Backs the "save OCR photos to a local folder" affordance in Blade Entry.
- * The folder handle is remembered across sessions (IndexedDB), but the
- * browser drops its permission grant on reload — `permission-needed` means
- * the folder is remembered, it just needs a click to re-grant.
+ * The folder is chosen once (native OS dialog on the OAK-1 companion
+ * service's PC) and stays chosen — no browser permission grant to lapse or
+ * reconnect, unlike the File System Access API this used to go through.
  */
 export function useLocalSaveFolder() {
-  const supported = isFolderPickerSupported();
-  const [status, setStatus] = useState<LocalSaveFolderStatus>(supported ? "checking" : "unsupported");
+  const [status, setStatus] = useState<LocalSaveFolderStatus>("checking");
   const [folderName, setFolderName] = useState<string | null>(null);
-  const handleRef = useRef<FileSystemDirectoryHandle | null>(null);
 
-  useEffect(() => {
-    if (!supported) return;
-    let cancelled = false;
-    void (async () => {
-      const handle = await getStoredFolderHandle();
-      if (cancelled) return;
-      if (!handle) {
-        setStatus("not-set");
-        return;
-      }
-      handleRef.current = handle;
-      setFolderName(handle.name);
-      setStatus((await hasReadWritePermission(handle)) ? "ready" : "permission-needed");
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [supported]);
-
-  const choose = useCallback(async () => {
+  const refresh = useCallback(async () => {
+    setStatus((prev) => (prev === "ready" ? prev : "checking"));
     try {
-      const handle = await chooseFolder();
-      handleRef.current = handle;
-      setFolderName(handle.name);
-      setStatus("ready");
+      const { path, name } = await getSaveFolder();
+      setFolderName(name);
+      setStatus(path ? "ready" : "not-set");
     } catch {
-      // User cancelled the picker — leave state as-is.
+      setFolderName(null);
+      setStatus("unavailable");
     }
   }, []);
 
-  /** Re-requests permission for the remembered folder. Must run from a click handler. */
-  const reconnect = useCallback(async () => {
-    const handle = handleRef.current;
-    if (!handle) return;
-    setStatus((await requestReadWritePermission(handle)) ? "ready" : "permission-needed");
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const choose = useCallback(async () => {
+    try {
+      const { name } = await chooseSaveFolder();
+      setFolderName(name);
+      setStatus("ready");
+    } catch {
+      // Operator cancelled the dialog, or the companion service is
+      // unreachable — leave state as-is either way.
+    }
   }, []);
 
   const forget = useCallback(async () => {
-    await forgetFolder();
-    handleRef.current = null;
+    await forgetSaveFolder();
     setFolderName(null);
     setStatus("not-set");
   }, []);
 
-  /** Returns false when the capture was skipped (folder not connected/ready)
-   * rather than actually written — callers should surface that to the
-   * operator instead of assuming a silent no-op means "saved". */
+  /** Returns false when the capture was skipped (no folder configured, or the
+   * companion service is unreachable) rather than actually written — callers
+   * should surface that to the operator instead of assuming a silent no-op
+   * means "saved". */
   const saveCapture = useCallback(
     async (opts: { workOrderNumber: string; fieldLabel: string; photoBlob: Blob; ocr: OcrCaptureForSave }) => {
-      const handle = handleRef.current;
-      if (!handle || status !== "ready") return false;
-      await saveCaptureToFolder(handle, opts);
-      return true;
+      if (status !== "ready") return false;
+      return saveCaptureToFolder(opts);
     },
     [status]
   );
 
-  return { supported, status, folderName, choose, reconnect, forget, saveCapture };
+  return { supported: status !== "unavailable", status, folderName, choose, forget, saveCapture };
 }

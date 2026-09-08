@@ -1,13 +1,23 @@
 /**
  * Optional local copy of blade-entry OCR captures. The backend upload
  * (ocrService.scanMelt + attachScan) is always the source of truth — this
- * just mirrors the photo + detection result into an operator-chosen folder
- * on the PC's own disk, via the File System Access API, so operators don't
- * have to dig through the Docker volume to find a scan.
+ * just mirrors the photo + detection result into a folder on the PC's own
+ * disk, so operators don't have to dig through the Docker volume to find a
+ * scan.
  *
- * Chromium-only and requires a secure context (https, or http://localhost —
- * which is how the OH PC serves its own UI). isSupported() gates all of it.
+ * Writes go through the OAK-1 companion service (scripts/oak1_camera_service.py),
+ * already running locally on this PC — the folder is chosen once via a native
+ * OS dialog on that process, not the browser's File System Access API. That
+ * API's write-permission grant lapses on every page reload and has to be
+ * re-approved by a click; routing through the local service avoids that
+ * entirely; once chosen, it stays chosen.
  */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const OAK1_SERVICE_URL: string = (import.meta as any).env?.VITE_OAK1_SERVICE_URL ?? "http://localhost:8089";
+
+const REQUEST_TIMEOUT_MS = 3000;
+const CHOOSE_TIMEOUT_MS = 120_000; // the native dialog waits on the operator
 
 export interface OcrCaptureForSave {
   value: string;
@@ -17,119 +27,71 @@ export interface OcrCaptureForSave {
   scan_id: string;
 }
 
-const DB_NAME = "blade-rocking-local-save";
-const DB_VERSION = 1;
-const STORE_NAME = "handles";
-const HANDLE_KEY = "ocrPhotoFolder";
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE_NAME)) {
-        req.result.createObjectStore(STORE_NAME);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error as Error);
-  });
-}
-
-async function idbGet<T>(key: string): Promise<T | undefined> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).get(key);
-    req.onsuccess = () => resolve(req.result as T | undefined);
-    req.onerror = () => reject(req.error as Error);
-  });
-}
-
-async function idbSet(key: string, value: unknown): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error as Error);
-  });
-}
-
-async function idbDelete(key: string): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error as Error);
-  });
-}
-
-export function isFolderPickerSupported(): boolean {
-  return typeof window !== "undefined" && "showDirectoryPicker" in window;
-}
-
-export async function getStoredFolderHandle(): Promise<FileSystemDirectoryHandle | null> {
-  if (!isFolderPickerSupported()) return null;
-  const handle = await idbGet<FileSystemDirectoryHandle>(HANDLE_KEY);
-  return handle ?? null;
-}
-
-/** Checks the existing grant without prompting the user. */
-export async function hasReadWritePermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
-  return (await handle.queryPermission({ mode: "readwrite" })) === "granted";
-}
-
-/** Prompts the user if needed — must be called from a user-gesture handler (e.g. a click). */
-export async function requestReadWritePermission(handle: FileSystemDirectoryHandle): Promise<boolean> {
-  return (await handle.requestPermission({ mode: "readwrite" })) === "granted";
-}
-
-export async function chooseFolder(): Promise<FileSystemDirectoryHandle> {
-  const handle = await window.showDirectoryPicker({ id: "blade-ocr-photos", mode: "readwrite" });
-  await idbSet(HANDLE_KEY, handle);
-  return handle;
-}
-
-export async function forgetFolder(): Promise<void> {
-  await idbDelete(HANDLE_KEY);
-}
-
-function sanitizeSegment(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, "-").trim();
-}
-
-/** Writes `<name>.jpg` + `<name>.json` (the OCR detection) into the folder. */
-export async function saveCaptureToFolder(
-  handle: FileSystemDirectoryHandle,
-  opts: {
-    workOrderNumber: string;
-    fieldLabel: string;
-    photoBlob: Blob;
-    ocr: OcrCaptureForSave;
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
-): Promise<void> {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const baseName = sanitizeSegment(`${opts.workOrderNumber}_${opts.fieldLabel}_${ts}`);
+}
 
-  const photoHandle = await handle.getFileHandle(`${baseName}.jpg`, { create: true });
-  const photoWritable = await photoHandle.createWritable();
-  await photoWritable.write(opts.photoBlob);
-  await photoWritable.close();
+export interface SaveFolderInfo {
+  path: string | null;
+  name: string | null;
+}
 
-  const jsonHandle = await handle.getFileHandle(`${baseName}.json`, { create: true });
-  const jsonWritable = await jsonHandle.createWritable();
-  await jsonWritable.write(
-    JSON.stringify(
-      {
-        work_order_number: opts.workOrderNumber,
-        field: opts.fieldLabel,
-        captured_at: new Date().toISOString(),
-        ...opts.ocr,
-      },
-      null,
-      2
-    )
+/** Reachability + current folder in one call — throws if the service is unreachable. */
+export async function getSaveFolder(): Promise<SaveFolderInfo> {
+  const res = await fetchWithTimeout(`${OAK1_SERVICE_URL}/save-folder`, {}, REQUEST_TIMEOUT_MS);
+  if (!res.ok) throw new Error(`save-folder check failed with status ${res.status}`);
+  return res.json();
+}
+
+/** Opens a native folder-picker dialog on the PC running the companion service. Throws if cancelled or unreachable. */
+export async function chooseSaveFolder(): Promise<SaveFolderInfo> {
+  const res = await fetchWithTimeout(`${OAK1_SERVICE_URL}/save-folder/choose`, { method: "POST" }, CHOOSE_TIMEOUT_MS);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `choose folder failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function forgetSaveFolder(): Promise<void> {
+  await fetchWithTimeout(`${OAK1_SERVICE_URL}/save-folder`, { method: "DELETE" }, REQUEST_TIMEOUT_MS);
+}
+
+/** Writes `<name>.jpg` + `<name>.json` (the OCR detection) into the configured folder.
+ * Returns false (rather than throwing) when no folder is configured yet or the
+ * companion service is unreachable — callers should surface that instead of
+ * assuming a silent no-op means saved. */
+export async function saveCaptureToFolder(opts: {
+  workOrderNumber: string;
+  fieldLabel: string;
+  photoBlob: Blob;
+  ocr: OcrCaptureForSave;
+}): Promise<boolean> {
+  const form = new FormData();
+  form.append("photo", opts.photoBlob, "capture.jpg");
+  form.append(
+    "meta",
+    JSON.stringify({
+      work_order_number: opts.workOrderNumber,
+      field: opts.fieldLabel,
+      ...opts.ocr,
+    })
   );
-  await jsonWritable.close();
+
+  try {
+    const res = await fetchWithTimeout(
+      `${OAK1_SERVICE_URL}/save-capture`,
+      { method: "POST", body: form },
+      REQUEST_TIMEOUT_MS
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

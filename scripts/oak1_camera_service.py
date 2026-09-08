@@ -26,6 +26,14 @@ Endpoints:
     GET /stream    -> continuous multipart/x-mixed-replace MJPEG stream of the
                       small preview feed, for the live viewfinder
 
+    GET  /save-folder         -> {"path": str|null, "name": str|null} — local OCR-capture mirror folder
+    POST /save-folder/choose  -> opens a native OS folder-picker dialog on this PC's desktop,
+                                  persists the chosen path (400 if the operator cancels)
+    DELETE /save-folder       -> clears the configured folder
+    POST /save-capture        -> multipart form {photo: file, meta: json string} -> writes
+                                  <work_order>_<field>_<timestamp>.jpg + .json into the folder
+                                  (409 if no folder configured yet)
+
 Requirements (install once, in its own venv — kept separate from
 backend/requirements.txt, see scripts/oak1_requirements.txt):
     pip install -r oak1_requirements.txt
@@ -43,11 +51,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import re
 import sys
 import threading
 import time
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog
 
 import cv2
 import depthai as dai
@@ -318,6 +330,73 @@ def _mjpeg_generator(worker: "Oak1CameraWorker"):
         time.sleep(1 / STREAM_FPS)
 
 
+# ─── Local save folder ──────────────────────────────────────────────────────────
+# Mirrors each OCR capture (photo + detection JSON) to a folder on this PC's own
+# disk, chosen once via a native OS dialog. Deliberately NOT the browser's File
+# System Access API: that requires the write-permission grant to be re-approved
+# by the operator after every page reload, which is what operators were having
+# to click through constantly. This dialog and every write below run inside
+# this already-running local process instead, so there's no browser permission
+# model involved at all — once chosen, it stays chosen.
+#
+# The backend upload (ocrService.scanMelt + attachScan) remains the actual
+# source of truth for the OCR ground-truth dataset; this is only a convenience
+# copy so operators don't have to dig through the Docker volume to find a scan.
+
+_SAVE_FOLDER_CONFIG_PATH = Path(__file__).resolve().parent / "oak1_save_folder.json"
+_SANITIZE_RE = re.compile(r'[\\/:*?"<>|]')
+
+_save_folder_lock = threading.Lock()
+_save_folder_path: str | None = None
+
+
+def _load_save_folder() -> str | None:
+    if not _SAVE_FOLDER_CONFIG_PATH.exists():
+        return None
+    try:
+        data = json.loads(_SAVE_FOLDER_CONFIG_PATH.read_text(encoding="utf-8"))
+        path = data.get("path")
+    except Exception:  # noqa: BLE001 — corrupt/missing config is just "not set"
+        return None
+    return path if path and Path(path).is_dir() else None
+
+
+def get_save_folder() -> str | None:
+    with _save_folder_lock:
+        return _save_folder_path
+
+
+def set_save_folder(path: str | None) -> None:
+    global _save_folder_path  # noqa: PLW0603
+    with _save_folder_lock:
+        _save_folder_path = path
+    _SAVE_FOLDER_CONFIG_PATH.write_text(json.dumps({"path": path}), encoding="utf-8")
+
+
+_save_folder_path = _load_save_folder()
+
+
+def _sanitize_segment(s: str) -> str:
+    return _SANITIZE_RE.sub("-", s).strip()
+
+
+def _choose_save_folder_dialog() -> str | None:
+    """Blocks on a native folder-picker dialog on this PC's desktop.
+
+    Runs its own throwaway Tk root rather than reusing one across calls —
+    this is called rarely (once per operator preference change), so the
+    ~100ms Tk init cost isn't worth keeping a hidden root alive between calls.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        chosen = filedialog.askdirectory(title="Choose folder for OCR photo captures")
+    finally:
+        root.destroy()
+    return chosen or None
+
+
 # ─── Flask app ──────────────────────────────────────────────────────────────────
 
 def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
@@ -342,6 +421,49 @@ def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
         return Response(
             _mjpeg_generator(worker), mimetype="multipart/x-mixed-replace; boundary=frame"
         )
+
+    @app.get("/save-folder")
+    def get_save_folder_route() -> Response:
+        path = get_save_folder()
+        return jsonify({"path": path, "name": Path(path).name if path else None})
+
+    @app.post("/save-folder/choose")
+    def choose_save_folder_route() -> Response:
+        chosen = _choose_save_folder_dialog()
+        if not chosen:
+            return jsonify({"error": "cancelled"}), 400
+        set_save_folder(chosen)
+        log.info("[save ] folder set to %s", chosen)
+        return jsonify({"path": chosen, "name": Path(chosen).name})
+
+    @app.delete("/save-folder")
+    def forget_save_folder_route() -> Response:
+        set_save_folder(None)
+        log.info("[save ] folder cleared")
+        return jsonify({"ok": True})
+
+    @app.post("/save-capture")
+    def save_capture_route() -> Response:
+        folder = get_save_folder()
+        if not folder or not Path(folder).is_dir():
+            return jsonify({"error": "no save folder configured"}), 409
+
+        photo = request.files.get("photo")
+        meta_raw = request.form.get("meta")
+        if photo is None or meta_raw is None:
+            return jsonify({"error": "missing photo or meta"}), 400
+        meta = json.loads(meta_raw)
+
+        ts = time.strftime("%Y-%m-%dT%H-%M-%S")
+        base_name = _sanitize_segment(f"{meta.get('work_order_number', '')}_{meta.get('field', '')}_{ts}")
+
+        folder_path = Path(folder)
+        (folder_path / f"{base_name}.jpg").write_bytes(photo.read())
+        (folder_path / f"{base_name}.json").write_text(
+            json.dumps({**meta, "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2),
+            encoding="utf-8",
+        )
+        return jsonify({"ok": True})
 
     return app
 
@@ -392,7 +514,10 @@ Examples:
 
     app = create_app(worker, frontend_origins)
     log.info("[http ] serving on http://localhost:%d  (CORS: %s)", args.port, frontend_origins)
-    log.info("[http ] GET /health    GET /snapshot    GET /stream")
+    log.info(
+        "[http ] GET /health    GET /snapshot    GET /stream    "
+        "GET /save-folder    POST /save-folder/choose    DELETE /save-folder    POST /save-capture"
+    )
     try:
         app.run(host="0.0.0.0", port=args.port, threaded=True)
     except KeyboardInterrupt:

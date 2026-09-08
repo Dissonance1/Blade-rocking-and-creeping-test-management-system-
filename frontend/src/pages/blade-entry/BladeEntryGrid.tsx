@@ -275,13 +275,13 @@ export default function BladeEntryGrid() {
           ocr: result,
         })
           .then((saved) => {
-            // The folder's permission grant lapses on every browser reload —
-            // saveCapture then no-ops instead of throwing, so without this
-            // check a whole session's worth of local photo copies can go
-            // missing with no visible sign anything was wrong.
-            if (!saved && localSaveFolder.status === "permission-needed") {
-              toast.warning("Local photo copy skipped — reconnect the save folder (top right) to resume mirroring captures.", {
-                id: "local-save-permission-needed",
+            // A folder was configured and reachable as of the last check, yet
+            // this particular write still failed (service died mid-session,
+            // folder got deleted, etc.) — worth a heads-up instead of letting
+            // captures silently stop mirroring with no visible sign.
+            if (!saved && localSaveFolder.status === "ready") {
+              toast.warning("Local photo copy skipped — the OAK-1 companion service didn't respond.", {
+                id: "local-save-unavailable",
               });
             }
           })
@@ -382,7 +382,6 @@ export default function BladeEntryGrid() {
         saveFolderStatus={localSaveFolder.status}
         saveFolderName={localSaveFolder.folderName}
         onChooseSaveFolder={() => void localSaveFolder.choose()}
-        onReconnectSaveFolder={() => void localSaveFolder.reconnect()}
       />
       {keyboardTargetRow != null && (
         <RussianKeyboard
@@ -433,25 +432,17 @@ export default function BladeEntryGrid() {
           {localSaveFolder.supported && (
             <button
               type="button"
-              onClick={() =>
-                void (localSaveFolder.status === "permission-needed"
-                  ? localSaveFolder.reconnect()
-                  : localSaveFolder.choose())
-              }
+              onClick={() => void localSaveFolder.choose()}
               title={
                 localSaveFolder.status === "ready"
                   ? `OCR photos are also saved to "${localSaveFolder.folderName}"`
-                  : localSaveFolder.status === "permission-needed"
-                    ? `Click to reconnect to "${localSaveFolder.folderName}"`
-                    : "Choose a folder to also save OCR photos locally"
+                  : "Choose a folder to also save OCR photos locally"
               }
               className={cn(
                 "inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1 border",
                 localSaveFolder.status === "ready"
                   ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50"
-                  : localSaveFolder.status === "permission-needed"
-                    ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50"
-                    : "text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-background border-slate-200 dark:border-slate-700/50"
+                  : "text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-background border-slate-200 dark:border-slate-700/50"
               )}
             >
               {localSaveFolder.status === "ready" ? (
@@ -460,7 +451,6 @@ export default function BladeEntryGrid() {
                 <Folder className="w-3 h-3" />
               )}
               {localSaveFolder.status === "ready" && `Saving to “${localSaveFolder.folderName}”`}
-              {localSaveFolder.status === "permission-needed" && "Reconnect save folder"}
               {(localSaveFolder.status === "not-set" || localSaveFolder.status === "checking") &&
                 "Choose save folder"}
             </button>
