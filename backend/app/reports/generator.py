@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -38,6 +39,51 @@ _STATUS_COLOURS: dict[str, str] = {
 # ReportLab colours
 _RL_HEADER_BG = (0.122, 0.306, 0.475)   # RGB floats 0-1
 _RL_ALT_ROW_BG = (0.839, 0.894, 0.941)
+
+# ---------------------------------------------------------------------------
+# Unicode font for PDF reports
+# ---------------------------------------------------------------------------
+# ReportLab's built-in "Helvetica"/"Helvetica-Bold" are the original Adobe
+# Type1 base-14 fonts — WinAnsiEncoding only, no Cyrillic glyphs at all. A
+# melt number containing a Cyrillic letter (e.g. "14И3092", routine for this
+# app — see backend/app/ocr/paddle_provider.py) renders as a missing-glyph
+# box (often solid black) instead of the actual character. DejaVu Sans has
+# full Cyrillic coverage and a permissive (Bitstream Vera-derived) license
+# that allows redistribution, so it's bundled here as a real font file
+# rather than relying on it happening to be present via some other
+# dependency (it's currently only on disk as a side effect of matplotlib
+# being installed, which is not a font-provisioning guarantee to depend on).
+_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+_UNICODE_FONT = "DejaVuSans"
+_UNICODE_FONT_BOLD = "DejaVuSans-Bold"
+_unicode_fonts_registered = False
+
+
+def _register_unicode_fonts() -> None:
+    """Registers the bundled DejaVu Sans (regular + bold) with ReportLab.
+
+    Idempotent — ReportLab's font registry is a global, process-wide table,
+    so calling this more than once (both PDF-generating methods do) is
+    harmless but pointless; the module-level flag skips the repeat work.
+    """
+    global _unicode_fonts_registered
+    if _unicode_fonts_registered:
+        return
+    from reportlab.pdfbase import pdfmetrics  # type: ignore[import]
+    from reportlab.pdfbase.ttfonts import TTFont  # type: ignore[import]
+
+    pdfmetrics.registerFont(TTFont(_UNICODE_FONT, str(_FONTS_DIR / "DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont(_UNICODE_FONT_BOLD, str(_FONTS_DIR / "DejaVuSans-Bold.ttf")))
+    # Lets ReportLab resolve <b>...</b> markup inside Paragraph text to the
+    # bold variant automatically instead of falling back to Helvetica-Bold.
+    pdfmetrics.registerFontFamily(
+        _UNICODE_FONT,
+        normal=_UNICODE_FONT,
+        bold=_UNICODE_FONT_BOLD,
+        italic=_UNICODE_FONT,
+        boldItalic=_UNICODE_FONT_BOLD,
+    )
+    _unicode_fonts_registered = True
 
 
 class ReportGenerator:
@@ -366,14 +412,16 @@ class ReportGenerator:
         from reportlab.lib.styles import ParagraphStyle  # type: ignore[import]
         from reportlab.lib.enums import TA_LEFT, TA_CENTER  # type: ignore[import]
 
+        _register_unicode_fonts()
         base = getSampleStyleSheet()
+        base["Normal"].fontName = _UNICODE_FONT
 
         title_style = ParagraphStyle(
             "ReportTitle2",
             parent=base["Normal"],
             fontSize=16,
             leading=20,
-            fontName="Helvetica-Bold",
+            fontName=_UNICODE_FONT_BOLD,
             textColor=colors.HexColor("#1F4E79"),
             spaceAfter=4,
         )
@@ -390,7 +438,7 @@ class ReportGenerator:
             parent=base["Normal"],
             fontSize=11,
             leading=14,
-            fontName="Helvetica-Bold",
+            fontName=_UNICODE_FONT_BOLD,
             textColor=colors.HexColor("#1F4E79"),
             spaceBefore=10,
             spaceAfter=4,
@@ -401,7 +449,7 @@ class ReportGenerator:
         cell_style = ParagraphStyle(
             "CellText2",
             parent=base["Normal"],
-            fontName="Helvetica",
+            fontName=_UNICODE_FONT,
             fontSize=8,
             leading=12,
             splitLongWords=1,
@@ -410,7 +458,7 @@ class ReportGenerator:
         cell_hdr = ParagraphStyle(
             "CellHeader2",
             parent=base["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=_UNICODE_FONT_BOLD,
             fontSize=8,
             leading=12,
             textColor=colors.white,
@@ -611,7 +659,7 @@ class ReportGenerator:
         # ── Page footer (number + date) ───────────────────────────────────
         def _page_footer(canvas: Any, doc: Any) -> None:
             canvas.saveState()
-            canvas.setFont("Helvetica", 7)
+            canvas.setFont(_UNICODE_FONT, 7)
             canvas.setFillColor(colors.HexColor("#888888"))
             y = 1.2 * cm
             # Left: company name
@@ -852,21 +900,23 @@ class ReportGenerator:
         # no alternating row shading. Font sizes and paddings are kept small
         # throughout specifically so the two 45-row blocks fit in the space
         # left after the title/info block on one page. ────────────────────
+        _register_unicode_fonts()
         base = getSampleStyleSheet()
+        base["Normal"].fontName = _UNICODE_FONT
         title_style = ParagraphStyle(
             "BatchTitle", parent=base["Normal"], fontSize=12, leading=14,
-            fontName="Helvetica-Bold", textColor=colors.black, alignment=TA_CENTER, spaceAfter=1,
+            fontName=_UNICODE_FONT_BOLD, textColor=colors.black, alignment=TA_CENTER, spaceAfter=1,
         )
         info_style = ParagraphStyle(
             "BatchInfo", parent=base["Normal"], fontSize=7.5, leading=10,
             textColor=colors.black, alignment=TA_CENTER,
         )
         cell_style = ParagraphStyle(
-            "BatchCell", parent=base["Normal"], fontName="Helvetica", fontSize=6.2,
+            "BatchCell", parent=base["Normal"], fontName=_UNICODE_FONT, fontSize=6.2,
             leading=7.5, splitLongWords=1, allowWidows=0,
         )
         cell_hdr = ParagraphStyle(
-            "BatchCellHdr", parent=base["Normal"], fontName="Helvetica-Bold", fontSize=6.8,
+            "BatchCellHdr", parent=base["Normal"], fontName=_UNICODE_FONT_BOLD, fontSize=6.8,
             leading=8, textColor=colors.black, alignment=TA_CENTER, splitLongWords=1,
         )
 
@@ -961,7 +1011,7 @@ class ReportGenerator:
 
         def _page_footer(canvas: Any, doc: Any) -> None:
             canvas.saveState()
-            canvas.setFont("Helvetica", 7)
+            canvas.setFont(_UNICODE_FONT, 7)
             canvas.setFillColor(colors.HexColor("#888888"))
             y = 1.0 * cm
             canvas.drawString(LEFT_M, y, "Blade Rocking & Creep Test Management System")

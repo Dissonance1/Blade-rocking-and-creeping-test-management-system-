@@ -53,8 +53,12 @@ Thumbs.db
 desktop.ini
 
 # ─── Uploads & generated reports ─────────────────────────────────────────────
-uploads/
-reports/
+# Anchored to repo-root/backend specifically (not bare "reports/") --
+# unanchored matched backend/app/reports/ too, the source package for PDF/
+# Excel report generation, silently swallowing new files added there
+# (e.g. backend/app/reports/fonts/).
+/uploads/
+/reports/
 backend/uploads/
 backend/reports/
 
