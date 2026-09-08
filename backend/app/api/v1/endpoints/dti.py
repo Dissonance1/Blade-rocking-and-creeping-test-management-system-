@@ -29,15 +29,13 @@ station") and cross-worker broadcast (delivering a reading to whichever
 worker holds the browser's WS) would otherwise be lost most of the time.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import re
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import decode_token
@@ -123,7 +121,7 @@ async def reset_dti_cycle(request: Request, station: str = Query(default="1")) -
 
 @router.post("/push", status_code=200)
 @rate_limit_hardware_bridge()
-async def push_dti(body: DtiReading, request: Request) -> dict[str, Any]:
+async def push_dti(body: DtiReading, request: Request, response: Response) -> dict[str, Any]:
     """
     Receive a single DTI height-position reading from the local Windows bridge
     script and broadcast it to WebSocket clients subscribed to the same station.
@@ -132,6 +130,10 @@ async def push_dti(body: DtiReading, request: Request) -> dict[str, Any]:
 
     No auth required — this endpoint only accepts connections from localhost
     (enforced at the nginx layer; /api/v1/dti/push is not exposed to LAN).
+
+    `response: Response` is required by the @rate_limit_hardware_bridge
+    decorator — slowapi injects rate-limit headers into it since this
+    endpoint returns a plain dict rather than a Response object.
     """
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is None:
