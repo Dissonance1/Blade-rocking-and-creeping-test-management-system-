@@ -153,7 +153,11 @@ export default function BladeEntryGrid() {
       scheduleSave(rowIndex, true);
       lockRowWeight(rowIndex);
       clearReading();
-      const nextRow = Math.min(rowIndex + 1, rows.length - 1);
+      // On the last row there's nowhere to advance to — clamping the index
+      // would otherwise land back on this same just-locked row and reopen
+      // the camera on it.
+      if (rowIndex >= rows.length - 1) return;
+      const nextRow = rowIndex + 1;
       focusCell(nextRow, "melt_number");
       nav.focusCell(nextRow, "melt_number");
       setCameraTargetRow(nextRow);
