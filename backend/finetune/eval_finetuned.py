@@ -15,6 +15,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# See reverify_dataset.py — Windows' default console encoding can't print
+# Cyrillic characters that show up in real melt numbers; force UTF-8 before
+# any OCR/logging call has a chance to crash on one.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.ocr.paddle_provider import PaddleOCRProvider  # noqa: E402
 
@@ -22,7 +28,7 @@ FINETUNE_DIR = Path(__file__).resolve().parent
 TRAIN_DATA_DIR = FINETUNE_DIR / "train_data"
 VAL_LIST = TRAIN_DATA_DIR / "val_list.txt"
 
-OLD_MODELS_DIR = Path("/home/amit/src/blead_rocking/backend/app/ocr/models/ppocrv4")
+OLD_MODELS_DIR = FINETUNE_DIR.parent / "app" / "ocr" / "models" / "ppocrv4"
 NEW_EN_DIR = FINETUNE_DIR / "output" / "en_rec_infer"
 NEW_RU_DIR = FINETUNE_DIR / "output" / "cyrillic_rec_infer"
 CYRILLIC_DICT = OLD_MODELS_DIR / "rec_ru" / "cyrillic_dict.txt"
@@ -82,21 +88,34 @@ def recognize(ocr_en, ocr_ru, image_path: Path) -> str:
     return PaddleOCRProvider._fuse_chars(text_en, text_ru)  # noqa: SLF001
 
 
-def main() -> None:
+def evaluate(
+    new_en_dir: Path = NEW_EN_DIR,
+    new_ru_dir: Path = NEW_RU_DIR,
+    val_list: Path = VAL_LIST,
+    train_data_dir: Path = TRAIN_DATA_DIR,
+    verbose: bool = True,
+) -> dict:
+    """Runs the OLD-vs-NEW comparison and returns a structured decision.
+
+    ``new_is_better`` is the deploy gate: strictly more exact matches, or —
+    on a tie — a strictly lower CER. Never deploys on a tie in both, since
+    that's not a demonstrated improvement.
+    """
     pairs = []
-    for line in VAL_LIST.read_text(encoding="utf-8").splitlines():
+    for line in val_list.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         img_rel, label = line.split("\t", 1)
-        pairs.append((TRAIN_DATA_DIR / img_rel, label))
+        pairs.append((train_data_dir / img_rel, label))
 
-    print(f"{len(pairs)} held-out validation examples")
-
-    print("\n--- Loading OLD (currently deployed) models ---")
+    if verbose:
+        print(f"{len(pairs)} held-out validation examples")
+        print("\n--- Loading OLD (currently deployed) models ---")
     old_en, old_ru = build_engines(OLD_MODELS_DIR / "rec_en", OLD_MODELS_DIR / "rec_ru")
 
-    print("--- Loading NEW (fine-tuned) models ---")
-    new_en, new_ru = build_engines(NEW_EN_DIR, NEW_RU_DIR)
+    if verbose:
+        print("--- Loading NEW (fine-tuned) models ---")
+    new_en, new_ru = build_engines(new_en_dir, new_ru_dir)
 
     old_exact = new_exact = 0
     old_cer_num = new_cer_num = 0
@@ -115,13 +134,45 @@ def main() -> None:
         old_exact += int(old_d == 0 and gt != "")
         new_exact += int(new_d == 0 and gt != "")
 
-        print(f"[{i+1}/{len(pairs)}] gt={label!r} old={old_pred!r}(d={old_d}) new={new_pred!r}(d={new_d})")
+        if verbose:
+            print(f"[{i+1}/{len(pairs)}] gt={label!r} old={old_pred!r}(d={old_d}) new={new_pred!r}(d={new_d})")
 
     n = len(pairs)
-    print("\n=== SUMMARY (held-out validation set, never seen during training) ===")
-    print(f"n = {n}")
-    print(f"OLD (deployed) : exact={old_exact}/{n} ({old_exact/n*100:.1f}%)  CER={old_cer_num/cer_den*100:.1f}%")
-    print(f"NEW (finetuned): exact={new_exact}/{n} ({new_exact/n*100:.1f}%)  CER={new_cer_num/cer_den*100:.1f}%")
+    old_exact_pct = old_exact / n * 100 if n else 0.0
+    new_exact_pct = new_exact / n * 100 if n else 0.0
+    old_cer_pct = old_cer_num / cer_den * 100 if cer_den else 0.0
+    new_cer_pct = new_cer_num / cer_den * 100 if cer_den else 0.0
+
+    if new_exact > old_exact:
+        new_is_better = True
+    elif new_exact == old_exact:
+        new_is_better = new_cer_pct < old_cer_pct
+    else:
+        new_is_better = False
+
+    result = {
+        "n": n,
+        "old_exact": old_exact,
+        "new_exact": new_exact,
+        "old_exact_pct": old_exact_pct,
+        "new_exact_pct": new_exact_pct,
+        "old_cer_pct": old_cer_pct,
+        "new_cer_pct": new_cer_pct,
+        "new_is_better": new_is_better,
+    }
+
+    if verbose:
+        print("\n=== SUMMARY (held-out validation set, never seen during training) ===")
+        print(f"n = {n}")
+        print(f"OLD (deployed) : exact={old_exact}/{n} ({old_exact_pct:.1f}%)  CER={old_cer_pct:.1f}%")
+        print(f"NEW (finetuned): exact={new_exact}/{n} ({new_exact_pct:.1f}%)  CER={new_cer_pct:.1f}%")
+        print(f"new_is_better = {new_is_better}")
+
+    return result
+
+
+def main() -> None:
+    evaluate()
 
 
 if __name__ == "__main__":

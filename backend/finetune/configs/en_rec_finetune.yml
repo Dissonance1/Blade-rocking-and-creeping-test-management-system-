@@ -10,16 +10,16 @@ Global:
                   # little data risks overfitting/catastrophic forgetting
   log_smooth_window: 20
   print_batch_step: 10
-  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/en_rec_finetune
+  save_model_dir: C:/blade-rocking/backend/finetune/output/en_rec_finetune
   save_epoch_step: 5
   eval_batch_step: [0, 200]
   cal_metric_during_train: true
-  pretrained_model: /home/amit/src/blead_rocking/backend/finetune/pretrained/en_PP-OCRv4_mobile_rec_pretrained
+  pretrained_model: C:/blade-rocking/backend/finetune/pretrained/en_PP-OCRv4_mobile_rec_pretrained
   checkpoints: null
   save_inference_dir: null
   use_visualdl: false
   infer_img: null
-  character_dict_path: /home/amit/src/blead_rocking/backend/finetune/PaddleOCR/ppocr/utils/en_dict.txt
+  character_dict_path: C:/blade-rocking/backend/finetune/PaddleOCR/ppocr/utils/en_dict.txt
   max_text_length: 25
   infer_mode: false
   use_space_char: true
@@ -32,7 +32,7 @@ Global:
                           # STOCK model instead of erroring. This flag forces
                           # the legacy export format so it actually loads OUR
                           # fine-tuned weights.
-  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/en_rec_finetune/predicts.txt
+  save_res_path: C:/blade-rocking/backend/finetune/output/en_rec_finetune/predicts.txt
 Optimizer:
   name: Adam
   beta1: 0.9
@@ -84,10 +84,10 @@ Train:
   dataset:
     name: MultiScaleDataSet
     ds_width: false
-    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    data_dir: C:/blade-rocking/backend/finetune/train_data
     ext_op_transform_idx: 1
     label_file_list:
-    - /home/amit/src/blead_rocking/backend/finetune/train_data/train_list.txt
+    - C:/blade-rocking/backend/finetune/train_data/train_list.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
@@ -122,9 +122,9 @@ Train:
 Eval:
   dataset:
     name: SimpleDataSet
-    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    data_dir: C:/blade-rocking/backend/finetune/train_data
     label_file_list:
-    - /home/amit/src/blead_rocking/backend/finetune/train_data/val_list.txt
+    - C:/blade-rocking/backend/finetune/train_data/val_list.txt
     transforms:
     - DecodeImage:
         img_mode: BGR

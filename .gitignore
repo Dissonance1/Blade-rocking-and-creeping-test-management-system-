@@ -108,6 +108,13 @@ backend/finetune/pretrained/
 backend/finetune/.venv-train/
 backend/finetune/train_data/
 backend/finetune/output/
+backend/finetune/state/
+backend/finetune/rejected/
+
+# Original field-collected melt-number dataset (~600 real images) used to
+# bootstrap/supplement fine-tuning — real photos, not source, never tracked
+# (the repo-root images/+labels.json predecessor never was either).
+/dataset/
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/

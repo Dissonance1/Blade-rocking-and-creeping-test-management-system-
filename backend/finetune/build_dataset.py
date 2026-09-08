@@ -42,7 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/ on s
 
 from app.ocr.paddle_provider import PaddleOCRProvider  # noqa: E402
 
-CROP_PAD_FRAC = 0.15
+from dataset_common import crop_and_save, load_field_dataset  # noqa: E402
+
 VAL_FRACTION = 0.15
 
 
@@ -95,22 +96,6 @@ def load_manifest_field_dataset(raw_dir: Path) -> list[tuple[Path, str]]:
     return rows
 
 
-def best_line_boxes(provider: PaddleOCRProvider, image) -> tuple[list, str | None]:
-    """Returns (line_boxes, preprocessing_mode) for whichever detected line is
-    most likely the real melt-number stamp — the single line if there's only
-    one, otherwise the longest/highest-confidence one (mirrors
-    PaddleOCRProvider._best_line_fallback's ranking, applied to boxes instead
-    of already-recognized text)."""
-    res_en, _res_ru, _processed, mode, _conf = provider._select_best_mode(image)  # noqa: SLF001
-    lines = provider._group_by_lines(res_en)  # noqa: SLF001
-    if not lines:
-        return [], None
-    if len(lines) == 1:
-        return [box for box, _t, _c in lines[0]["items"]], mode
-    best_line = max(lines, key=lambda line: (len(line["items"]), sum(c for _b, _t, c in line["items"])))
-    return [box for box, _t, _c in best_line["items"]], mode
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", choices=["production", "field-dataset"], required=True)
@@ -152,22 +137,10 @@ def main() -> None:
 
     for i, (img_path, gt) in enumerate(pairs):
         image_bytes = img_path.read_bytes()
-        image = provider._upscale_frame(provider._to_bgr_array(image_bytes))  # noqa: SLF001
-        boxes, mode = best_line_boxes(provider, image)
-        if not boxes:
-            skipped_no_detection += 1
-            continue
-
-        processed = provider._preprocess(image, mode)  # noqa: SLF001
-        crop = provider._crop_line(processed, boxes, CROP_PAD_FRAC, 48, 6.0)  # noqa: SLF001
-        if crop is None:
-            skipped_no_detection += 1
-            continue
-
-        import cv2
-
         out_name = f"{i:05d}_{img_path.stem}.jpg"
-        cv2.imwrite(str(images_out / out_name), crop)
+        if not crop_and_save(provider, image_bytes, images_out / out_name):
+            skipped_no_detection += 1
+            continue
         manifest.append((f"images/{out_name}", gt))
 
         if (i + 1) % 50 == 0:

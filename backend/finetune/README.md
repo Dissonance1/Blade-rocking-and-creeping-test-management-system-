@@ -1,91 +1,106 @@
 # OCR recognizer fine-tuning (dev-only)
 
-Not part of the production app — this directory holds the tooling to
-periodically re-tune the melt-number recognizer (`backend/app/ocr/models/ppocrv4/rec_en`
+Not part of the production app — this directory holds the tooling that
+re-tunes the melt-number recognizer (`backend/app/ocr/models/ppocrv4/rec_en`
 and `rec_ru`) as real, operator-confirmed corrections accumulate in
-production. None of this runs in Docker or on a shop-floor PC; it's a manual,
-reviewed dev workflow, run on a machine with a GPU (training only — the
-deployed model still runs CPU-only, unchanged).
+production. Runs entirely natively on this Windows machine (no WSL, no
+Docker, no second dev PC) — see `scripts/register_ocr_training_task.ps1`
+for the automated weekly cycle. The deployed model itself still runs
+CPU-only inside Docker, unchanged; training also runs CPU-only here (this
+machine's GPU architecture has no supported PaddlePaddle GPU build).
 
 ## Why this exists
 
-`GET /ocr/training-dataset?mismatches_only=true` (see
-`backend/app/api/v1/endpoints/ocr.py`) already exports exactly the cases
-worth retraining on: every scan where the OCR detection disagreed with what
-the operator confirmed, paired with the image. As that accumulates (monthly,
-or whenever there's a meaningful batch of new corrections), pull it down and
-run the pipeline below.
+Rather than trusting each blade's stored `ocr_mismatch_flag` (checked
+against whatever model version was live at scan time, and stale once a
+newer model is promoted), `reverify_dataset.py` re-runs the *currently
+deployed* model against every stored, operator-confirmed scan directly —
+Postgres and the uploads folder directly on disk, no HTTP/JWT needed since
+everything runs on the same machine. Images the current model still gets
+wrong are the real, current training pool.
+
+## Automated weekly cycle (production path)
+
+`run_weekly_cycle.py`, run every Saturday 22:00 by the
+`BladeRocking-OCRWeeklyRetrain` scheduled task:
+
+1. `reverify_dataset.py` — re-checks accumulated corrections against the
+   current model (skipping images that have already answered correctly 2
+   cycles in a row, except every 5th cycle, which re-checks everything).
+2. Threshold gate — only proceeds if there are enough total corrections to
+   be worth training on, *and* enough new ones since the last training
+   attempt to justify a cycle. Otherwise stops here, nothing touched.
+3. `train_and_eval.py` — fine-tunes both recognizers, exports the best
+   checkpoint of each, evaluates new vs. the currently-deployed model on a
+   held-out validation set.
+4. `deploy_or_archive.py` — deploys (copies weights into
+   `backend/app/ocr/models/ppocrv4/`, restarts `oh_backend` so all workers
+   reload them) only if the new model actually won; otherwise archives the
+   result under `rejected/<timestamp>/` and leaves production untouched.
+
+Fully unattended, no manual sign-off — see `scripts/register_ocr_training_task.ps1`.
+
+## Before training on anything: validate ground truth
+
+`review_ground_truth.py --data-dir train_data` builds a local HTML contact
+sheet (`train_data/review.html`) of every (cropped image, ground truth)
+pair about to be trained on — open it in a browser and confirm each label
+actually matches its image before training. A mislabeled operator
+correction is easy to miss and disproportionately damaging on a small
+dataset. Worth doing before every training run, not just the first.
 
 ## One-time setup (already done once on this machine; repeat on a fresh one)
 
-```bash
-# 1. Clone PaddleOCR's training tools (not shipped in the `paddleocr` pip package)
-mkdir -p finetune && cd finetune
-git clone --depth 1 https://github.com/PaddlePaddle/PaddleOCR.git
+```powershell
+# 1. Python 3.11 (PaddlePaddle/PaddleOCR don't support the system default) —
+#    installed via: winget install --id Python.Python.3.11 --version 3.11.9
+py -3.11 -m venv backend\finetune\.venv-train
+backend\finetune\.venv-train\Scripts\python.exe -m pip install --upgrade pip
+backend\finetune\.venv-train\Scripts\python.exe -m pip install `
+  paddlepaddle==2.6.2 paddleocr==2.9.1 opencv-contrib-python-headless==4.10.0.84 `
+  structlog==24.4.0 psycopg2-binary pyyaml
 
-# 2. Isolated GPU training venv — kept completely separate from backend/.venv
-#    (which stays on CPU-only paddlepaddle, matching production)
-python3.11 -m venv .venv-train
-source .venv-train/bin/activate
-pip install paddlepaddle-gpu==3.1.0 \
-  -i https://www.paddlepaddle.org.cn/packages/stable/cu123/ \
-  --extra-index-url https://pypi.org/simple   # the cu123 index alone is missing some nvidia-* sub-deps
+# 2. Clone PaddleOCR's training tools (not shipped in the `paddleocr` pip package)
+cd backend\finetune
+git clone --depth 1 https://github.com/PaddlePaddle/PaddleOCR.git
 
 # 3. Original TRAINABLE checkpoints (NOT the inference-exported weights
 #    already bundled in backend/app/ocr/models/ppocrv4/ — those can't be
 #    resumed for training, only used for inference)
-mkdir -p pretrained
-curl -Lo pretrained/en_PP-OCRv4_mobile_rec_pretrained.pdparams \
+mkdir pretrained
+curl -Lo pretrained/en_PP-OCRv4_mobile_rec_pretrained.pdparams `
   https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/en_PP-OCRv4_mobile_rec_pretrained.pdparams
-curl -Lo pretrained/cyrillic_PP-OCRv3_rec_train.tar \
+curl -Lo pretrained/cyrillic_PP-OCRv3_rec_train.tar `
   https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/cyrillic_PP-OCRv3_rec_train.tar
 tar xf pretrained/cyrillic_PP-OCRv3_rec_train.tar -C pretrained/
+
+# 4. Register the scheduled task (elevated PowerShell)
+powershell -ExecutionPolicy Bypass -File ..\..\scripts\register_ocr_training_task.ps1
 ```
 
-## Each retraining cycle
+## Manual / one-off cycle (testing, or bypassing the schedule)
 
-```bash
-source .venv-train/bin/activate
-
-# 1. Pull the latest production corrections + rebuild the crop+label dataset
-#    (see build_dataset.py --help for --source production|field-dataset)
-python3 build_dataset.py --source production --api-url https://<oh-pc>/api/v1 \
-  --token <admin-jwt> --out-dir train_data
-
-# 2. Fine-tune both recognizers (few epochs, low LR — see configs/*.yml for why)
-python3 PaddleOCR/tools/train.py -c configs/en_rec_finetune.yml
-python3 PaddleOCR/tools/train.py -c configs/cyrillic_rec_finetune.yml
-
-# 3. Export the best checkpoint of each to inference format
-python3 PaddleOCR/tools/export_model.py -c configs/en_rec_finetune.yml \
-  -o Global.pretrained_model=output/en_rec_finetune/best_accuracy \
-     Global.save_inference_dir=output/en_rec_infer
-python3 PaddleOCR/tools/export_model.py -c configs/cyrillic_rec_finetune.yml \
-  -o Global.pretrained_model=output/cyrillic_rec_finetune/best_accuracy \
-     Global.save_inference_dir=output/cyrillic_rec_infer
-
-# 4. Compare accuracy against the CURRENTLY DEPLOYED model before touching
-#    anything — never skip this. See ../../scripts (eval_production_ocr.py
-#    pattern from the 2026-08-31 session) for the comparison harness.
+```powershell
+.venv-train\Scripts\python.exe reverify_dataset.py --out-dir train_data
+.venv-train\Scripts\python.exe review_ground_truth.py --data-dir train_data
+# ... open train_data\review.html, confirm every label ...
+.venv-train\Scripts\python.exe deploy_or_archive.py   # trains, evaluates, deploys or archives
 ```
 
-## Deploying (manual, only after the comparison above looks better)
-
-```bash
-cp output/en_rec_infer/*       ../app/ocr/models/ppocrv4/rec_en/
-cp output/cyrillic_rec_infer/* ../app/ocr/models/ppocrv4/rec_ru/
-cp pretrained/cyrillic_PP-OCRv3_rec_train/... # keep cyrillic_dict.txt as-is, unchanged
-```
-
-Then run the backend test suite and manually verify a few real scans before
-committing/deploying — these weight files are gitignored (see repo
-`.gitignore`), so nothing here auto-publishes itself.
+`build_dataset.py --source production|field-dataset` still exists for
+pulling a dataset through the live API (e.g. from the Settings page's "OCR
+Training Dataset" export) or bootstrapping from the original field-collected
+set — useful for a one-off manual pull, but the automated weekly cycle uses
+`reverify_dataset.py`, not this.
 
 ## What's gitignored vs. committed here
 
 - **Committed** (the actual reusable tooling): this README, `build_dataset.py`,
-  `configs/*.yml`.
+  `reverify_dataset.py`, `dataset_common.py`, `eval_finetuned.py`,
+  `train_and_eval.py`, `deploy_or_archive.py`, `run_weekly_cycle.py`,
+  `review_ground_truth.py`, `configs/*.yml`.
 - **Gitignored** (regenerate from the steps above, never commit):
-  `PaddleOCR/` (cloned repo), `pretrained/` (downloaded checkpoints, ~1.9GB),
-  `.venv-train/` (GPU training venv), `train_data/` (generated crops),
-  `output/` (training checkpoints/logs).
+  `PaddleOCR/` (cloned repo), `pretrained/` (downloaded checkpoints),
+  `.venv-train/` (training venv), `train_data/` (generated crops),
+  `output/` (training checkpoints/logs), `state/` (cycle/threshold
+  bookkeeping), `rejected/` (archived losing models + eval reports).
