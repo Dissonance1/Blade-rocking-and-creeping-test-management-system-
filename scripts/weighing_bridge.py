@@ -72,6 +72,13 @@ BAUD_RATES     = [9600, 4800, 2400, 19200, 38400]
 RETRY_INTERVAL_S = 5
 _WEIGHT_RE     = re.compile(r"\d+\.?\d*")
 
+# A Bluetooth SPP virtual COM port often doesn't raise SerialException when the
+# scale is powered off or walks out of range — reads just keep timing out and
+# returning nothing, forever, on a connection that's actually dead. If no byte
+# at all has arrived in this long, treat the connection as stale and re-run
+# discovery rather than waiting on a port nothing will ever answer on again.
+_STALE_CONNECTION_S = 20
+
 
 def _known_scale_ports() -> list[tuple[str, str]]:
     """Resolve each KNOWN_SCALES MAC to its current COM port, if paired/visible.
@@ -200,12 +207,15 @@ def _connect(port_override: str | None):
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight):
+def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight, last_data_at: float):
     """Read and parse one line from the scale.
 
-    Returns ``(ser, weight)`` — ``ser`` is a freshly reconnected handle if the
-    port needed to be reopened; ``weight`` is ``None`` when there's nothing
-    new to post this iteration (caller should just loop again).
+    Returns ``(ser, weight, last_data_at)`` — ``ser`` is a freshly reconnected
+    handle if the port needed to be reopened; ``weight`` is ``None`` when
+    there's nothing new to post this iteration (caller should just loop
+    again); ``last_data_at`` is the monotonic timestamp of the last time any
+    byte was actually seen on the wire, refreshed here so the caller can
+    detect a connection that's gone silent (see _STALE_CONNECTION_S).
     """
     try:
         raw = ser.readline()
@@ -216,20 +226,31 @@ def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight
         except Exception:
             pass
         time.sleep(5)
-        return _connect(port_override), None
+        return _connect(port_override), None, time.monotonic()
 
     if not raw:
+        if time.monotonic() - last_data_at > _STALE_CONNECTION_S:
+            log.warning(
+                "[serial] no data for %ds — scale likely powered off or out of "
+                "range; re-scanning for a live scale …", _STALE_CONNECTION_S,
+            )
+            try:
+                ser.close()
+            except Exception:
+                pass
+            return _connect(port_override), None, time.monotonic()
         time.sleep(0.05)
-        return ser, None
+        return ser, None, last_data_at
 
+    last_data_at = time.monotonic()
     decoded = raw.decode("ascii", errors="ignore").strip()
     if not decoded:
-        return ser, None
+        return ser, None, last_data_at
 
     weight = _parse_weight(decoded)
     if weight is None or weight == last_weight:
-        return ser, None
-    return ser, weight
+        return ser, None, last_data_at
+    return ser, weight, last_data_at
 
 
 def _post_weight(session: requests.Session, push_url: str, weight: float) -> None:
@@ -256,11 +277,12 @@ def run(port_override: str | None, server: str, insecure_ssl: bool = False) -> N
     ser = _connect(port_override)
 
     last_weight = None
+    last_data_at = time.monotonic()
     log.info("[ready] reading weight — Ctrl+C to stop")
 
     try:
         while True:
-            ser, weight = _read_next_weight(ser, port_override, last_weight)
+            ser, weight, last_data_at = _read_next_weight(ser, port_override, last_weight, last_data_at)
             if weight is None:
                 continue
 
