@@ -93,6 +93,9 @@ scripts/oak1-venv/
 *.tar.gz
 Blade_validation_PPv4OCR/
 
+# ─── Semgrep Guardian local state (plugin-managed, machine-specific) ───────
+.semgrep/
+
 # ─── OCR model weights ───────────────────────────────────────────────────────
 # Tracked in git deliberately: production has no removable-media/USB deploy
 # path, only `git pull` — so these binaries (~25MB total: det+cls+rec_en+
@@ -107,6 +110,9 @@ backend/finetune/PaddleOCR/
 backend/finetune/pretrained/
 backend/finetune/.venv-train/
 backend/finetune/train_data/
+backend/finetune/train_data_char/
+backend/finetune/train_data_combined/
+backend/finetune/det_train_data_char/
 backend/finetune/output/
 backend/finetune/state/
 backend/finetune/rejected/
