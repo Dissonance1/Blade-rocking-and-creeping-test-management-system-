@@ -1,0 +1,151 @@
+Global:
+  model_name: PP-OCRv4_mobile_det_char_finetune
+  debug: false
+  use_gpu: false
+  epoch_num: 30
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/char_det_finetune
+  save_epoch_step: 5
+  eval_batch_step: [0, 200]
+  cal_metric_during_train: false
+  # Continues from the ALREADY-DEPLOYED line detector's best trainable
+  # checkpoint (hmean 0.944 on the line-detection task) rather than the
+  # original stock PP-OCRv4 det pretrained weights -- this round adapts that
+  # same detector to a new, harder task (localizing each character instead
+  # of one line box), not starting the line-detection task over.
+  pretrained_model: /home/amit/src/blead_rocking/backend/finetune/output/det_finetune/best_accuracy
+  checkpoints: null
+  save_inference_dir: null
+  use_visualdl: false
+  infer_img: null
+  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/char_det_finetune/predicts.txt
+  d2s_train_image_shape: [3, 640, 640]
+  distributed: false
+  export_with_pir: false  # see cyrillic_rec_finetune.yml -- production's
+                          # paddlepaddle==2.6.2 runtime needs the legacy
+                          # inference.pdmodel export format, not PIR.
+Architecture:
+  model_type: det
+  algorithm: DB
+  Transform: null
+  Backbone:
+    name: PPLCNetV3
+    scale: 0.75
+    det: true
+  Neck:
+    name: RSEFPN
+    out_channels: 96
+    shortcut: true
+  Head:
+    name: DBHead
+    k: 50
+    fix_nan: true
+Loss:
+  name: DBLoss
+  balance_loss: true
+  main_loss_type: DiceLoss
+  alpha: 5
+  beta: 10
+  ohem_ratio: 3
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.00005  # half of the original line-detector fine-tune's
+                            # 1e-4 -- same reasoning as cyrillic_char_finetune.yml:
+                            # continuing from an already-converged checkpoint
+                            # onto a smaller, weakly-labeled (proportional
+                            # bootstrap, not hand-verified) dataset warrants a
+                            # gentler nudge.
+    warmup_epoch: 2
+  regularizer:
+    name: L2
+    factor: 5.0e-05
+PostProcess:
+  name: DBPostProcess
+  thresh: 0.3
+  box_thresh: 0.6
+  max_candidates: 1000
+  unclip_ratio: 1.5
+Metric:
+  name: DetMetric
+  main_indicator: hmean
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/det_train_data_char/train_char_det_list.txt
+    ratio_list: [1.0]
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - DetLabelEncode: null
+    - IaaAugment:
+        augmenter_args:
+        # No Fliplr here (the original line-detector recipe had one at
+        # p=0.5) -- mirroring an alphanumeric character horizontally
+        # produces a shape that isn't any real digit or Cyrillic letter, so
+        # flipping would teach this detector to expect invalid glyph shapes.
+        - type: Affine
+          args:
+            rotate: [-10, 10]
+        - type: Resize
+          args:
+            size: [0.5, 3]
+    - EastRandomCropData:
+        size: [640, 640]
+        max_tries: 50
+        keep_ratio: true
+    - MakeBorderMap:
+        shrink_ratio: 0.4
+        thresh_min: 0.3
+        thresh_max: 0.7
+        total_epoch: 30
+    - MakeShrinkMap:
+        shrink_ratio: 0.4
+        min_text_size: 8
+        total_epoch: 30
+    - NormalizeImage:
+        scale: 1./255.
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+        order: hwc
+    - ToCHWImage: null
+    - KeepKeys:
+        keep_keys: [image, threshold_map, threshold_mask, shrink_map, shrink_mask]
+  loader:
+    shuffle: true
+    drop_last: false
+    batch_size_per_card: 2
+    num_workers: 0
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/det_train_data_char/val_char_det_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - DetLabelEncode: null
+    - DetResizeForTest: null
+    - NormalizeImage:
+        scale: 1./255.
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+        order: hwc
+    - ToCHWImage: null
+    - KeepKeys:
+        keep_keys: [image, shape, polys, ignore_tags]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 1
+    num_workers: 0
+profiler_options: null
