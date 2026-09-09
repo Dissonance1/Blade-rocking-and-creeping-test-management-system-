@@ -6,7 +6,7 @@ corrected labels.json at the repo root.
 Uses dataset_common.py's crop_and_save -- the exact same detect +
 best-preprocessing-mode + line-crop code path production runs -- so these
 crops match what the deployed pipeline actually sees at inference time,
-same as build_dataset.py and reverify_dataset.py.
+same as build_dataset.py.
 
 Two entries are excluded: their ground truth (5 digits after the letter,
 e.g. "18Б34328") doesn't fit this app's established melt-number shape

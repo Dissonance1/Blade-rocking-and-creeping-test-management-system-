@@ -1,6 +1,6 @@
 """
 Trains both recognizers (English + Cyrillic) from the current train_data/
-(built beforehand by reverify_dataset.py), exports the best checkpoint of
+(built beforehand by build_dataset.py), exports the best checkpoint of
 each to inference format, then compares the result against the currently
 deployed model.
 
@@ -17,10 +17,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# See reverify_dataset.py — Windows' default console encoding can't print
-# Cyrillic characters in real melt numbers/labels; force UTF-8 for this
-# process, and pass it through to the train.py/export_model.py subprocesses
-# too (a separate process doesn't inherit this parent's reconfigured stdout).
+# Windows' default console encoding can't print Cyrillic characters in real
+# melt numbers/labels; force UTF-8 for this process, and pass it through to
+# the train.py/export_model.py subprocesses too (a separate process doesn't
+# inherit this parent's reconfigured stdout).
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 _SUBPROCESS_ENV = {**os.environ, "PYTHONUTF8": "1"}

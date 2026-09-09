@@ -120,8 +120,6 @@ backend/finetune/train_data_ocr_scans/
 backend/finetune/train_data_v2/
 backend/finetune/det_train_data_char/
 backend/finetune/output/
-backend/finetune/state/
-backend/finetune/rejected/
 
 # Downloaded candidate models tried for comparison (e.g. PP-OCRv4 server
 # detector) -- large third-party binaries, reproducible via their own

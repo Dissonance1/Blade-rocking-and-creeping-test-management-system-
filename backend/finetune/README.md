@@ -4,41 +4,22 @@ Not part of the production app — this directory holds the tooling that
 re-tunes the melt-number recognizer (`backend/app/ocr/models/ppocrv4/rec_en`
 and `rec_ru`) as real, operator-confirmed corrections accumulate in
 production. Runs entirely natively on this Windows machine (no WSL, no
-Docker, no second dev PC) — see `scripts/register_ocr_training_task.ps1`
-for the automated weekly cycle. The deployed model itself still runs
-CPU-only inside Docker, unchanged; training also runs CPU-only here (this
-machine's GPU architecture has no supported PaddlePaddle GPU build).
+Docker, no second dev PC). The deployed model itself still runs CPU-only
+inside Docker, unchanged; training also runs CPU-only here (this machine's
+GPU architecture has no supported PaddlePaddle GPU build).
+
+There is deliberately no unattended/scheduled retraining — every cycle is
+a manual decision: pull a dataset, review it, train, evaluate, and only
+then decide whether to deploy.
 
 ## Why this exists
 
-Rather than trusting each blade's stored `ocr_mismatch_flag` (checked
-against whatever model version was live at scan time, and stale once a
-newer model is promoted), `reverify_dataset.py` re-runs the *currently
-deployed* model against every stored, operator-confirmed scan directly —
-Postgres and the uploads folder directly on disk, no HTTP/JWT needed since
-everything runs on the same machine. Images the current model still gets
-wrong are the real, current training pool.
-
-## Automated weekly cycle (production path)
-
-`run_weekly_cycle.py`, run every Saturday 22:00 by the
-`BladeRocking-OCRWeeklyRetrain` scheduled task:
-
-1. `reverify_dataset.py` — re-checks accumulated corrections against the
-   current model (skipping images that have already answered correctly 2
-   cycles in a row, except every 5th cycle, which re-checks everything).
-2. Threshold gate — only proceeds if there are enough total corrections to
-   be worth training on, *and* enough new ones since the last training
-   attempt to justify a cycle. Otherwise stops here, nothing touched.
-3. `train_and_eval.py` — fine-tunes both recognizers, exports the best
-   checkpoint of each, evaluates new vs. the currently-deployed model on a
-   held-out validation set.
-4. `deploy_or_archive.py` — deploys (copies weights into
-   `backend/app/ocr/models/ppocrv4/`, restarts `oh_backend` so all workers
-   reload them) only if the new model actually won; otherwise archives the
-   result under `rejected/<timestamp>/` and leaves production untouched.
-
-Fully unattended, no manual sign-off — see `scripts/register_ocr_training_task.ps1`.
+Each blade's stored `ocr_mismatch_flag` is checked against whatever model
+version was live at scan time, and goes stale once a newer model is
+promoted — it's a record of a past disagreement, not necessarily a current
+one. `build_dataset.py --source production` pulls the Settings page's "OCR
+Training Dataset" export (image + OCR detection + operator-confirmed
+ground truth) through the live API instead.
 
 ## Before training on anything: validate ground truth
 
@@ -73,34 +54,42 @@ curl -Lo pretrained/en_PP-OCRv4_mobile_rec_pretrained.pdparams `
 curl -Lo pretrained/cyrillic_PP-OCRv3_rec_train.tar `
   https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/cyrillic_PP-OCRv3_rec_train.tar
 tar xf pretrained/cyrillic_PP-OCRv3_rec_train.tar -C pretrained/
-
-# 4. Register the scheduled task (elevated PowerShell)
-powershell -ExecutionPolicy Bypass -File ..\..\scripts\register_ocr_training_task.ps1
 ```
 
-## Manual / one-off cycle (testing, or bypassing the schedule)
+## Manual training cycle
 
 ```powershell
-.venv-train\Scripts\python.exe reverify_dataset.py --out-dir train_data
+.venv-train\Scripts\python.exe build_dataset.py --source production --out-dir train_data
 .venv-train\Scripts\python.exe review_ground_truth.py --data-dir train_data
 # ... open train_data\review.html, confirm every label ...
-.venv-train\Scripts\python.exe deploy_or_archive.py   # trains, evaluates, deploys or archives
+.venv-train\Scripts\python.exe train_and_eval.py   # trains both recognizers, evaluates vs. deployed model
 ```
 
-`build_dataset.py --source production|field-dataset` still exists for
-pulling a dataset through the live API (e.g. from the Settings page's "OCR
-Training Dataset" export) or bootstrapping from the original field-collected
-set — useful for a one-off manual pull, but the automated weekly cycle uses
-`reverify_dataset.py`, not this.
+`train_and_eval.py` prints `new_is_better` in its result — it never deploys
+anything itself. If the new model actually won, deploy it by hand:
+
+```powershell
+copy output\en_rec_infer\inference.* ..\app\ocr\models\ppocrv4\rec_en\
+copy output\cyrillic_rec_infer\inference.* ..\app\ocr\models\ppocrv4\rec_ru\
+# from the repo root:
+docker compose -f docker-compose.oh.yml restart oh_backend
+```
+
+(`PaddleOCRProvider`'s engines are lazy-loaded singletons per worker
+process — overwriting the weight files alone does nothing until every
+worker restarts and reloads them.) If it didn't win, just leave
+`output/` as-is and try again with a better dataset later — nothing in
+production changes either way until you run the `copy`/`restart` above.
+
+`build_dataset.py --source field-dataset` bootstraps from the original
+field-collected set instead of the live API, if needed.
 
 ## What's gitignored vs. committed here
 
 - **Committed** (the actual reusable tooling): this README, `build_dataset.py`,
-  `reverify_dataset.py`, `dataset_common.py`, `eval_finetuned.py`,
-  `train_and_eval.py`, `deploy_or_archive.py`, `run_weekly_cycle.py`,
+  `dataset_common.py`, `eval_finetuned.py`, `train_and_eval.py`,
   `review_ground_truth.py`, `configs/*.yml`.
 - **Gitignored** (regenerate from the steps above, never commit):
   `PaddleOCR/` (cloned repo), `pretrained/` (downloaded checkpoints),
   `.venv-train/` (training venv), `train_data/` (generated crops),
-  `output/` (training checkpoints/logs), `state/` (cycle/threshold
-  bookkeeping), `rejected/` (archived losing models + eval reports).
+  `output/` (training checkpoints/logs).

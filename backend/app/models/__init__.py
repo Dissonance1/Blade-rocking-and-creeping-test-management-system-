@@ -19,7 +19,6 @@ from app.models.assembly_blade_record import AssemblyBladeRecord
 from app.models.lptr_empty_rotor_reading import LptrEmptyRotorReading
 from app.models.lptr_balancing_check import LptrBalancingCheck
 from app.models.lptr_manual_correction import LptrManualCorrection
-from app.models.ocr_reverify_state import OCRReverifyState
 
 __all__ = [
     "AuditLog",
@@ -41,5 +40,4 @@ __all__ = [
     "LptrEmptyRotorReading",
     "LptrBalancingCheck",
     "LptrManualCorrection",
-    "OCRReverifyState",
 ]

@@ -1,7 +1,7 @@
 """
 Shared crop/preprocess helpers for building PaddleOCR training crops —
-used by both build_dataset.py (pulls from the API or a field dataset) and
-reverify_dataset.py (pulls directly from Postgres + the uploads filesystem).
+used by build_dataset.py (pulls from the API or a field dataset) and
+build_ocr_scans_dataset.py (pulls from a local labeled batch).
 
 Reuses PaddleOCRProvider's own detection + best-preprocessing-mode + line-
 crop logic (the exact code path production runs) so training crops match
@@ -37,7 +37,7 @@ def load_field_dataset() -> list[tuple[Path, str]]:
     field-collected images/ + labels.json dataset at the repo root, in
     labels.json's own fixed order — deliberately not shuffled, so the
     train/val split derived from this list stays as stable as possible
-    across cycles (see reverify_dataset.py).
+    across training runs.
 
     Checks file *size*, not just existence — most of this folder (537 of
     602, as last checked) turned out to be 0-byte files from some earlier

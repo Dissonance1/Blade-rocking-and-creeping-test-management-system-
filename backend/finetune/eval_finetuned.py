@@ -15,9 +15,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# See reverify_dataset.py — Windows' default console encoding can't print
-# Cyrillic characters that show up in real melt numbers; force UTF-8 before
-# any OCR/logging call has a chance to crash on one.
+# Windows' default console encoding can't print Cyrillic characters that
+# show up in real melt numbers; force UTF-8 before any OCR/logging call
+# has a chance to crash on one.
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 

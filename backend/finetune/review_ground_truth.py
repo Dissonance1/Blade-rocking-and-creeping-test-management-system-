@@ -5,8 +5,8 @@ it — catches a mislabeled operator correction before it poisons a fine-tune,
 which matters more the smaller the dataset is. Open the output file in any
 browser; it doesn't need a server.
 
-Run this after reverify_dataset.py (or build_dataset.py) has built
-train_data/, before train_and_eval.py.
+Run this after build_dataset.py has built train_data/, before
+train_and_eval.py.
 
 Usage:
     python review_ground_truth.py --data-dir train_data
