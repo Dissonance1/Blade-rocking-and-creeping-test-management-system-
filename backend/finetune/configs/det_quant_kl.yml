@@ -1,0 +1,143 @@
+Global:
+  model_name: PP-OCRv4_mobile_det_quant
+  debug: false
+  use_gpu: false
+  epoch_num: 1
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/det_quant_state
+  save_epoch_step: 1
+  eval_batch_step: [0, 1000000]
+  cal_metric_during_train: false
+  checkpoints: null
+  use_visualdl: false
+  infer_img: null
+  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/det_quant_state/predicts.txt
+  distributed: false
+  # quant_kl.py resolves the inference model dir as os.path.dirname(this
+  # path) -- "inference" is a placeholder filename, only its directory
+  # matters, and it's the CURRENTLY DEPLOYED detector's exported inference
+  # dir (not a trainable checkpoint -- quant_post_static works directly on
+  # an exported inference.pdmodel/inference.pdiparams pair).
+  pretrained_model: /home/amit/src/blead_rocking/backend/app/ocr/models/ppocrv4/det/inference
+  save_inference_dir: /home/amit/src/blead_rocking/backend/finetune/output/det_quantized
+
+Architecture:
+  model_type: det
+  algorithm: DB
+  Transform: null
+  Backbone:
+    name: PPLCNetV3
+    scale: 0.75
+    det: true
+  Neck:
+    name: RSEFPN
+    out_channels: 96
+    shortcut: true
+  Head:
+    name: DBHead
+    k: 50
+    fix_nan: true
+
+Loss:
+  name: DBLoss
+  balance_loss: true
+  main_loss_type: DiceLoss
+  alpha: 5
+  beta: 10
+  ohem_ratio: 3
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.00005
+    warmup_epoch: 2
+  regularizer:
+    name: L2
+    factor: 5.0e-05
+
+PostProcess:
+  name: DBPostProcess
+  thresh: 0.3
+  box_thresh: 0.6
+  max_candidates: 1000
+  unclip_ratio: 1.5
+
+Metric:
+  name: DetMetric
+  main_indicator: hmean
+
+# Only Train's dataloader is actually used by quant_kl.py -- it feeds
+# calibration images through the model to capture activation ranges for
+# each layer. Box/transcription CONTENT is irrelevant for this (calibration
+# never checks correctness, only observes activation statistics), so
+# reusing the existing character-level detection labels (built earlier for
+# a different, abandoned experiment) as a calibration image SOURCE is
+# fine -- only the images matter here, not what the boxes mean.
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/det_train_data_char/train_char_det_list.txt
+    ratio_list: [1.0]
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - DetLabelEncode: null
+    - EastRandomCropData:
+        size: [640, 640]
+        max_tries: 50
+        keep_ratio: true
+    - MakeBorderMap:
+        shrink_ratio: 0.4
+        thresh_min: 0.3
+        thresh_max: 0.7
+        total_epoch: 1
+    - MakeShrinkMap:
+        shrink_ratio: 0.4
+        min_text_size: 8
+        total_epoch: 1
+    - NormalizeImage:
+        scale: 1./255.
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+        order: hwc
+    - ToCHWImage: null
+    - KeepKeys:
+        keep_keys: [image, threshold_map, threshold_mask, shrink_map, shrink_mask]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 1
+    num_workers: 0
+
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/det_train_data_char/val_char_det_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - DetLabelEncode: null
+    - DetResizeForTest: null
+    - NormalizeImage:
+        scale: 1./255.
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+        order: hwc
+    - ToCHWImage: null
+    - KeepKeys:
+        keep_keys: [image, shape, polys, ignore_tags]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 1
+    num_workers: 0

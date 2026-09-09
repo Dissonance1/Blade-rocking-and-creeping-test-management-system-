@@ -118,6 +118,7 @@ backend/finetune/train_data_char/
 backend/finetune/train_data_combined/
 backend/finetune/train_data_ocr_scans/
 backend/finetune/train_data_v2/
+backend/finetune/train_data_v3/
 backend/finetune/det_train_data_char/
 backend/finetune/output/
 
