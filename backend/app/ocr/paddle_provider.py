@@ -457,16 +457,25 @@ class PaddleOCRProvider(OCRProvider):
 
         if not c_en and not c_ru:
             return ""
-        if c_en in _INDUSTRIAL_SYMBOLS:
-            return c_en
         # `c_ru` is "" whenever the Cyrillic read is shorter than the English
         # read at this index (the common case, since the Cyrillic engine
         # garbles digit/Latin strings into a short garbage token) — and in
         # Python `"" in any_string` is always True, so without the `c_ru and`
         # guard this branch silently deleted every trailing English character
         # instead of falling through to keep it.
+        #
+        # This must come before the industrial-symbols check below: those
+        # glyphs have no Latin lookalike by construction, so a genuine
+        # pure-Cyrillic read is a stronger signal than the English engine
+        # guessing a digit at the same slot. Checking industrial-symbols
+        # first (the previous order) let an English digit hallucination
+        # silently overrule a correctly-read Cyrillic letter — e.g. a real
+        # "Г" fused away because the English engine misread that same glyph
+        # as "1".
         if c_ru and c_ru in _PURE_CYRILLIC:
             return c_ru
+        if c_en in _INDUSTRIAL_SYMBOLS:
+            return c_en
         if re.match(r"[A-Z]", c_en):
             return c_en
         return c_ru if c_ru else c_en
