@@ -132,6 +132,45 @@ _LIKELY_MISREAD_OF: dict[str, list[str]] = {
 }
 
 
+# Cyrillic capitals that are pixel-identical to a Latin letter in this font
+# (superset of _PURE_CYRILLIC's exclusions, since here we WANT to catch the
+# ambiguous ones). Melt/serial numbers are stamped on Russian-manufactured
+# nameplates, so the single embedded letter is always meant to be Cyrillic —
+# but whichever engine's charset happens to win that character slot can just
+# as easily emit the Latin code point, and ground truth itself has the same
+# problem from the label side: comparing the two labeling batches on the
+# 952-image pool shows train_data (labeled first) typed these as Latin
+# (e.g. "B": 144 vs "В": 1) while train_data_ocr_scans (labeled later, via
+# label.html's dedicated Cyrillic input) typed the same glyph as Cyrillic
+# ("В": 65 vs "B": 4) — confirmed with the user: labelers have an English
+# keyboard, so an ambiguous letter sometimes gets typed as its Latin
+# lookalike out of habit, not because the real letter varies. Not a
+# recognition problem at all, so no amount of retraining fixes it — only
+# canonicalizing the single letter post-hoc does.
+_LATIN_TO_CYRILLIC_HOMOGLYPH: dict[str, str] = {
+    "A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
+    "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х",
+}
+
+
+def _normalize_letter_script(value: str) -> str:
+    """Canonicalizes the single embedded letter of an already shape-matching
+    melt/serial number to Cyrillic (see ``_LATIN_TO_CYRILLIC_HOMOGLYPH``).
+
+    Only touches values that already match the digits-letter-digits grammar
+    — this is deliberately narrow (the ambiguity only applies to that one
+    known letter position), not a blanket Latin-to-Cyrillic pass over
+    arbitrary text.
+    """
+    if not _SHAPE_RE.match(value):
+        return value
+    for i, ch in enumerate(value):
+        cyrillic = _LATIN_TO_CYRILLIC_HOMOGLYPH.get(ch)
+        if cyrillic:
+            return value[:i] + cyrillic + value[i + 1 :]
+    return value
+
+
 def _try_correct_to_shape(text: str) -> str | None:
     """Try a single confusion-guided substitution that makes ``text`` match
     the expected digits-letter-digits grammar (``_SHAPE_RE``).
@@ -689,17 +728,21 @@ class PaddleOCRProvider(OCRProvider):
         the normal case; (2) a single confusion-guided correction
         (``_try_correct_to_shape``) on each detected line, for a read that's
         one misread character away from the expected shape; (3) the
-        best-single-line fallback, for anything else. Returns
+        best-single-line fallback, for anything else. A value produced by
+        (1) or (2) already matches the digits-letter-digits grammar, so it
+        also gets the Latin/Cyrillic letter-script canonicalization
+        (``_normalize_letter_script``) — the fallback path skips it since
+        its shape isn't guaranteed. Returns
         ``(value, confidence, pattern_matched, correction_applied)``.
         """
         match = pattern_re.search(fused["full_text"])
         if match:
-            return match.group(0).upper(), 0.88, True, False
+            return _normalize_letter_script(match.group(0).upper()), 0.88, True, False
 
         for line in fused["lines"]:
             corrected = _try_correct_to_shape(line.strip())
             if corrected:
-                return corrected.upper(), 0.75, False, True
+                return _normalize_letter_script(corrected.upper()), 0.75, False, True
 
         fallback_conf = self._clamp_confidence(fused["confidence"] * 0.5)
         return self._best_line_fallback(fused), fallback_conf, False, False
