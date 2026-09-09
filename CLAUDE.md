@@ -148,6 +148,28 @@ OCR_PROVIDER=mock
 
 ---
 
+## Secondary Hardware Stations (e.g. a second PC in 701 Hanger for HPTR)
+
+Same idea as the OH/Assembly split: a second PC can share this same app instead of running its own stack. This applies when a PC has hardware physically attached (DTI gauge, weighing scale, OAK-1 camera) but should **not** host its own copy of the app or database — everything stays centralized on the OH PC so both LPTR and HPTR work land in one database (the workflow engine already tells them apart via `blade_type` / `EXTRA_TRANSITIONS_BY_TYPE`).
+
+**Do NOT:** run `docker compose` / build the app / start Postgres on the second PC. There is exactly one app instance and one database — this OH PC.
+
+**Do, on the second PC:**
+1. Copy over `scripts/` (at least `weighing_bridge.py`, `dti_bridge.py`, `oak1_camera_service.py`, `register_bridge_tasks.ps1`, `oak1_requirements.txt`) — cloning the whole repo is simplest since that keeps this file (`CLAUDE.md`) with it.
+2. Install Python deps for the bridge scripts there (see `oak1_requirements.txt`).
+3. In an elevated PowerShell, register the bridges pointed at the OH PC instead of localhost:
+   ```
+   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98
+   ```
+   (`-Server` defaults to `http://localhost`, which is only correct when bridge and backend are on the same machine — omit it when running this script on the OH PC itself.) The OAK-1 camera service never takes a `-Server` value — it always talks to its own `localhost:8089`, never the OH PC.
+4. Operators on that PC just open a browser to `http://172.146.5.98/` (or `http://bladerocking-1-`, the OH PC's Windows/NetBIOS hostname — works LAN-wide with no DNS setup) and log in with the appropriate role.
+
+The OH PC's LAN address/hostname is not a magic constant — if it ever changes, update it in `.env.oh` (`CORS_ORIGINS`) and in `scripts/oak1_camera_service.py`'s `DEFAULT_ORIGINS`, and re-run step 3 above with the new address on every secondary PC.
+
+OCR inference itself (PaddleOCR) always runs centrally in the OH PC's backend container — a secondary PC's camera only captures and uploads images over the network; it never needs PaddleOCR installed locally.
+
+---
+
 ## Testing Notes
 
 - Tests use an in-process async SQLite (or Postgres) via `conftest.py` fixtures — no Docker required for unit/API tests.

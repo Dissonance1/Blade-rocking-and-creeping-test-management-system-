@@ -5,6 +5,13 @@
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1
+#   # On a PC other than the one running the backend (e.g. a second hangar
+#   # PC with its own scale/DTI wired in but sharing the central database):
+#   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98
+
+param(
+    [string]$Server = "http://localhost"   # backend address the weighing/DTI bridges push readings to
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -37,8 +44,8 @@ function Register-BridgeTask {
 # re-pair the gauge in Windows Bluetooth settings and check its actual COM
 # port with: python -m serial.tools.list_ports
 Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py"
-Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server http://localhost"
-Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server http://localhost"
+Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server $Server"
+Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server $Server"
 
 Write-Host ""
 Write-Host "Starting all three now (instead of waiting for next logon)..."

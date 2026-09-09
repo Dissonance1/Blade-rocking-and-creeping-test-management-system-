@@ -85,8 +85,8 @@ DEFAULT_PORT = 8089
 DEFAULT_ORIGINS = [
     "http://localhost",
     "http://localhost:3000",  # Vite dev (see frontend/vite.config.ts server.port)
-    "http://10.10.10.2",      # Assembly PC LAN IP (nginx, HTTP-only deployment)
-    "http://192.168.88.22",   # Assembly PC LAN IP (alternate NIC)
+    "http://172.146.5.98",    # OH PC LAN IP — every station's browser loads the SPA from here
+    "http://bladerocking-1-", # OH PC's Windows hostname (NetBIOS), same origin as above
 ]
 SUPPORTED_DEPTHAI_PREFIXES = ("2.31.", "2.32.")
 CAMERA_FPS = 30
