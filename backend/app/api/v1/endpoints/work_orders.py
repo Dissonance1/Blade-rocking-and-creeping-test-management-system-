@@ -24,6 +24,8 @@ GET  /work-orders/{work_order_number}/entry                     — grid-entry r
 PUT  /work-orders/{work_order_number}/rows/{s_no}                — autosave a single grid row
 POST /work-orders/{work_order_number}/rows/bulk-import           — bulk-fill grid rows from an uploaded .xlsx
 POST /work-orders/{work_order_number}/complete                  — validate + bulk-transition grid entry to MEASUREMENTS_RECORDED
+DELETE /work-orders/{work_order_number}                         — permanently delete a work order and all its blades (SUPER_ADMIN only)
+PATCH  /work-orders/{work_order_number}                         — correct header fields: WO/shop order/part/engine number, engine hours (SUPER_ADMIN only)
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -46,6 +48,8 @@ from app.schemas.work_order import (
     WorkOrderCompleteResponse,
     WorkOrderCreate,
     WorkOrderDetailResponse,
+    WorkOrderHeaderUpdate,
+    WorkOrderHeaderUpdateResponse,
     WorkOrderRowResponse,
     WorkOrderRowUpdate,
 )
@@ -469,6 +473,7 @@ def _build_work_order_summary(
         "shop_order_number": wo.shop_order_number if wo else None,
         "part_number": wo.part_number if wo else None,
         "engine_number": wo.engine_number if wo else None,
+        "engine_hours": wo.engine_hours if wo else None,
         "is_entry_complete": wo.is_entry_complete if wo else False,
         "rocking_creep_complete": wo.is_rocking_creep_complete if wo else False,
     }
@@ -3157,3 +3162,225 @@ async def complete_work_order_entry(
     """
     service = WorkOrderService(db)
     return await service.complete(work_order_number, current_user)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /{work_order_number}  — bulk hard delete (SUPER_ADMIN only)
+# ---------------------------------------------------------------------------
+
+
+@router.delete(
+    "/{work_order_number}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a Work Order and all its blades (SUPER_ADMIN only)",
+)
+async def delete_work_order(
+    work_order_number: str,
+    current_user: Annotated[Any, Depends(require_roles("SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Permanently delete a Work Order and every blade in it, plus all related
+    records (measurements, workflow logs, slot allocations, notifications,
+    attachments, assembly receipt/records, LPTR balancing data, work order
+    events). Bulk counterpart to ``DELETE /blades/{blade_id}`` — unlike that
+    endpoint, this does NOT re-scaffold blank replacement rows, since the
+    whole Work Order is being removed, not one row within it.
+
+    SUPER_ADMIN only, and unlike per-blade delete there is no OH-stage-only
+    restriction — this removes the Work Order regardless of how far its
+    blades have progressed.
+    """
+    from app.models.attachment import Attachment
+    from app.models.assembly_receipt import AssemblyBatchReceipt
+    from app.models.blade import Blade
+    from app.models.lptr_balancing_check import LptrBalancingCheck
+    from app.models.lptr_empty_rotor_reading import LptrEmptyRotorReading
+    from app.models.lptr_manual_correction import LptrManualCorrection
+    from app.models.measurement import Measurement
+    from app.models.notification import Notification
+    from app.models.slot_allocation import SlotAllocation
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+    from app.models.workflow import WorkflowLog
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+
+    blade_ids = [
+        row[0]
+        for row in (
+            await db.execute(select(Blade.id).where(Blade.work_order_id == work_order.id))
+        ).all()
+    ]
+
+    # Hard-delete every blade's child records first, then the blades
+    # themselves — Blade.work_order_id -> work_orders.id is ON DELETE
+    # RESTRICT, so the Work Order row can't go until every blade is gone.
+    if blade_ids:
+        for Model in (WorkflowLog, Measurement, SlotAllocation, Notification, Attachment):
+            await db.execute(delete(Model).where(Model.blade_id.in_(blade_ids)))
+        await db.execute(delete(Blade).where(Blade.id.in_(blade_ids)))
+
+    # Work-order-scoped records keyed by work_order_number rather than a
+    # blade_id FK (or that survive blade deletion via ON DELETE SET NULL) —
+    # not touched by the blade cascade above, so removed explicitly here.
+    for Model in (WorkOrderEvent, AssemblyBatchReceipt, LptrBalancingCheck, LptrEmptyRotorReading, LptrManualCorrection):
+        await db.execute(delete(Model).where(Model.work_order_number == work_order_number))
+
+    await db.delete(work_order)
+    await db.commit()
+
+    logger.info(
+        "work_order_hard_deleted",
+        work_order=work_order_number,
+        blade_count=len(blade_ids),
+        by=str(current_user.id),
+    )
+    return {
+        "success": True,
+        "message": f"Work Order {work_order_number} and {len(blade_ids)} blade(s) permanently deleted",
+    }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /{work_order_number}  — correct header fields (SUPER_ADMIN only)
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{work_order_number}",
+    status_code=status.HTTP_200_OK,
+    summary="Correct Work Order header fields (SUPER_ADMIN only)",
+    response_model=WorkOrderHeaderUpdateResponse,
+)
+async def update_work_order_header(
+    work_order_number: str,
+    body: WorkOrderHeaderUpdate,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[Any, Depends(require_roles("SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WorkOrderHeaderUpdateResponse:
+    """
+    Corrects Work Order Number, Shop Order Number, Part Number, Engine
+    Number, and/or Engine Hours after creation — a data-entry fix, not a
+    workflow action. Every blade in the work order carries its own
+    denormalized copy of these fields (see ``Blade`` model), so the change
+    is propagated to all of them in the same transaction. If Work Order
+    Number itself changes, every other table keyed by it as a plain string
+    (events, the Assembly batch receipt, LPTR balancing records) is
+    updated too, so nothing is orphaned under the old number.
+    """
+    from app.models.assembly_receipt import AssemblyBatchReceipt
+    from app.models.blade import Blade
+    from app.models.lptr_balancing_check import LptrBalancingCheck
+    from app.models.lptr_empty_rotor_reading import LptrEmptyRotorReading
+    from app.models.lptr_manual_correction import LptrManualCorrection
+    from app.models.work_order import WorkOrder
+    from app.models.work_order_event import WorkOrderEvent
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+
+    new_number = body.work_order_number
+    if new_number is not None and new_number != work_order_number:
+        conflict = (
+            await db.execute(
+                select(WorkOrder.id).where(WorkOrder.work_order_number == new_number)
+            )
+        ).scalar_one_or_none()
+        if conflict is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Work Order '{new_number}' already exists",
+            )
+
+    changes: dict = {}
+    header_fields = ("work_order_number", "shop_order_number", "part_number", "engine_number", "engine_hours")
+    for field in header_fields:
+        new_value = getattr(body, field)
+        if new_value is None:
+            continue
+        old_value = getattr(work_order, field)
+        if old_value == new_value:
+            continue
+        changes[field] = {"before": old_value, "after": new_value}
+        setattr(work_order, field, new_value)
+
+    if not changes:
+        return WorkOrderHeaderUpdateResponse(
+            work_order_number=work_order.work_order_number,
+            shop_order_number=work_order.shop_order_number,
+            part_number=work_order.part_number,
+            engine_number=work_order.engine_number,
+            engine_hours=work_order.engine_hours,
+            blades_updated=0,
+            message="No changes — every field already matched the submitted value.",
+        )
+
+    blade_field_values = {
+        field: getattr(body, field) for field in header_fields if getattr(body, field) is not None
+    }
+    blade_result = await db.execute(
+        update(Blade)
+        .where(Blade.work_order_id == work_order.id)
+        .values(**blade_field_values)
+    )
+
+    if new_number is not None and new_number != work_order_number:
+        for Model in (WorkOrderEvent, AssemblyBatchReceipt, LptrBalancingCheck, LptrEmptyRotorReading, LptrManualCorrection):
+            await db.execute(
+                update(Model)
+                .where(Model.work_order_number == work_order_number)
+                .values(work_order_number=new_number)
+            )
+
+    final_number = work_order.work_order_number
+    event = WorkOrderEvent(
+        work_order_number=final_number,
+        event_type=BatchEventType.MODIFIED,
+        action_by_id=current_user.id,
+        remarks=f"Header fields corrected by {getattr(current_user, 'username', current_user.id)}",
+        changes=changes,
+    )
+    db.add(event)
+    await db.commit()
+
+    actor_name = getattr(current_user, "username", str(current_user.id))
+    background_tasks.add_task(
+        _notify_oh_operators, final_number, BatchEventType.MODIFIED, actor_name, event.remarks, changes
+    )
+
+    logger.info(
+        "work_order_header_updated",
+        work_order=final_number,
+        previous_number=work_order_number if final_number != work_order_number else None,
+        changes=list(changes.keys()),
+        blades_updated=blade_result.rowcount,
+        by=str(current_user.id),
+    )
+    return WorkOrderHeaderUpdateResponse(
+        work_order_number=work_order.work_order_number,
+        shop_order_number=work_order.shop_order_number,
+        part_number=work_order.part_number,
+        engine_number=work_order.engine_number,
+        engine_hours=work_order.engine_hours,
+        blades_updated=blade_result.rowcount,
+        message=f"Work Order {final_number} updated ({blade_result.rowcount} blade(s))",
+    )

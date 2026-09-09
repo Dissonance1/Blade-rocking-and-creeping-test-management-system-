@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import BladeType
 from app.schemas.base import BaseSchema
@@ -107,6 +107,55 @@ class WorkOrderDetailResponse(BaseSchema):
         default=None,
         description="Lowest S.No still incomplete, or null if all rows are complete",
     )
+
+
+# ---------------------------------------------------------------------------
+# Header update (SUPER_ADMIN only)
+# ---------------------------------------------------------------------------
+
+class WorkOrderHeaderUpdate(BaseSchema):
+    """
+    Corrects the "common info" header fields for a Work Order after
+    creation — SUPER_ADMIN only. Only supplied fields are changed. Applied
+    to the WorkOrder row and propagated to every blade's denormalized copy
+    of the same fields (and, if ``work_order_number`` changes, to every
+    other table keyed by the old work order number as a plain string).
+    """
+
+    work_order_number: str | None = Field(default=None, min_length=1, max_length=64)
+    shop_order_number: str | None = Field(default=None, min_length=1, max_length=64)
+    part_number: str | None = Field(default=None, min_length=1, max_length=64)
+    engine_number: str | None = Field(default=None, min_length=1, max_length=64)
+    engine_hours: str | None = Field(default=None, max_length=64)
+
+    @field_validator("work_order_number", "shop_order_number", "part_number", "engine_number")
+    @classmethod
+    def strip_required(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "WorkOrderHeaderUpdate":
+        if all(
+            getattr(self, f) is None
+            for f in ("work_order_number", "shop_order_number", "part_number", "engine_number", "engine_hours")
+        ):
+            raise ValueError("At least one field must be provided.")
+        return self
+
+
+class WorkOrderHeaderUpdateResponse(BaseSchema):
+    work_order_number: str
+    shop_order_number: str
+    part_number: str
+    engine_number: str
+    engine_hours: str | None = None
+    blades_updated: int
+    message: str
 
 
 # ---------------------------------------------------------------------------

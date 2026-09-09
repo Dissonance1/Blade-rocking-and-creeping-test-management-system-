@@ -360,7 +360,8 @@ One Work Order is created per set of blades entered together. It carries the com
 | Field | Type | Notes |
 |-------|------|-------|
 | `measurement_type` | ENUM | `INITIAL`, `INTERIM`, `FINAL` |
-| `weight_grams` | NUMERIC(12,4) | |
+| `raw_weight_kg` | NUMERIC(12,4) | Raw weighing-machine reading, stored directly at entry time (not just back-derived from `weight_grams` for display) |
+| `weight_grams` | NUMERIC(12,4) | `raw_weight_kg × 1.57` |
 | `static_moment_gcm` | NUMERIC(12,4) | Auto-calculated: weight × 1.57 × 20 |
 | `rocking_value` | NUMERIC(12,6) | Required for all blade types |
 | `creep_value` | NUMERIC(12,6) | LPTR blades only; must be null for HPTR |
@@ -857,7 +858,9 @@ GET /blades/?page=1&page_size=20
 | POST | `/work-orders/{wo}/complete-rocking-creep` | Lock rocking/creep entry |
 | POST | `/work-orders/{wo}/receive` | Assembly marks work order received |
 | POST | `/work-orders/{wo}/accept` | Assembly accepts work order |
-| POST | `/work-orders/{wo}/modify` | Blade-level modifications |
+| POST | `/work-orders/{wo}/modify` | Blade-level modifications (ASSEMBLY_OPERATOR or SUPER_ADMIN) |
+| PATCH | `/work-orders/{wo}` | SUPER_ADMIN only — corrects header fields (WO/shop order/part/engine number, engine hours) after creation; propagated to every blade's denormalized copy, and to every other work-order-number-keyed table if the number itself is renamed |
+| DELETE | `/work-orders/{wo}` | SUPER_ADMIN only — permanently deletes the work order and every blade in it (no re-scaffolding, unlike per-blade delete) |
 
 > Both `POST /work-orders/{wo}/receive` and `POST /assembly/work-orders/{wo}/receive` exist and appear to overlap in function — which the frontend actually calls, and whether calling both would double-create records, was not traced in this pass. Worth a manual check before relying on either in a new integration.
 

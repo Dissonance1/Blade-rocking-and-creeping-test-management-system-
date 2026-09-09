@@ -173,6 +173,7 @@ export interface Measurement {
   blade_id: string;
   measurement_type: MeasurementType;
   work_order_number?: string | null;
+  raw_weight_kg?: number | null;
   weight_grams?: number | null;
   static_moment_gcm?: number | null;
   rocking_value?: number | null;
