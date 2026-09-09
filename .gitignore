@@ -116,15 +116,34 @@ backend/finetune/.venv-train/
 backend/finetune/train_data/
 backend/finetune/train_data_char/
 backend/finetune/train_data_combined/
+backend/finetune/train_data_ocr_scans/
+backend/finetune/train_data_v2/
 backend/finetune/det_train_data_char/
 backend/finetune/output/
 backend/finetune/state/
 backend/finetune/rejected/
 
+# Downloaded candidate models tried for comparison (e.g. PP-OCRv4 server
+# detector) -- large third-party binaries, reproducible via their own
+# download URLs, never meant to live in git.
+backend/finetune/candidate_models/
+
+# Ad-hoc eval result dumps and diagnostic images from finetune scripts --
+# regenerate by re-running the corresponding eval_*.py script.
+backend/finetune/*_test_*.json
+backend/finetune/field_eval_*.json
+backend/finetune/*.jpg
+
 # Original field-collected melt-number dataset (~600 real images) used to
 # bootstrap/supplement fine-tuning — real photos, not source, never tracked
 # (the repo-root images/+labels.json predecessor never was either).
 /dataset/
+
+# A newer batch of real production captures (403 images, manually labeled
+# via backend/finetune's label.html tooling) -- same reasoning as /dataset/
+# above: real photos, not source, never tracked.
+/ocr_scans/
+/labels.json
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/

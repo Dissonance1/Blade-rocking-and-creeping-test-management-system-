@@ -1,0 +1,135 @@
+Global:
+  model_name: cyrillic_PP-OCRv3_mobile_rec_v2_finetune
+  debug: false
+  use_gpu: false
+  epoch_num: 15   # same reasoning as cyrillic_combined_finetune.yml -- this
+                  # continues from an already-converged, currently-deployed
+                  # checkpoint, so needs a modest nudge, not a from-scratch
+                  # schedule. Dataset here (2430 rows) is a similar order of
+                  # magnitude to that run's (2529 rows).
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_v2_finetune
+  save_epoch_step: 1
+  eval_batch_step: [0, 304]  # ~304 iters/epoch at 2430 rows / batch 8 -- eval every epoch
+  cal_metric_during_train: true
+  # Continues from the CURRENTLY-DEPLOYED checkpoint (the combined-data
+  # fine-tune from this session, already validated as better than
+  # production on both full-string and letter-crop tests) -- this round
+  # adds a second, independent batch of 397 real production captures
+  # (backend/finetune/train_data_ocr_scans/, manually ground-truthed via
+  # label.html) with much better real Cyrillic letter diversity
+  # (Б/А/В/Н/М/Г/Л/И/К all genuinely observed, not CoMNIST-backfilled).
+  pretrained_model: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_combined_finetune/best_accuracy
+  checkpoints: null
+  save_inference_dir: null
+  use_visualdl: false
+  infer_img: null
+  character_dict_path: /home/amit/src/blead_rocking/backend/finetune/PaddleOCR/ppocr/utils/dict/cyrillic_dict.txt
+  max_text_length: &max_text_length 25
+  infer_mode: false
+  use_space_char: true
+  distributed: false
+  export_with_pir: false  # see cyrillic_rec_finetune.yml -- production's
+                          # paddlepaddle==2.6.2 runtime needs the legacy
+                          # inference.pdmodel export format, not PIR.
+  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_v2_finetune/predicts.txt
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.00005
+    warmup_epoch: 2
+  regularizer:
+    name: L2
+    factor: 3.0e-05
+
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+  Transform: null
+  Backbone:
+    name: MobileNetV1Enhance
+    scale: 0.5
+    last_conv_stride: [1, 2]
+    last_pool_type: avg
+    last_pool_kernel_size: [2, 2]
+  Head:
+    name: MultiHead
+    head_list:
+      - CTCHead:
+          Neck:
+            name: svtr
+            dims: 64
+            depth: 2
+            hidden_dims: 120
+            use_guide: true
+          Head:
+            fc_decay: 0.00001
+      - SARHead:
+          enc_dim: 512
+          max_text_length: *max_text_length
+
+Loss:
+  name: MultiLoss
+  loss_config_list:
+    - CTCLoss: null
+    - SARLoss: null
+
+PostProcess:
+  name: CTCLabelDecode
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  ignore_space: false
+
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune
+    ext_op_transform_idx: 1
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data_v2/train_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 2
+        image_shape: [48, 320, 3]
+    - RecAug: null
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: true
+    batch_size_per_card: 8
+    drop_last: true
+    num_workers: 0
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data_v2/val_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 8
+    num_workers: 0

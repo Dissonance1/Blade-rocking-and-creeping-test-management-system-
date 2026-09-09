@@ -30,7 +30,7 @@ VAL_LIST = TRAIN_DATA_DIR / "val_list.txt"
 
 OLD_MODELS_DIR = FINETUNE_DIR.parent / "app" / "ocr" / "models" / "ppocrv4"
 NEW_EN_DIR = FINETUNE_DIR / "output" / "en_rec_infer"
-NEW_RU_DIR = FINETUNE_DIR / "output" / "cyrillic_combined_infer"
+NEW_RU_DIR = FINETUNE_DIR / "output" / "cyrillic_v2_infer"
 CYRILLIC_DICT = OLD_MODELS_DIR / "rec_ru" / "cyrillic_dict.txt"
 
 
