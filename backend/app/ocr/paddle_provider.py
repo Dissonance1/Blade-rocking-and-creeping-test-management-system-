@@ -513,7 +513,15 @@ class PaddleOCRProvider(OCRProvider):
         # as "1".
         if c_ru and c_ru in _PURE_CYRILLIC:
             return c_ru
-        if c_en in _INDUSTRIAL_SYMBOLS:
+        # Mirrors the `c_ru and` guard above: `c_en` is "" whenever the
+        # English read is shorter than the Cyrillic one at this index (the
+        # English engine frequently omits a Cyrillic letter it can't
+        # represent instead of guessing a Latin substitute, so its string
+        # ends up shorter). Without the `c_en and` guard, `"" in
+        # _INDUSTRIAL_SYMBOLS` is trivially True in Python, so this branch
+        # silently discarded a correctly-read trailing Cyrillic digit
+        # instead of falling through to keep it.
+        if c_en and c_en in _INDUSTRIAL_SYMBOLS:
             return c_en
         if re.match(r"[A-Z]", c_en):
             return c_en
@@ -521,6 +529,24 @@ class PaddleOCRProvider(OCRProvider):
 
     @classmethod
     def _fuse_chars(cls, text_en: str, text_ru: str) -> str:
+        # Per-index fusion below assumes text_en and text_ru describe the
+        # same character sequence one-to-one. That assumption breaks when
+        # the English engine omits a Cyrillic letter it can't represent
+        # instead of guessing a Latin substitute (common — verified against
+        # real melt-number reads: e.g. Cyrillic engine reads "14Г4736"
+        # perfectly, English engine reads "144736", silently skipping the
+        # letter's slot). Every English digit from that point on then
+        # actually belongs one position earlier, so index-based fusion
+        # trusts each shifted-in digit over the Cyrillic engine's correctly
+        # positioned one, corrupting an already-perfect Cyrillic read into a
+        # shorter, wrong string. If the Cyrillic engine's raw output already
+        # matches the expected melt/serial shape on its own, trust it
+        # wholesale instead of risking that corruption — merging can only
+        # help when the Cyrillic read is broken, never when it's already a
+        # clean, validly-shaped answer.
+        text_ru_upper = text_ru.upper() if text_ru else ""
+        if len(text_en) != len(text_ru) and _SHAPE_RE.match(text_ru_upper):
+            return text_ru_upper
         max_len = max(len(text_en), len(text_ru))
         return "".join(
             cls._arbitrate_slot(
