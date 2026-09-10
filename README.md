@@ -41,13 +41,20 @@ A full-stack web application that manages the complete lifecycle of turbine blad
 
 ## Quick Start (Docker)
 
+There are two Docker Compose configurations — pick one:
+
+| File | Use case |
+|------|----------|
+| `docker-compose.yml` | Demo / dev laptop / single-PC all-in-one |
+| `docker-compose.oh.yml` | Real plant deployment — one PC runs the whole stack and is the server for the whole plant LAN (see [Deployment Modes below](#deployment-modes-production)) |
+
 ### Prerequisites
 
 - Docker >= 24
 - Docker Compose >= 2.20
 - (Optional) Make
 
-### Steps
+### Steps (single-machine)
 
 ```bash
 # 1. Clone the repository
@@ -56,9 +63,10 @@ cd blade-rocking
 
 # 2. Create environment file
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD and SECRET_KEY at minimum
+# Edit .env and set at minimum: SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
 
-# 3. Start all services
+# 3. Build and start all services
+docker-compose build
 docker-compose up -d
 
 # 4. Run database migrations
@@ -68,8 +76,38 @@ docker-compose exec backend alembic upgrade head
 docker-compose exec backend python ../scripts/seed_data.py
 ```
 
-> Setting this up on a different PC — a fresh factory machine, or the full
-> two-station OH/Assembly deployment? See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+Or use the bundled helper script, which does all of the above plus health-check waiting:
+
+```bash
+./scripts/deploy.sh --fresh        # first time
+./scripts/deploy.sh                # subsequent updates
+```
+
+### Deployment Modes (production)
+
+Setting this up as the real plant deployment — one PC (the OH station) running the
+whole stack as the server for every other PC/device on the LAN? Use
+`docker-compose.oh.yml` instead:
+
+```bash
+cp .env.oh.example .env.oh
+# Edit .env.oh: SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
+
+docker-compose -f docker-compose.oh.yml build
+docker-compose -f docker-compose.oh.yml up -d
+docker-compose -f docker-compose.oh.yml exec oh_backend alembic upgrade head
+docker-compose -f docker-compose.oh.yml exec oh_backend python ../scripts/seed_data.py   # first time only
+```
+
+Every other PC on the plant LAN (Assembly included) needs nothing installed —
+just a browser pointed at `http://<OH-PC-LAN-IP>/`. There is no separate
+Assembly stack, database, or `.env` file; role-based access control
+(`ASSEMBLY_OPERATOR` vs `OH_OPERATOR`) is what restricts what each user can do,
+not which PC they're on.
+
+> Setting this up on a fresh factory machine for the first time, need the full
+> network/firewall checklist, or moving data to a new machine later? See
+> **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the complete walkthrough.
 
 ### Service URLs
 
@@ -82,7 +120,39 @@ docker-compose exec backend python ../scripts/seed_data.py
 
 ---
 
+## Quick Start (Native — No Docker)
+
+For a workstation without Docker, `scripts/run_native.sh` installs and starts
+the entire stack directly on the host — PostgreSQL, Redis, the FastAPI
+backend, the Celery worker, and the Vite frontend dev server — with one
+command. Linux/WSL only (uses `apt`/`systemd`); safe to re-run.
+
+```bash
+./scripts/run_native.sh
+```
+
+First run: installs `postgresql`/`redis-server` via `apt` if missing (prompts
+for `sudo`), creates the `blade_rocking` DB/role, creates the backend
+virtualenv, applies migrations, and writes `backend/.env` pointed at
+`localhost` with freshly generated local-only credentials (persisted under
+`.native-run/secrets/`, gitignored). `OCR_PROVIDER=mock` by default so it
+works without PaddleOCR installed.
+
+```bash
+# First time on an empty DB, seed dev data:
+backend/.venv/bin/python scripts/seed_data.py
+
+# Stop everything the script started (Postgres/Redis system services are left running):
+./scripts/stop_native.sh
+```
+
+**Access:** frontend at `http://localhost:3000`, backend/API docs at `http://localhost:8000/docs`. Logs are written to `logs/native/{backend,celery,frontend}.log`.
+
+---
+
 ## Development Setup
+
+Prefer the one-command [Native Quick Start](#quick-start-native--no-docker) above for a fresh machine. The steps below are the manual, piece-by-piece equivalent — useful if you already have Postgres/Redis running some other way, or want to run just one half of the stack.
 
 ### Backend
 
@@ -234,7 +304,7 @@ blade-rocking/
 │   │   ├── middleware/         # Audit logging, rate limiting
 │   │   ├── models/             # SQLAlchemy ORM models + enums
 │   │   ├── notifications/      # WebSocket push
-│   │   ├── ocr/                # Tesseract OCR integration
+│   │   ├── ocr/                # Pluggable OCR providers (mock / tesseract / paddleocr, default)
 │   │   ├── repositories/       # Data access layer
 │   │   ├── reports/            # Celery tasks, PDF/Excel generation
 │   │   ├── schemas/            # Pydantic I/O schemas
@@ -253,10 +323,14 @@ blade-rocking/
 ├── nginx/
 │   └── nginx.conf              # Reverse-proxy configuration
 ├── scripts/
-│   └── seed_data.py            # Development data seeder
+│   ├── run_native.sh            # Start the full stack natively, no Docker
+│   ├── stop_native.sh           # Stop the native stack
+│   ├── deploy.sh                # Docker deploy helper (build/up/migrate/health-check)
+│   └── seed_data.py             # Development data seeder
 ├── .github/workflows/
 │   └── ci.yml                  # GitHub Actions CI/CD pipeline
-├── docker-compose.yml
+├── docker-compose.yml           # Single-machine deployment
+├── docker-compose.oh.yml        # Plant production deployment (OH PC as shared server)
 ├── Makefile
 └── README.md
 ```

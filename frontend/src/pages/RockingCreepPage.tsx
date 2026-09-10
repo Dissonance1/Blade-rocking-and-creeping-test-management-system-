@@ -27,9 +27,11 @@ import { cn } from "@/utils/cn";
 // Only one DTI gauge is connected for Rocking & Creep entry — a fixed station id.
 const DTI_STATION = "1";
 
-// Acceptable Rocking range — HPTR only, LPTR has no such limit.
+// Acceptable Rocking range — different band per blade type.
 const HPTR_ROCKING_MIN = 0.5;
 const HPTR_ROCKING_MAX = 1.8;
+const LPTR_ROCKING_MIN = 1.8;
+const LPTR_ROCKING_MAX = 3.3;
 
 type ActiveField = "rocking" | "creep";
 interface ActiveTarget {
@@ -606,11 +608,12 @@ export default function RockingCreepPage() {
                     const isLPTR = entry.blade_type === "LPTR";
 
                     const rockingNum = row.rocking !== "" ? parseFloat(row.rocking) : null;
+                    const rockingMin = isLPTR ? LPTR_ROCKING_MIN : HPTR_ROCKING_MIN;
+                    const rockingMax = isLPTR ? LPTR_ROCKING_MAX : HPTR_ROCKING_MAX;
                     const isRockingOutOfRange =
-                      !isLPTR &&
                       rockingNum != null &&
                       !isNaN(rockingNum) &&
-                      (rockingNum < HPTR_ROCKING_MIN || rockingNum > HPTR_ROCKING_MAX);
+                      (rockingNum < rockingMin || rockingNum > rockingMax);
 
                     return (
                       <tr
@@ -701,7 +704,7 @@ export default function RockingCreepPage() {
                               )}
                             />
                             {isRockingOutOfRange && (
-                              <span title={`Out of range (${HPTR_ROCKING_MIN}–${HPTR_ROCKING_MAX})`}>
+                              <span title={`Out of range (${rockingMin}–${rockingMax})`}>
                                 <AlertTriangle className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />
                               </span>
                             )}

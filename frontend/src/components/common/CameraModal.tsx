@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
 import type { LocalSaveFolderStatus } from "@/hooks/useLocalSaveFolder";
+import type { BladeType } from "@/types";
 
 type CameraSource = "browser" | "oak1";
 
@@ -13,27 +14,29 @@ const AUTO_CAPTURE_SETTLE_MS = 500;
 export default function CameraModal({
   open,
   fieldLabel,
+  bladeType = null,
   autoCapture = false,
   onCapture,
   onClose,
   saveFolderSupported = false,
-  saveFolderStatus = "unsupported",
+  saveFolderStatus = "unavailable",
   saveFolderName = null,
   onChooseSaveFolder,
-  onReconnectSaveFolder,
 }: {
   open: boolean;
   fieldLabel: string;
+  /** LPTR/HPTR blade being captured — forwarded to the OAK-1 companion service
+   * as ?blade_type= so it applies that type's dialed-in zoom/pan framing. */
+  bladeType?: BladeType | null;
   /** When true, fires a capture automatically once the feed is ready (no manual button press). */
   autoCapture?: boolean;
   onCapture: (file: File, blob: Blob) => void;
   onClose: () => void;
-  /** Whether this browser supports picking a local save folder (File System Access API). */
+  /** Whether the local save-folder companion service is reachable. */
   saveFolderSupported?: boolean;
   saveFolderStatus?: LocalSaveFolderStatus;
   saveFolderName?: string | null;
   onChooseSaveFolder?: () => void;
-  onReconnectSaveFolder?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -110,7 +113,7 @@ export default function CameraModal({
 
     if (source === "oak1") {
       try {
-        const blob = await captureOak1Snapshot();
+        const blob = await captureOak1Snapshot(bladeType);
         setCaptured({ blob, url: URL.createObjectURL(blob) });
       } catch {
         setCamError("Could not capture from OAK-1. Check the companion service and try again.");
@@ -129,7 +132,7 @@ export default function CameraModal({
       stopCamera();
       setCaptured({ blob, url: URL.createObjectURL(blob) });
     }, "image/jpeg", 0.92);
-  }, [ready, stopCamera, source]);
+  }, [ready, stopCamera, source, bladeType]);
 
   // Auto-capture: once the feed reports ready, fire the shot after a short
   // settle delay so the operator has a moment to position the blade under
@@ -295,15 +298,6 @@ export default function CameraModal({
                 <FolderOpen className="w-3 h-3" />
                 Also saving a local copy to “{saveFolderName}”
               </span>
-            )}
-            {saveFolderStatus === "permission-needed" && (
-              <button
-                type="button"
-                onClick={onReconnectSaveFolder}
-                className="text-amber-600 dark:text-amber-400 underline underline-offset-2"
-              >
-                Reconnect “{saveFolderName}” to also save a local copy
-              </button>
             )}
             {(saveFolderStatus === "not-set" || saveFolderStatus === "checking") && (
               <button

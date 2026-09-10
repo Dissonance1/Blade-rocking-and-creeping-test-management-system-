@@ -54,11 +54,14 @@ def _row_response(
         if measurement is not None and measurement.static_moment_gcm is not None
         else None
     )
-    raw_weight = (
-        round(weight_grams / WEIGHT_TO_GRAMS_FACTOR, 2)
-        if weight_grams is not None
-        else None
-    )
+    if measurement is not None and measurement.raw_weight_kg is not None:
+        raw_weight = float(measurement.raw_weight_kg)
+    elif weight_grams is not None:
+        # Older rows recorded before raw_weight_kg was stored directly —
+        # back-derive it from weight_grams for display purposes only.
+        raw_weight = round(weight_grams / WEIGHT_TO_GRAMS_FACTOR, 2)
+    else:
+        raw_weight = None
     is_complete = bool(blade.melt_number and blade.melt_number.strip()) and weight_grams is not None
     return WorkOrderRowResponse(
         s_no=int(blade.serial_number),
@@ -199,6 +202,7 @@ class WorkOrderService:
             static_moment_gcm = round(weight_grams * STATIC_MOMENT_FACTOR, 4)
             measurement = await self._measurement_repo.upsert_initial(
                 blade_id=blade.id,
+                raw_weight_kg=data.raw_weight,
                 weight_grams=weight_grams,
                 static_moment_gcm=static_moment_gcm,
                 measured_by_id=user.id,

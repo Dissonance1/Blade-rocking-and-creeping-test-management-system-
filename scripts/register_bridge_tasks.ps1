@@ -5,10 +5,17 @@
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1
+#   # On a PC other than the one running the backend (e.g. a second hangar
+#   # PC with its own scale/DTI wired in but sharing the central database):
+#   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98
+
+param(
+    [string]$Server = "http://localhost"   # backend address the weighing/DTI bridges push readings to
+)
 
 $ErrorActionPreference = "Stop"
 
-$py = "C:\Users\ADMIN\AppData\Local\Python\bin\python.exe"
+$py = "C:\Users\ADMIN\AppData\Local\Python\bin\pythonw.exe"   # windowless — python.exe would pop a visible console
 $scriptsDir = "C:\blade-rocking\scripts"
 
 function Register-BridgeTask {
@@ -27,13 +34,18 @@ function Register-BridgeTask {
     Write-Host "Registered: $Name"
 }
 
-# COM3 confirmed as the iScale-BT-91 weighing scale (Bluetooth MAC 0025020126B1
-# matches its PnP instance ID). COM4 is unconfirmed for the Sylvac DTI gauge —
-# if it doesn't connect, re-pair the gauge in Windows Bluetooth settings and
-# check its actual COM port with: python -m serial.tools.list_ports
+# Two iScale scales share the OH station (iScale-BT-91, MAC 0025020126B1, and
+# iScale-BT-0111, MAC 00250201225E) but only one is ever powered on at a time.
+# weighing_bridge.py auto-discovers whichever one is live by Bluetooth MAC
+# (see KNOWN_SCALES in that script) rather than a hard-coded COM port, so a
+# single task covers both — no --port needed, and no action required when
+# Windows reassigns a COM letter after a re-pair.
+# COM4 is unconfirmed for the Sylvac DTI gauge — if it doesn't connect,
+# re-pair the gauge in Windows Bluetooth settings and check its actual COM
+# port with: python -m serial.tools.list_ports
 Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py"
-Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --port COM3 --server http://localhost"
-Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server http://localhost"
+Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server $Server"
+Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server $Server"
 
 Write-Host ""
 Write-Host "Starting all three now (instead of waiting for next logon)..."

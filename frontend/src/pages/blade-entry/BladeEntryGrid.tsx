@@ -31,6 +31,13 @@ import type { WorkOrderBulkImportResult } from "@/services/workOrderService";
 const AUTOSAVE_DEBOUNCE_MS = 600;
 const SAVE_RETRY_DELAYS_MS = [500, 1500, 4000];
 
+// Below this, the reader didn't match the expected melt-number grammar and
+// fell back to its best-guess line (see paddle_provider._resolve_value) —
+// a pattern-matched or confusion-corrected read scores 0.75+. Below that,
+// the value in the cell is a guess, not a confident read, so the operator
+// needs to be told to double-check it rather than trust it silently.
+const LOW_OCR_CONFIDENCE_THRESHOLD = 0.75;
+
 export default function BladeEntryGrid() {
   const {
     commonInfo,
@@ -146,7 +153,11 @@ export default function BladeEntryGrid() {
       scheduleSave(rowIndex, true);
       lockRowWeight(rowIndex);
       clearReading();
-      const nextRow = Math.min(rowIndex + 1, rows.length - 1);
+      // On the last row there's nowhere to advance to — clamping the index
+      // would otherwise land back on this same just-locked row and reopen
+      // the camera on it.
+      if (rowIndex >= rows.length - 1) return;
+      const nextRow = rowIndex + 1;
       focusCell(nextRow, "melt_number");
       nav.focusCell(nextRow, "melt_number");
       setCameraTargetRow(nextRow);
@@ -230,12 +241,26 @@ export default function BladeEntryGrid() {
       if (rowIndex == null) return;
       try {
         const result = await ocrService.scanMelt(file);
+        const confidencePct = Math.round((result.confidence ?? 0) * 100);
         if (!result.value) {
           // OCR ran but found nothing readable in the frame — leave the
           // row's existing value untouched and tell the operator explicitly
-          // instead of silently applying an empty string.
-          toast.warning(`Row ${rowIndex + 1}: no melt number detected — try retaking with better lighting/focus.`);
+          // instead of silently applying an empty string. Confidence is
+          // shown too (usually near 0%) so it's clear this isn't a borderline
+          // call the operator could second-guess — nothing was read at all.
+          toast.warning(
+            `Row ${rowIndex + 1}: no melt number detected (confidence ${confidencePct}%) — try retaking with better lighting/focus.`
+          );
           return;
+        }
+        if (result.confidence < LOW_OCR_CONFIDENCE_THRESHOLD) {
+          // A value was read, but it didn't match the expected melt-number
+          // grammar — it's the OCR's best guess, not a confident detection.
+          // Still fill the cell (faster than a blank one to correct), but
+          // flag it so the operator doesn't trust it at face value.
+          toast.warning(
+            `Row ${rowIndex + 1}: low-confidence read "${result.value}" (${confidencePct}%) — please verify carefully.`
+          );
         }
         const readyToSave = applyOcrResult(rowIndex, result.value);
         const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
@@ -254,13 +279,13 @@ export default function BladeEntryGrid() {
           ocr: result,
         })
           .then((saved) => {
-            // The folder's permission grant lapses on every browser reload —
-            // saveCapture then no-ops instead of throwing, so without this
-            // check a whole session's worth of local photo copies can go
-            // missing with no visible sign anything was wrong.
-            if (!saved && localSaveFolder.status === "permission-needed") {
-              toast.warning("Local photo copy skipped — reconnect the save folder (top right) to resume mirroring captures.", {
-                id: "local-save-permission-needed",
+            // A folder was configured and reachable as of the last check, yet
+            // this particular write still failed (service died mid-session,
+            // folder got deleted, etc.) — worth a heads-up instead of letting
+            // captures silently stop mirroring with no visible sign.
+            if (!saved && localSaveFolder.status === "ready") {
+              toast.warning("Local photo copy skipped — the OAK-1 companion service didn't respond.", {
+                id: "local-save-unavailable",
               });
             }
           })
@@ -361,7 +386,6 @@ export default function BladeEntryGrid() {
         saveFolderStatus={localSaveFolder.status}
         saveFolderName={localSaveFolder.folderName}
         onChooseSaveFolder={() => void localSaveFolder.choose()}
-        onReconnectSaveFolder={() => void localSaveFolder.reconnect()}
       />
       {keyboardTargetRow != null && (
         <RussianKeyboard
@@ -412,25 +436,17 @@ export default function BladeEntryGrid() {
           {localSaveFolder.supported && (
             <button
               type="button"
-              onClick={() =>
-                void (localSaveFolder.status === "permission-needed"
-                  ? localSaveFolder.reconnect()
-                  : localSaveFolder.choose())
-              }
+              onClick={() => void localSaveFolder.choose()}
               title={
                 localSaveFolder.status === "ready"
                   ? `OCR photos are also saved to "${localSaveFolder.folderName}"`
-                  : localSaveFolder.status === "permission-needed"
-                    ? `Click to reconnect to "${localSaveFolder.folderName}"`
-                    : "Choose a folder to also save OCR photos locally"
+                  : "Choose a folder to also save OCR photos locally"
               }
               className={cn(
                 "inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1 border",
                 localSaveFolder.status === "ready"
                   ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50"
-                  : localSaveFolder.status === "permission-needed"
-                    ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50"
-                    : "text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-background border-slate-200 dark:border-slate-700/50"
+                  : "text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-background border-slate-200 dark:border-slate-700/50"
               )}
             >
               {localSaveFolder.status === "ready" ? (
@@ -439,7 +455,6 @@ export default function BladeEntryGrid() {
                 <Folder className="w-3 h-3" />
               )}
               {localSaveFolder.status === "ready" && `Saving to “${localSaveFolder.folderName}”`}
-              {localSaveFolder.status === "permission-needed" && "Reconnect save folder"}
               {(localSaveFolder.status === "not-set" || localSaveFolder.status === "checking") &&
                 "Choose save folder"}
             </button>

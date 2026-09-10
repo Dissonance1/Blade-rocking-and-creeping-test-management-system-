@@ -58,6 +58,7 @@ async def _make_work_order(
         shop_order_number="SO-TEST",
         part_number="PT-4470",
         blade_type=blade_type,
+        engine_number="ENG-TEST",
         engine_hours="100:00:00",
         created_by_id=oh_user.id,
     )
@@ -389,6 +390,7 @@ async def _start_blade_entry_work_order(client: AsyncClient, headers: dict, work
             "shop_order_number": "SO-TEST",
             "part_number": "PT-4470",
             "blade_type": "HPTR",
+            "engine_number": "ENG-TEST",
             "engine_hours": "100:00:00",
         },
         headers=headers,

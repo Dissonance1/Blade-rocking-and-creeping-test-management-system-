@@ -11,7 +11,6 @@
         lint lint-backend format \
         up down logs build \
         oh-build oh-up oh-down oh-logs oh-migrate oh-shell oh-db \
-        assembly-build assembly-up assembly-down assembly-logs assembly-migrate assembly-shell \
         clean
 
 # ---------------------------------------------------------------------------
@@ -186,30 +185,6 @@ oh-shell:  ## Open shell in OH backend container
 oh-db:  ## Open psql on OH station
 	docker-compose -f docker-compose.oh.yml --env-file .env.oh exec oh_postgres \
 	  psql -U $${POSTGRES_USER:-blade_user} -d $${POSTGRES_DB:-blade_rocking_oh}
-
-# =============================================================================
-# Assembly Station (720 Hanger) — docker-compose.assembly.yml
-# =============================================================================
-
-assembly-build:  ## Build Docker images for Assembly station
-	@echo ">>> Building Assembly station images …"
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly build
-
-assembly-up:  ## Start Assembly station services (requires .env.assembly)
-	@echo ">>> Starting Assembly station …"
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly up -d
-
-assembly-down:  ## Stop Assembly station services
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly down
-
-assembly-logs:  ## Tail Assembly station logs
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly logs -f
-
-assembly-migrate:  ## Run Alembic migrations on Assembly station
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly exec assembly_backend alembic upgrade head
-
-assembly-shell:  ## Open shell in Assembly backend container
-	docker-compose -f docker-compose.assembly.yml --env-file .env.assembly exec assembly_backend /bin/bash
 
 # =============================================================================
 # Housekeeping

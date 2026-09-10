@@ -58,6 +58,8 @@ export interface BatchSummary {
   last_event: BatchEvent | null;
   part_number: string | null;
   engine_number: string | null;
+  shop_order_number: string | null;
+  engine_hours: string | null;
   /** True only once all 90 rows have Melt Number + Weight and Complete has been run. */
   is_entry_complete: boolean;
   /** True once every blade has Rocking (and Creep, for LPTR) recorded — independent of slot allocation. */
@@ -332,6 +334,58 @@ export const batchService = {
     remarks?: string
   ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
     const { data } = await api.post(`/work-orders/${batchNumber}/reset-hptr-slots`, { remarks });
+    return data;
+  },
+
+  /**
+   * Undoes a saved LPTR slot allocation (blades still at Slot Assigned or
+   * Balancing In Progress — not yet Balancing Completed) so the work order
+   * can go through Slot Allocation again from scratch.
+   */
+  resetLptrSlots: async (
+    batchNumber: string,
+    remarks?: string
+  ): Promise<{ work_order_number: string; blades_reset: number; message: string }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/reset-lptr-slots`, { remarks });
+    return data;
+  },
+
+  /**
+   * Permanently deletes the work order and every blade in it (SUPER_ADMIN
+   * only) — irreversible, no re-scaffolding, unlike deleting one blade.
+   */
+  deleteWorkOrder: async (
+    batchNumber: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const { data } = await api.delete(`/work-orders/${batchNumber}`);
+    return data;
+  },
+
+  /**
+   * Corrects header fields (Work Order/Shop Order/Part/Engine Number,
+   * Engine Hours) after creation — SUPER_ADMIN only. Only the fields
+   * present in `updates` are changed; propagated to every blade in the
+   * work order server-side.
+   */
+  updateHeader: async (
+    batchNumber: string,
+    updates: Partial<{
+      work_order_number: string;
+      shop_order_number: string;
+      part_number: string;
+      engine_number: string;
+      engine_hours: string;
+    }>
+  ): Promise<{
+    work_order_number: string;
+    shop_order_number: string;
+    part_number: string;
+    engine_number: string;
+    engine_hours: string | null;
+    blades_updated: number;
+    message: string;
+  }> => {
+    const { data } = await api.patch(`/work-orders/${batchNumber}`, updates);
     return data;
   },
 };

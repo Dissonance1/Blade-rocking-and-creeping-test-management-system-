@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, parseISO } from "date-fns";
@@ -23,12 +23,16 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Trash2,
+  Pencil,
 } from "lucide-react";
 import { BatchOverviewIcon } from "@/components/common/CustomIcons";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import KTIcon from "@/components/common/KTIcon";
 
 import {
@@ -302,10 +306,18 @@ function BatchTableRow({
   batch,
   showSentColumn,
   onSelect,
+  canDelete,
+  onDeleteRequest,
+  canModify,
+  onModifyRequest,
 }: {
   batch: BatchSummary;
   showSentColumn: boolean;
   onSelect: (workOrderNumber: string) => void;
+  canDelete: boolean;
+  onDeleteRequest: (workOrderNumber: string) => void;
+  canModify: boolean;
+  onModifyRequest: (workOrderNumber: string) => void;
 }) {
   // rows_complete_count = blades with Melt Number + Weight actually stored —
   // NOT blade_count, which is the fixed 90-row scaffold present from the
@@ -362,6 +374,40 @@ function BatchTableRow({
           ? formatDistanceToNow(parseISO(batch.first_blade_at), { addSuffix: true })
           : "—"}
       </td>
+      {(canModify || canDelete) && (
+        <td className="px-3 py-2.5 whitespace-nowrap">
+          <div className="flex items-center gap-1">
+            {canModify && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Modify work order data"
+                className="h-7 w-7 p-0 text-slate-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onModifyRequest(batch.work_order_number);
+                }}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="Delete work order"
+                className="h-7 w-7 p-0 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteRequest(batch.work_order_number);
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            )}
+          </div>
+        </td>
+      )}
     </tr>
   );
 }
@@ -445,12 +491,20 @@ function BatchTable({
   emptyLabel,
   showSentColumn = true,
   onSelectWorkOrder,
+  canDelete = false,
+  onDeleteRequest,
+  canModify = false,
+  onModifyRequest,
 }: {
   title: string;
   batches: BatchSummary[];
   emptyLabel: string;
   showSentColumn?: boolean;
   onSelectWorkOrder: (workOrderNumber: string) => void;
+  canDelete?: boolean;
+  onDeleteRequest?: (workOrderNumber: string) => void;
+  canModify?: boolean;
+  onModifyRequest?: (workOrderNumber: string) => void;
 }) {
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(batches.length / ROWS_PER_PAGE));
@@ -486,6 +540,7 @@ function BatchTable({
                   <th className="px-3 py-2 whitespace-nowrap">Blade Entry</th>
                   {showSentColumn && <th className="px-3 py-2 whitespace-nowrap">Sent</th>}
                   <th className="px-3 py-2 whitespace-nowrap">Created</th>
+                  {(canModify || canDelete) && <th className="px-3 py-2 whitespace-nowrap" />}
                 </tr>
               </thead>
               <tbody>
@@ -495,6 +550,10 @@ function BatchTable({
                     batch={batch}
                     showSentColumn={showSentColumn}
                     onSelect={onSelectWorkOrder}
+                    canDelete={canDelete}
+                    onDeleteRequest={onDeleteRequest ?? (() => {})}
+                    canModify={canModify}
+                    onModifyRequest={onModifyRequest ?? (() => {})}
                   />
                 ))}
               </tbody>
@@ -654,6 +713,120 @@ function FinalReportRow({
   );
 }
 
+// ─── Edit Work Order header fields (SUPER_ADMIN only) ──────────────────────────
+
+interface WorkOrderHeaderFields {
+  work_order_number: string;
+  shop_order_number: string;
+  part_number: string;
+  engine_number: string;
+  engine_hours: string;
+}
+
+function EditWorkOrderDialog({
+  batch,
+  onClose,
+  onSubmit,
+  isSubmitting,
+}: {
+  batch: BatchSummary | null;
+  onClose: () => void;
+  onSubmit: (workOrderNumber: string, fields: WorkOrderHeaderFields) => void;
+  isSubmitting: boolean;
+}) {
+  const [fields, setFields] = useState<WorkOrderHeaderFields>({
+    work_order_number: "",
+    shop_order_number: "",
+    part_number: "",
+    engine_number: "",
+    engine_hours: "",
+  });
+
+  useEffect(() => {
+    if (!batch) return;
+    setFields({
+      work_order_number: batch.work_order_number,
+      shop_order_number: batch.shop_order_number ?? "",
+      part_number: batch.part_number ?? "",
+      engine_number: batch.engine_number ?? "",
+      engine_hours: batch.engine_hours ?? "",
+    });
+  }, [batch]);
+
+  const set = (field: keyof WorkOrderHeaderFields) => (e: ChangeEvent<HTMLInputElement>) =>
+    setFields((prev) => ({ ...prev, [field]: e.target.value }));
+
+  return (
+    <Dialog open={!!batch} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-slate-900 dark:text-white">
+            <Pencil className="w-5 h-5 text-orange-500" />
+            Modify Work Order
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-slate-500 dark:text-slate-400 -mt-2">
+          Corrects header data on <span className="font-mono">{batch?.work_order_number}</span> and
+          every blade in it. SUPER_ADMIN only.
+        </p>
+        <div className="grid grid-cols-1 gap-3.5 py-1">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-wo-number">Work Order Number</Label>
+            <Input
+              id="edit-wo-number"
+              value={fields.work_order_number}
+              onChange={set("work_order_number")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-shop-order">Shop Order Number</Label>
+            <Input
+              id="edit-shop-order"
+              value={fields.shop_order_number}
+              onChange={set("shop_order_number")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-part-number">Part Number</Label>
+            <Input id="edit-part-number" value={fields.part_number} onChange={set("part_number")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-engine-number">Engine Number</Label>
+            <Input
+              id="edit-engine-number"
+              value={fields.engine_number}
+              onChange={set("engine_number")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-engine-hours">Engine Hours</Label>
+            <Input
+              id="edit-engine-hours"
+              value={fields.engine_hours}
+              onChange={set("engine_hours")}
+              placeholder="HH:MM:SS"
+            />
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => batch && onSubmit(batch.work_order_number, fields)}
+            disabled={isSubmitting || !fields.work_order_number.trim() || !fields.shop_order_number.trim() || !fields.part_number.trim() || !fields.engine_number.trim()}
+            className="bg-orange-500 hover:bg-orange-600 text-white"
+          >
+            {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+            Save Changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BatchTrackingPage() {
@@ -661,18 +834,54 @@ export default function BatchTrackingPage() {
   const qc = useQueryClient();
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<string | null>(null);
   const [acceptedSummaries, setAcceptedSummaries] = useState<Record<string, BatchSummary>>({});
+  const [confirmDeleteWorkOrder, setConfirmDeleteWorkOrder] = useState<string | null>(null);
+  const [editWorkOrderNumber, setEditWorkOrderNumber] = useState<string | null>(null);
 
   // OH Operator, QA Viewer, and Super Admin all see the OH (701 Hanger) work order view.
   // Assembly Operator sees only work orders that have been sent/received at assembly.
   const isOHView = hasRole(["OH_OPERATOR", "QA_VIEWER", "SUPER_ADMIN"]);
   const isAssemblyView = hasRole(["ASSEMBLY_OPERATOR"]) && !hasRole(["SUPER_ADMIN"]);
   const canAcceptReturn = hasRole(["OH_OPERATOR", "SUPER_ADMIN"]);
+  const canDeleteWorkOrder = hasRole(["SUPER_ADMIN"]);
+  const canModifyWorkOrder = hasRole(["SUPER_ADMIN"]);
+
+  const deleteWorkOrderMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.deleteWorkOrder(workOrderNumber),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      setConfirmDeleteWorkOrder(null);
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      toast.error(extractApiError(err));
+    },
+  });
+
+  const updateHeaderMutation = useMutation({
+    mutationFn: ({
+      workOrderNumber,
+      updates,
+    }: {
+      workOrderNumber: string;
+      updates: Parameters<typeof batchService.updateHeader>[1];
+    }) => batchService.updateHeader(workOrderNumber, updates),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["batches"] });
+      setEditWorkOrderNumber(null);
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      toast.error(extractApiError(err));
+    },
+  });
 
   const { data: batches = [], isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["batches"],
     queryFn: () => batchService.list(),
     refetchInterval: 30_000,
   });
+
+  const editingBatch = batches.find((b) => b.work_order_number === editWorkOrderNumber) ?? null;
 
   const returnedBatches = batches.filter(
     (b) => b.blade_type === "LPTR" && b.current_status === "RETURNED_TO_OH"
@@ -998,6 +1207,10 @@ export default function BatchTrackingPage() {
               batches={lptrBatches}
               emptyLabel="No LPTR work orders found."
               onSelectWorkOrder={setSelectedWorkOrder}
+              canDelete={canDeleteWorkOrder}
+              onDeleteRequest={setConfirmDeleteWorkOrder}
+              canModify={canModifyWorkOrder}
+              onModifyRequest={setEditWorkOrderNumber}
             />
             {/* HPTR blades never leave OH — Assembly users never see this table. */}
             {!isAssemblyView && (
@@ -1007,6 +1220,10 @@ export default function BatchTrackingPage() {
                 emptyLabel="No HPTR work orders found."
                 showSentColumn={false}
                 onSelectWorkOrder={setSelectedWorkOrder}
+                canDelete={canDeleteWorkOrder}
+                onDeleteRequest={setConfirmDeleteWorkOrder}
+                canModify={canModifyWorkOrder}
+                onModifyRequest={setEditWorkOrderNumber}
               />
             )}
           </div>
@@ -1016,6 +1233,60 @@ export default function BatchTrackingPage() {
       <WorkOrderEventsDialog
         workOrderNumber={selectedWorkOrder}
         onClose={() => setSelectedWorkOrder(null)}
+      />
+
+      <Dialog
+        open={!!confirmDeleteWorkOrder}
+        onOpenChange={(open) => !open && setConfirmDeleteWorkOrder(null)}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-red-600 dark:text-red-400 flex items-center gap-2">
+              <Trash2 className="w-5 h-5" />
+              Delete Work Order
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            This will permanently delete work order{" "}
+            <span className="font-mono font-semibold">{confirmDeleteWorkOrder}</span> and all of
+            its blades — measurements, attachments, slot allocations, and history. This cannot be
+            undone.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmDeleteWorkOrder(null)}
+              disabled={deleteWorkOrderMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() =>
+                confirmDeleteWorkOrder && deleteWorkOrderMutation.mutate(confirmDeleteWorkOrder)
+              }
+              disabled={deleteWorkOrderMutation.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleteWorkOrderMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Delete Permanently
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <EditWorkOrderDialog
+        batch={editingBatch}
+        onClose={() => setEditWorkOrderNumber(null)}
+        onSubmit={(workOrderNumber, updates) =>
+          updateHeaderMutation.mutate({ workOrderNumber, updates })
+        }
+        isSubmitting={updateHeaderMutation.isPending}
       />
     </div>
   );

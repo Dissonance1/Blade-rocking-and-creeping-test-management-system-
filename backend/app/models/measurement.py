@@ -48,6 +48,7 @@ class Measurement(UUIDPrimaryKeyMixin, Base):
     # -----------------------------------------------------------------------
     # Core measurement values
     # -----------------------------------------------------------------------
+    raw_weight_kg: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
     weight_grams: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
     static_moment_gcm: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)
     rocking_value: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)

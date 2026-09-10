@@ -53,8 +53,12 @@ Thumbs.db
 desktop.ini
 
 # ─── Uploads & generated reports ─────────────────────────────────────────────
-uploads/
-reports/
+# Anchored to repo-root/backend specifically (not bare "reports/") --
+# unanchored matched backend/app/reports/ too, the source package for PDF/
+# Excel report generation, silently swallowing new files added there
+# (e.g. backend/app/reports/fonts/).
+/uploads/
+/reports/
 backend/uploads/
 backend/reports/
 
@@ -77,9 +81,7 @@ pip-delete-this-directory.txt
 secrets/
 ssl/
 .env.oh
-.env.assembly
 !.env.oh.example
-!.env.assembly.example
 
 # ─── Claude Code session data ────────────────────────────────────────────────
 .claude/
@@ -95,8 +97,52 @@ scripts/oak1-venv/
 *.tar.gz
 Blade_validation_PPv4OCR/
 
-# ─── Downloaded OCR model weights (fetched at runtime, not source) ──────────
-backend/app/ocr/models/
+# ─── Semgrep Guardian local state (plugin-managed, machine-specific) ───────
+.semgrep/
+
+# ─── OCR model weights ───────────────────────────────────────────────────────
+# Tracked in git deliberately: production has no removable-media/USB deploy
+# path, only `git pull` — so these binaries (~25MB total: det+cls+rec_en+
+# rec_ru) are the only way a fine-tuned model reaches the shop-floor PCs.
+
+# ─── OCR fine-tuning tooling (dev-only; never deployed) ─────────────────────
+# Cloned PaddleOCR training repo, downloaded pretrained checkpoints, the
+# training-only GPU venv, and generated crop+label training datasets are all
+# multi-GB, machine-specific, and reproducible from scratch — never commit
+# them. See backend/finetune/README.md for how to regenerate.
+backend/finetune/PaddleOCR/
+backend/finetune/pretrained/
+backend/finetune/.venv-train/
+backend/finetune/train_data/
+backend/finetune/train_data_char/
+backend/finetune/train_data_combined/
+backend/finetune/train_data_ocr_scans/
+backend/finetune/train_data_v2/
+backend/finetune/train_data_v3/
+backend/finetune/det_train_data_char/
+backend/finetune/output/
+
+# Downloaded candidate models tried for comparison (e.g. PP-OCRv4 server
+# detector) -- large third-party binaries, reproducible via their own
+# download URLs, never meant to live in git.
+backend/finetune/candidate_models/
+
+# Ad-hoc eval result dumps and diagnostic images from finetune scripts --
+# regenerate by re-running the corresponding eval_*.py script.
+backend/finetune/*_test_*.json
+backend/finetune/field_eval_*.json
+backend/finetune/*.jpg
+
+# Original field-collected melt-number dataset (~600 real images) used to
+# bootstrap/supplement fine-tuning — real photos, not source, never tracked
+# (the repo-root images/+labels.json predecessor never was either).
+/dataset/
+
+# A newer batch of real production captures (403 images, manually labeled
+# via backend/finetune's label.html tooling) -- same reasoning as /dataset/
+# above: real photos, not source, never tracked.
+/ocr_scans/
+/labels.json
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/

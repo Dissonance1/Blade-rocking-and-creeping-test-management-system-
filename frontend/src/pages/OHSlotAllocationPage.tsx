@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
+import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -321,7 +322,7 @@ function HalfColumn({ title, entries }: { title: string; entries: HptrAllocation
         <table className="w-full text-xs whitespace-nowrap">
           <thead className="sticky top-0 bg-slate-50 dark:bg-background">
             <tr>
-              {["Slot", "Serial", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
+              {["Slot", "Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"].map((h) => (
                 <th key={h} className="px-2 py-2 text-left font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   {h}
                 </th>
@@ -333,6 +334,7 @@ function HalfColumn({ title, entries }: { title: string; entries: HptrAllocation
               <tr key={blade.id}>
                 <td className="px-2 py-1.5 font-mono font-bold text-cyan-600 dark:text-cyan-400">#{slot}</td>
                 <td className="px-2 py-1.5 font-mono text-orange-500 dark:text-orange-400">{blade.serial_number}</td>
+                <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">{blade.melt_number ?? "—"}</td>
                 <td className="px-2 py-1.5 tabular-nums text-slate-700 dark:text-slate-200">
                   {blade.weight_grams != null ? Number(blade.weight_grams).toFixed(2) : "—"}
                 </td>
@@ -616,16 +618,19 @@ export default function OHSlotAllocationPage() {
 
   // Only offer work orders that are a full, pure HPTR work order (all
   // HPTR_TOTAL_SLOTS blades are HPTR — no LPTR mixed in, no partial work
-  // order) and not yet marked balancing-complete (Balancing tab's Save
-  // button). Work orders with slots already saved but not yet completed stay
-  // selectable too (not just the currently-active one) so OH can come back
-  // later to continue physical balancing or reject/redo — the Balancing tab,
-  // not the dropdown, is what gates that state.
+  // order), have finished measurement entry (is_entry_complete — otherwise
+  // no blades are MEASUREMENTS_RECORDED yet and Run Allocation has nothing
+  // to allocate), and not yet marked balancing-complete (Balancing tab's
+  // Save button). Work orders with slots already saved but not yet completed
+  // stay selectable too (not just the currently-active one) so OH can come
+  // back later to continue physical balancing or reject/redo — the
+  // Balancing tab, not the dropdown, is what gates that state.
   const batches = useMemo(() => {
     const eligible = allBatches.filter(
       (b) =>
         b.blade_count === HPTR_TOTAL_SLOTS &&
         b.hptr_count === HPTR_TOTAL_SLOTS &&
+        b.is_entry_complete &&
         b.hptr_balanced_count < b.hptr_count
     );
     if (selectedBatch && !eligible.some((b) => b.work_order_number === selectedBatch)) {
@@ -838,18 +843,12 @@ export default function OHSlotAllocationPage() {
             <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
               Select Work Order
             </Label>
-            <select
+            <WorkOrderCombobox
               value={selectedBatch}
-              onChange={(e) => handleBatchChange(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-            >
-              <option value="">— Select a work order —</option>
-              {batches.map((b) => (
-                <option key={b.work_order_number} value={b.work_order_number}>
-                  {b.work_order_number}
-                </option>
-              ))}
-            </select>
+              onChange={handleBatchChange}
+              options={batches.map((b) => ({ value: b.work_order_number, label: b.work_order_number }))}
+              placeholder="— Select a work order —"
+            />
           </CardContent>
         </Card>
 

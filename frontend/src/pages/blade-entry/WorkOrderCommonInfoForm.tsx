@@ -30,15 +30,17 @@ import { useBladeEntryStore } from "@/store/bladeEntryStore";
 import ExcelImportButton from "./ExcelImportButton";
 
 const hhmmssRegex = /^\d{1,5}:[0-5]\d:[0-5]\d$/;
-const hoursField = z.string().regex(hhmmssRegex, "Format must be HH:MM:SS (e.g. 1500:30:00)");
 
 const schema = z.object({
   work_order_number: z.string().min(1, "Work Order Number is required"),
   shop_order_number: z.string().min(1, "Shop Order Number is required"),
   part_number: z.string().min(1, "Part Number is required"),
   blade_type: z.enum(["LPTR", "HPTR"]),
-  engine_number: z.string().optional(),
-  engine_hours: hoursField,
+  engine_number: z.string().min(1, "Engine Number is required"),
+  engine_hours: z
+    .string()
+    .optional()
+    .refine((v) => !v || hhmmssRegex.test(v), { message: "Format must be HH:MM:SS (e.g. 1500:30:00)" }),
   component_hours: z
     .string()
     .optional()
@@ -174,8 +176,8 @@ export default function WorkOrderCommonInfoForm({ onStarted }: { onStarted: (wor
     shop_order_number: values.shop_order_number.trim(),
     part_number: values.part_number.trim(),
     blade_type: bladeType,
-    engine_number: values.engine_number?.trim() || null,
-    engine_hours: values.engine_hours,
+    engine_number: values.engine_number.trim(),
+    engine_hours: values.engine_hours?.trim() || null,
     component_hours: values.component_hours?.trim() || null,
   });
 
@@ -252,7 +254,7 @@ export default function WorkOrderCommonInfoForm({ onStarted }: { onStarted: (wor
                 <Input className={inputCls} {...register("part_number")} placeholder="PT-JT9D-1A" />
               </FieldRow>
 
-              <FieldRow label="Engine Number" error={errors.engine_number?.message}>
+              <FieldRow label="Engine Number" error={errors.engine_number?.message} required>
                 <Input
                   className={inputCls}
                   {...register("engine_number")}
@@ -260,7 +262,7 @@ export default function WorkOrderCommonInfoForm({ onStarted }: { onStarted: (wor
                 />
               </FieldRow>
 
-              <FieldRow label="Engine Hours" error={errors.engine_hours?.message} required>
+              <FieldRow label="Engine Hours" error={errors.engine_hours?.message}>
                 <Input className={inputCls} {...register("engine_hours")} placeholder="HH:MM:SS" />
               </FieldRow>
 

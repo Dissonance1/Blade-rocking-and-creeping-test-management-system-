@@ -1,11 +1,12 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
-  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send, ArrowLeftRight,
+  RefreshCw, PackageSearch, Play, Save, FileSpreadsheet, Scale, ClipboardCheck, Send, ArrowLeftRight, RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { SlotAllocationIcon } from "@/components/common/CustomIcons";
+import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,7 +61,8 @@ function isPendingSendBackBatch(b: BatchSummary): boolean {
 function runStage1(
   eligibleBlades: BladeListItem[],
   unbalanceSlot: number | undefined,
-  unbalanceValue: number | undefined
+  unbalanceValue: number | undefined,
+  forceFourBladeAnchor: boolean = false
 ): LptrStage1Result | null {
   if (!unbalanceSlot || unbalanceValue == null) {
     toast.error("Record the empty rotor reading first");
@@ -70,7 +72,7 @@ function runStage1(
     toast.error(`Need at least ${LPTR_STAGE1_COUNT} eligible blades, found ${eligibleBlades.length}`);
     return null;
   }
-  return computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS);
+  return computeLptrStage1(eligibleBlades, unbalanceSlot, unbalanceValue, LPTR_TOTAL_SLOTS, LPTR_STAGE1_COUNT, forceFourBladeAnchor);
 }
 
 function swapStage1Preview(preview: LptrStage1Result | null, swapA: string, swapB: string): LptrStage1Result | null {
@@ -129,7 +131,10 @@ function determineTabForProgress(stage2Count: number, stage1Count: number, hasEm
 
 // ─── Shared: W1/W2 half-split allocation tables ─────────────────────────────
 
-const HALF_TABLE_HEADERS = ["Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)"];
+const HALF_TABLE_HEADERS = [
+  "Slot", "Blade Serial", "Melt No.", "Weight (g)", "Static Moment (g·cm)",
+  "Opposite Δ (g)", "Rotor Angle (°)",
+];
 
 function splitByHalf<T>(items: T[], slotOf: (item: T) => number, totalSlots: number = LPTR_TOTAL_SLOTS) {
   const half = totalSlots / 2;
@@ -138,12 +143,27 @@ function splitByHalf<T>(items: T[], slotOf: (item: T) => number, totalSlots: num
   return { half, w1, w2 };
 }
 
+/** Slot exactly opposite on the rotor — half the total slots away, wrapping around. */
+function oppositeSlotNumber(slot: number, totalSlots: number): number {
+  const half = totalSlots / 2;
+  return ((slot - 1 + half) % totalSlots) + 1;
+}
+
+/** Angular position of a slot around the 360° rotor, slot 1 = 0°. */
+function rotorAngleDegrees(slot: number, totalSlots: number): number {
+  return ((slot - 1) * 360) / totalSlots;
+}
+
 function HalfTable({
   title,
   rows,
+  totalSlots,
+  weightBySlot,
 }: {
   title: string;
   rows: { slot: number; serial: string; melt: string | null | undefined; weight: number | null | undefined; staticMoment: number | null | undefined }[];
+  totalSlots: number;
+  weightBySlot: Map<number, number | null | undefined>;
 }) {
   return (
     <div className="flex-1 min-w-0">
@@ -163,22 +183,33 @@ function HalfTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
-            {rows.map((r, idx) => (
-              <tr key={`${r.slot}-${r.serial}`} className={cn(
-                "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
-                idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
-              )}>
-                <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{r.slot}</td>
-                <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">{r.serial}</td>
-                <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">{r.melt ?? "—"}</td>
-                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                  {r.weight != null ? Number(r.weight).toFixed(1) : "—"}
-                </td>
-                <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
-                  {r.staticMoment != null ? Number(r.staticMoment).toFixed(2) : "—"}
-                </td>
-              </tr>
-            ))}
+            {rows.map((r, idx) => {
+              const oppositeWeight = weightBySlot.get(oppositeSlotNumber(r.slot, totalSlots));
+              const diff = r.weight != null && oppositeWeight != null ? Math.abs(Number(r.weight) - Number(oppositeWeight)) : null;
+              const angle = rotorAngleDegrees(r.slot, totalSlots);
+              return (
+                <tr key={`${r.slot}-${r.serial}`} className={cn(
+                  "transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30",
+                  idx % 2 === 0 ? "bg-white dark:bg-background" : "bg-slate-50/60 dark:bg-background"
+                )}>
+                  <td className="px-3 py-2.5 font-mono font-bold text-cyan-600 dark:text-cyan-400 text-sm">#{r.slot}</td>
+                  <td className="px-3 py-2.5 font-mono text-orange-500 dark:text-orange-400 text-xs font-semibold">{r.serial}</td>
+                  <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300 text-xs">{r.melt ?? "—"}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {r.weight != null ? Number(r.weight).toFixed(1) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {r.staticMoment != null ? Number(r.staticMoment).toFixed(2) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-700 dark:text-slate-200 text-xs">
+                    {diff != null ? diff.toFixed(2) : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-500 dark:text-slate-400 text-xs">
+                    {angle.toFixed(1)}°
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -195,10 +226,11 @@ function AllocationTable({ entries }: { entries: LptrAllocationEntry[] }) {
     weight: e.blade.weight_grams,
     staticMoment: e.blade.static_moment_gcm,
   });
+  const weightBySlot = new Map(entries.map((e) => [e.slot, e.blade.weight_grams]));
   return (
     <div className="flex flex-col lg:flex-row gap-4">
-      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
-      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
     </div>
   );
 }
@@ -214,10 +246,11 @@ function SavedSlotsTable({ rows }: { rows: SavedRow[] }) {
     weight: r.blade?.weight_grams,
     staticMoment: r.blade?.static_moment_gcm,
   });
+  const weightBySlot = new Map(rows.map((r) => [parseInt(r.slot.slot_number, 10) || 0, r.blade?.weight_grams]));
   return (
     <div className="flex flex-col lg:flex-row gap-4">
-      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} />
-      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} />
+      <HalfTable title={`W1 — Slots 1–${half}`} rows={w1.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
+      <HalfTable title={`W2 — Slots ${half + 1}–${half * 2}`} rows={w2.map(toRow)} totalSlots={half * 2} weightBySlot={weightBySlot} />
     </div>
   );
 }
@@ -247,18 +280,15 @@ function BatchSelectorCard({
             <Label className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1.5 block">
               Select Batch <span className="text-xs font-normal text-slate-400">(accepted batches only)</span>
             </Label>
-            <select
+            <WorkOrderCombobox
               value={selectedBatch}
-              onChange={(e) => onBatchChange(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-background text-slate-900 dark:text-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-            >
-              <option value="">— Select an accepted batch —</option>
-              {eligibleBatches.map((b) => (
-                <option key={b.work_order_number} value={b.work_order_number}>
-                  {b.work_order_number}{` · ${b.current_status_label}`}
-                </option>
-              ))}
-            </select>
+              onChange={onBatchChange}
+              options={eligibleBatches.map((b) => ({
+                value: b.work_order_number,
+                label: `${b.work_order_number} · ${b.current_status_label}`,
+              }))}
+              placeholder="— Select an accepted batch —"
+            />
             {eligibleBatches.length === 0 && (
               <p className="text-xs text-amber-500 mt-1.5">
                 No accepted batches found. Batches must be accepted by Assembly before slot assignment.
@@ -484,6 +514,8 @@ function Stage1TabContent({
   setSwapA1,
   swapB1,
   setSwapB1,
+  forceFourBladeAnchor,
+  setForceFourBladeAnchor,
 }: {
   stage1Slots: unknown[];
   stage1SavedRows: SavedRow[];
@@ -499,6 +531,8 @@ function Stage1TabContent({
   setSwapA1: (v: string) => void;
   swapB1: string;
   setSwapB1: (v: string) => void;
+  forceFourBladeAnchor: boolean;
+  setForceFourBladeAnchor: (v: boolean) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -521,6 +555,15 @@ function Stage1TabContent({
                 <p className="text-sm text-slate-500 dark:text-slate-400 text-center">
                   {eligibleBlades.length} of {blades.length} LPTR blades ready. Stage 1 requires exactly {LPTR_STAGE1_COUNT}.
                 </p>
+                <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceFourBladeAnchor}
+                    onChange={(e) => setForceFourBladeAnchor(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-orange-500"
+                  />
+                  Use 4-blade set making (normally only triggers automatically when the closest match is also the lightest blade left in the batch)
+                </label>
                 <Button onClick={onRunStage1} disabled={eligibleBlades.length < LPTR_STAGE1_COUNT} className="bg-orange-500 hover:bg-orange-400 text-white">
                   <Play className="w-4 h-4 mr-1.5" />Run Stage 1 Allocation
                 </Button>
@@ -536,6 +579,11 @@ function Stage1TabContent({
             <CardTitle className="text-base">
               Stage 1 Preview
               <span className="ml-2 text-xs font-normal text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-full">Not saved yet</span>
+              {stage1Preview.usedFourBladeAnchor && (
+                <span className="ml-2 text-xs font-normal text-orange-600 bg-orange-50 dark:bg-orange-900/20 px-2 py-0.5 rounded-full">
+                  4-blade anchor: slots {stage1Preview.anchorSlots.join(", ")}
+                </span>
+              )}
             </CardTitle>
             <div className="flex gap-2">
               <Button size="sm" onClick={onSaveStage1} disabled={isSavingStage1} className="bg-emerald-500 hover:bg-emerald-600 text-white">
@@ -546,7 +594,7 @@ function Stage1TabContent({
           </CardHeader>
           <CardContent className="pt-0 space-y-2">
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Target weight for the opposite pair: {stage1Preview.targetWeight.toFixed(2)} g
+              Target weight per opposite blade: {stage1Preview.targetWeight.toFixed(2)} g
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1">
@@ -797,6 +845,11 @@ export default function SlotAllocationPage() {
 
   const [stage1Preview, setStage1Preview] = useState<LptrStage1Result | null>(null);
   const [stage2Preview, setStage2Preview] = useState<LptrAllocationEntry[] | null>(null);
+  // Manual override: normally the 4-blade anchor fallback only kicks in
+  // automatically when the closest available blade is also the lightest
+  // blade left in the batch, but the operator can force it on for a run
+  // even when the normal 2-blade anchor would work.
+  const [forceFourBladeAnchor, setForceFourBladeAnchor] = useState(false);
 
   const [swapA1, setSwapA1] = useState("");
   const [swapB1, setSwapB1] = useState("");
@@ -862,19 +915,25 @@ export default function SlotAllocationPage() {
   }
 
   // ── Empty rotor ──────────────────────────────────────────────────────────
+  // Editing an already-saved reading must NOT bounce the user to the Stage 1
+  // tab — only the very first save (no prior reading) advances the guided
+  // flow. Otherwise a correction looks like it silently failed / got locked.
   const saveEmptyRotorMutation = useMutation({
     mutationFn: () => lptrService.saveEmptyRotorReading(selectedBatch, Number(unbalanceSlotInput), Number(unbalanceValueInput)),
     onSuccess: () => {
+      const wasFirstSave = !emptyRotor;
       qc.invalidateQueries({ queryKey: ["lptr-empty-rotor", selectedBatch] });
-      toast.success("Empty rotor reading saved");
-      setActiveTab("stage1");
+      toast.success(wasFirstSave ? "Empty rotor reading saved" : "Empty rotor reading updated");
+      setUnbalanceSlotInput("");
+      setUnbalanceValueInput("");
+      if (wasFirstSave) setActiveTab("stage1");
     },
     onError: () => toast.error("Failed to save empty rotor reading"),
   });
 
   // ── Stage 1 ──────────────────────────────────────────────────────────────
   function handleRunStage1() {
-    const result = runStage1(eligibleBlades, unbalanceSlot, unbalanceValue);
+    const result = runStage1(eligibleBlades, unbalanceSlot, unbalanceValue, forceFourBladeAnchor);
     if (result) setStage1Preview(result);
   }
 
@@ -969,6 +1028,33 @@ export default function SlotAllocationPage() {
     },
   });
 
+  // Undoes a saved slot allocation (including one Assembly has already
+  // confirmed balanced) so Stage 1 can be redone from scratch — e.g. after
+  // fixing a bug in the balancing algorithm. Blocked server-side once the
+  // work order has been sent back to OH.
+  const resetSlotsMutation = useMutation({
+    mutationFn: (workOrderNumber: string) => batchService.resetLptrSlots(workOrderNumber),
+    onSuccess: (res) => {
+      refresh();
+      toast.success(res.message ?? "LPTR slot allocation reset");
+      setActiveTab("empty-rotor");
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to reset slot allocation";
+      toast.error(msg);
+    },
+  });
+
+  function handleResetSlots() {
+    if (!selectedBatch) return;
+    if (!window.confirm(
+      `Reset slot allocation for ${selectedBatch}? This clears all saved slot assignments (both stages) and returns the blades to Assembly Received so Stage 1 can be run again. This cannot be undone once you save a new allocation.`
+    )) {
+      return;
+    }
+    resetSlotsMutation.mutate(selectedBatch);
+  }
+
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
     setExporting(true);
@@ -988,6 +1074,7 @@ export default function SlotAllocationPage() {
     setStage2Preview(null);
     setUnbalanceSlotInput("");
     setUnbalanceValueInput("");
+    setForceFourBladeAnchor(false);
   }
 
   const stage1SavedRows: SavedRow[] = useMemo(
@@ -1006,8 +1093,17 @@ export default function SlotAllocationPage() {
   // an already-fully-slotted batch should land straight on Balancing instead
   // of making the user click back through Empty Rotor → Stage 1 → Stage 2
   // every time. Mirrors OHSlotAllocationPage's equivalent behavior for HPTR.
+  //
+  // Only auto-route ONCE per work order selection (tracked via the ref) —
+  // otherwise a background refetch of emptyRotor/slots while the user is
+  // mid-edit on an earlier tab (e.g. correcting the Empty Rotor reading)
+  // would snap them straight back out to Stage 1/2, making the field look
+  // locked even though the save itself went through fine.
+  const autoRoutedBatchRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedBatch || isLoading || emptyRotorLoading) return;
+    if (autoRoutedBatchRef.current === selectedBatch) return;
+    autoRoutedBatchRef.current = selectedBatch;
     const tab = determineTabForProgress(stage2Slots.length, stage1Slots.length, !!emptyRotor);
     if (tab) setActiveTab(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1027,9 +1123,27 @@ export default function SlotAllocationPage() {
             </p>
           </div>
           {selectedBatch && (
-            <Button variant="outline" size="sm" onClick={refresh} className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
-              <RefreshCw className="w-4 h-4 mr-1.5" />Refresh
-            </Button>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {stage1Slots.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleResetSlots}
+                  disabled={resetSlotsMutation.isPending}
+                  className="w-full sm:w-auto justify-center border-red-300 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950"
+                >
+                  {resetSlotsMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4 mr-1.5" />
+                  )}
+                  Reset Slot Allocation
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={refresh} className="w-full sm:w-auto justify-center border-slate-300 dark:border-slate-600">
+                <RefreshCw className="w-4 h-4 mr-1.5" />Refresh
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -1112,6 +1226,8 @@ export default function SlotAllocationPage() {
                 setSwapA1={setSwapA1}
                 swapB1={swapB1}
                 setSwapB1={setSwapB1}
+                forceFourBladeAnchor={forceFourBladeAnchor}
+                setForceFourBladeAnchor={setForceFourBladeAnchor}
               />
             </TabsContent>
 

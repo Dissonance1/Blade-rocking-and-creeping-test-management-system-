@@ -36,8 +36,8 @@ class WorkOrder(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         SAEnum(BladeType, name="bladetype", create_type=False),
         nullable=False,
     )
-    engine_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    engine_hours: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
     component_hours: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     is_entry_complete: Mapped[bool] = mapped_column(

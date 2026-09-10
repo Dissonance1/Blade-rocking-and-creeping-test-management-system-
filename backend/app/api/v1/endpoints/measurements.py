@@ -122,6 +122,7 @@ async def add_measurement(
     measurement = Measurement(
         blade_id=blade_id,
         measurement_type=body.measurement_type,
+        raw_weight_kg=body.raw_weight_kg,
         weight_grams=body.weight_grams,
         static_moment_gcm=body.static_moment_gcm,
         rocking_value=body.rocking_value,

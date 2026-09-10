@@ -1,0 +1,141 @@
+Global:
+  model_name: cyrillic_PP-OCRv3_mobile_rec_char_finetune
+  debug: false
+  use_gpu: false  # same CPU-only constraint as cyrillic_rec_finetune.yml
+  epoch_num: 20   # far fewer than the 50-epoch full-string run: this dataset
+                  # is smaller (565 train rows vs 471) and continues from an
+                  # already-converged checkpoint rather than starting fresh,
+                  # so it needs far less to adapt -- and the letter-crops were
+                  # visually confirmed to still have a residual ~15-20%
+                  # blank/glare noise rate (see build_char_dataset.py's
+                  # module docstring), so more epochs would just mean more
+                  # exposure to that noise.
+  log_smooth_window: 20
+  print_batch_step: 10
+  save_model_dir: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_char_finetune
+  save_epoch_step: 2
+  eval_batch_step: [0, 70]  # ~70 steps/epoch at 565 rows / batch 8 -- eval every epoch
+  cal_metric_during_train: true
+  # Continues from the ALREADY-DEPLOYED 50-epoch full-string fine-tune
+  # (output/cyrillic_rec_finetune/best_accuracy == what's currently in
+  # app/ocr/models/ppocrv4/rec_ru/), not the original base checkpoint --
+  # this round is a further incremental adaptation for letter coverage, not
+  # a from-scratch redo of the melt-number fine-tune.
+  pretrained_model: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_rec_finetune/best_accuracy
+  checkpoints: null
+  save_inference_dir: null
+  use_visualdl: false
+  infer_img: null
+  character_dict_path: /home/amit/src/blead_rocking/backend/finetune/PaddleOCR/ppocr/utils/dict/cyrillic_dict.txt
+  max_text_length: &max_text_length 25
+  infer_mode: false
+  use_space_char: true
+  distributed: false
+  export_with_pir: false  # see cyrillic_rec_finetune.yml -- production's
+                          # paddlepaddle==2.6.2 runtime needs the legacy
+                          # inference.pdmodel export format, not PIR.
+  save_res_path: /home/amit/src/blead_rocking/backend/finetune/output/cyrillic_char_finetune/predicts.txt
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.00005  # half of the full-string run's 1e-4 -- this
+                            # round starts from an already-converged
+                            # checkpoint and trains on a smaller, noisier
+                            # dataset, so a gentler nudge is safer against
+                            # both overfitting and forgetting the 6 letters
+                            # the previous round already learned well.
+    warmup_epoch: 2
+  regularizer:
+    name: L2
+    factor: 3.0e-05
+
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+  Transform: null
+  Backbone:
+    name: MobileNetV1Enhance
+    scale: 0.5
+    last_conv_stride: [1, 2]
+    last_pool_type: avg
+    last_pool_kernel_size: [2, 2]
+  Head:
+    name: MultiHead
+    head_list:
+      - CTCHead:
+          Neck:
+            name: svtr
+            dims: 64
+            depth: 2
+            hidden_dims: 120
+            use_guide: true
+          Head:
+            fc_decay: 0.00001
+      - SARHead:
+          enc_dim: 512
+          max_text_length: *max_text_length
+
+Loss:
+  name: MultiLoss
+  loss_config_list:
+    - CTCLoss: null
+    - SARLoss: null
+
+PostProcess:
+  name: CTCLabelDecode
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  ignore_space: false
+
+Train:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data_char
+    ext_op_transform_idx: 1
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data_char/char_train_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 2
+        image_shape: [48, 320, 3]
+    - RecAug: null
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: true
+    batch_size_per_card: 8
+    drop_last: true
+    num_workers: 0
+Eval:
+  dataset:
+    name: SimpleDataSet
+    data_dir: /home/amit/src/blead_rocking/backend/finetune/train_data_char
+    label_file_list:
+    - /home/amit/src/blead_rocking/backend/finetune/train_data_char/char_val_list.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - MultiLabelEncode: null
+    - RecResizeImg:
+        image_shape: [3, 48, 320]
+    - KeepKeys:
+        keep_keys: [image, label_ctc, label_sar, length, valid_ratio]
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 8
+    num_workers: 0

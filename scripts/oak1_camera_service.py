@@ -26,6 +26,14 @@ Endpoints:
     GET /stream    -> continuous multipart/x-mixed-replace MJPEG stream of the
                       small preview feed, for the live viewfinder
 
+    GET  /save-folder         -> {"path": str|null, "name": str|null} — local OCR-capture mirror folder
+    POST /save-folder/choose  -> opens a native OS folder-picker dialog on this PC's desktop,
+                                  persists the chosen path (400 if the operator cancels)
+    DELETE /save-folder       -> clears the configured folder
+    POST /save-capture        -> multipart form {photo: file, meta: json string} -> writes
+                                  <work_order>_<field>_<timestamp>.jpg + .json into the folder
+                                  (409 if no folder configured yet)
+
 Requirements (install once, in its own venv — kept separate from
 backend/requirements.txt, see scripts/oak1_requirements.txt):
     pip install -r oak1_requirements.txt
@@ -43,15 +51,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import re
 import sys
 import threading
 import time
+import tkinter as tk
 from pathlib import Path
+from tkinter import filedialog
 
 import cv2
 import depthai as dai
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
@@ -73,8 +85,8 @@ DEFAULT_PORT = 8089
 DEFAULT_ORIGINS = [
     "http://localhost",
     "http://localhost:3000",  # Vite dev (see frontend/vite.config.ts server.port)
-    "http://10.10.10.2",      # Assembly PC LAN IP (nginx, HTTP-only deployment)
-    "http://192.168.88.22",   # Assembly PC LAN IP (alternate NIC)
+    "http://172.146.5.98",    # OH PC LAN IP — every station's browser loads the SPA from here
+    "http://bladerocking-1-", # OH PC's Windows hostname (NetBIOS), same origin as above
 ]
 SUPPORTED_DEPTHAI_PREFIXES = ("2.31.", "2.32.")
 CAMERA_FPS = 30
@@ -85,15 +97,56 @@ STILL_WIDTH = 1920
 STILL_HEIGHT = 1080
 STILL_JPEG_QUALITY = 92
 FIXED_FOCUS_LENS_POSITION = 105  # 0-255, higher = closer; tuned for ~10-15cm scan distance
-# The OAK-1's lens is fixed-focal-length — there's no optical zoom, so this
-# crops the center of the sensor frame and resizes back up. >1.0 trades FOV
-# for a bigger, more filled-in view of whatever's centered under the lens
-# (the blade marking, in normal use), at the usual digital-zoom cost of a
-# softer, more upscaled image the further past 1.0 it goes.
-DIGITAL_ZOOM = 2.6
+# Every blade sits at the same fixed distance under the lens regardless of
+# type, so focus is the one constant above — never per-blade-type.
+#
+# The OAK-1's lens is fixed-focal-length — there's no optical zoom, so digital
+# zoom (center-crop + resize) is the only way to fill more of the frame with
+# the marking under the lens. HPTR and LPTR blades differ in size (not
+# distance) and in where their melt-number stamp sits, so each blade type
+# gets its own zoom level and its own pan (crop center, as fractional (x, y)
+# of the frame — (0.5, 0.5) is dead center; pan lets the crop follow wherever
+# the marking actually sits instead of always the frame's exact middle).
+#
+# Values below are copied from settings.json in the field-tuning tool used to
+# build the OCR training dataset (scripts/../blade_rocking_images_for_ocr) —
+# they were dialed in live against real LPTR/HPTR blades, not guessed.
+# Adjust here if a physical remeasurement says otherwise.
+BLADE_TYPES = ("LPTR", "HPTR")
+DEFAULT_BLADE_TYPE = "LPTR"
+ZOOM_BY_BLADE_TYPE: dict[str, float] = {"LPTR": 3.1, "HPTR": 3.3}
+PAN_BY_BLADE_TYPE: dict[str, tuple[float, float]] = {
+    "LPTR": (0.481994459833795, 0.5304821867321867),
+    "HPTR": (0.47368421052631576, 0.5796222358722358),
+}
 RETRY_INTERVAL_S = 5
 STREAM_FPS = 24
 FPS_LOG_INTERVAL_S = 10
+
+# Shared "which blade type is being scanned right now" state — set from the
+# ?blade_type= query param on /snapshot or /stream (see create_app below) and
+# read by the camera worker's reader threads on every frame. A single shared
+# value (not per-connection) is correct here: one physical camera serves one
+# operator working one work order — i.e. one blade type — at a time.
+_blade_type_lock = threading.Lock()
+_current_blade_type = DEFAULT_BLADE_TYPE
+
+
+def set_current_blade_type(blade_type: str | None) -> None:
+    global _current_blade_type  # noqa: PLW0603
+    if blade_type in BLADE_TYPES:
+        with _blade_type_lock:
+            _current_blade_type = blade_type
+
+
+def current_zoom() -> float:
+    with _blade_type_lock:
+        return ZOOM_BY_BLADE_TYPE[_current_blade_type]
+
+
+def current_pan() -> tuple[float, float]:
+    with _blade_type_lock:
+        return PAN_BY_BLADE_TYPE[_current_blade_type]
 
 
 # ─── Camera worker ──────────────────────────────────────────────────────────────
@@ -149,15 +202,20 @@ class Oak1CameraWorker:
         return pipeline
 
     @staticmethod
-    def _apply_digital_zoom(frame):
-        """Center-crop by ``DIGITAL_ZOOM`` and resize back to the original
-        frame size — the fixed lens has no optical zoom, so this is the only
-        way to fill more of the frame with whatever's centered under it."""
-        if DIGITAL_ZOOM <= 1.0:
+    def _apply_digital_zoom(frame, zoom: float, pan: tuple[float, float]):
+        """Crop by ``zoom`` around ``pan`` (fractional x, y — (0.5, 0.5) is
+        the frame center) and resize back to the original frame size. The
+        fixed lens has no optical zoom, so this crop+resize is the only way
+        to fill more of the frame with the marking under the lens, and
+        ``pan`` is what lets that crop be centered wherever the marking
+        actually sits for this blade type instead of always dead center."""
+        if zoom <= 1.0:
             return frame
         h, w = frame.shape[:2]
-        crop_w, crop_h = int(w / DIGITAL_ZOOM), int(h / DIGITAL_ZOOM)
-        x0, y0 = (w - crop_w) // 2, (h - crop_h) // 2
+        crop_w, crop_h = int(w / zoom), int(h / zoom)
+        cx, cy = int(pan[0] * w), int(pan[1] * h)
+        x0 = max(0, min(w - crop_w, cx - crop_w // 2))
+        y0 = max(0, min(h - crop_h, cy - crop_h // 2))
         cropped = frame[y0 : y0 + crop_h, x0 : x0 + crop_w]
         return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
 
@@ -165,7 +223,7 @@ class Oak1CameraWorker:
         q = device.getOutputQueue(name="preview", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()  # blocks until the next frame — no busy-poll
-            frame = self._apply_digital_zoom(in_frame.getCvFrame())
+            frame = self._apply_digital_zoom(in_frame.getCvFrame(), current_zoom(), current_pan())
             ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY])
             if ok:
                 with self._lock:
@@ -176,7 +234,7 @@ class Oak1CameraWorker:
         q = device.getOutputQueue(name="still", maxSize=1, blocking=False)
         while not self._stopped:
             in_frame = q.get()
-            frame = self._apply_digital_zoom(in_frame.getCvFrame())
+            frame = self._apply_digital_zoom(in_frame.getCvFrame(), current_zoom(), current_pan())
             with self._lock:
                 self._still_frame = frame
                 self._still_fps_count += 1
@@ -272,6 +330,73 @@ def _mjpeg_generator(worker: "Oak1CameraWorker"):
         time.sleep(1 / STREAM_FPS)
 
 
+# ─── Local save folder ──────────────────────────────────────────────────────────
+# Mirrors each OCR capture (photo + detection JSON) to a folder on this PC's own
+# disk, chosen once via a native OS dialog. Deliberately NOT the browser's File
+# System Access API: that requires the write-permission grant to be re-approved
+# by the operator after every page reload, which is what operators were having
+# to click through constantly. This dialog and every write below run inside
+# this already-running local process instead, so there's no browser permission
+# model involved at all — once chosen, it stays chosen.
+#
+# The backend upload (ocrService.scanMelt + attachScan) remains the actual
+# source of truth for the OCR ground-truth dataset; this is only a convenience
+# copy so operators don't have to dig through the Docker volume to find a scan.
+
+_SAVE_FOLDER_CONFIG_PATH = Path(__file__).resolve().parent / "oak1_save_folder.json"
+_SANITIZE_RE = re.compile(r'[\\/:*?"<>|]')
+
+_save_folder_lock = threading.Lock()
+_save_folder_path: str | None = None
+
+
+def _load_save_folder() -> str | None:
+    if not _SAVE_FOLDER_CONFIG_PATH.exists():
+        return None
+    try:
+        data = json.loads(_SAVE_FOLDER_CONFIG_PATH.read_text(encoding="utf-8"))
+        path = data.get("path")
+    except Exception:  # noqa: BLE001 — corrupt/missing config is just "not set"
+        return None
+    return path if path and Path(path).is_dir() else None
+
+
+def get_save_folder() -> str | None:
+    with _save_folder_lock:
+        return _save_folder_path
+
+
+def set_save_folder(path: str | None) -> None:
+    global _save_folder_path  # noqa: PLW0603
+    with _save_folder_lock:
+        _save_folder_path = path
+    _SAVE_FOLDER_CONFIG_PATH.write_text(json.dumps({"path": path}), encoding="utf-8")
+
+
+_save_folder_path = _load_save_folder()
+
+
+def _sanitize_segment(s: str) -> str:
+    return _SANITIZE_RE.sub("-", s).strip()
+
+
+def _choose_save_folder_dialog() -> str | None:
+    """Blocks on a native folder-picker dialog on this PC's desktop.
+
+    Runs its own throwaway Tk root rather than reusing one across calls —
+    this is called rarely (once per operator preference change), so the
+    ~100ms Tk init cost isn't worth keeping a hidden root alive between calls.
+    """
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        chosen = filedialog.askdirectory(title="Choose folder for OCR photo captures")
+    finally:
+        root.destroy()
+    return chosen or None
+
+
 # ─── Flask app ──────────────────────────────────────────────────────────────────
 
 def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
@@ -284,6 +409,7 @@ def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
 
     @app.get("/snapshot")
     def snapshot() -> Response:
+        set_current_blade_type(request.args.get("blade_type"))
         jpeg = worker.get_still_jpeg()
         if jpeg is None:
             return jsonify({"error": "OAK-1 not connected or no frame captured yet"}), 503
@@ -291,9 +417,53 @@ def create_app(worker: Oak1CameraWorker, frontend_origins: list[str]) -> Flask:
 
     @app.get("/stream")
     def stream() -> Response:
+        set_current_blade_type(request.args.get("blade_type"))
         return Response(
             _mjpeg_generator(worker), mimetype="multipart/x-mixed-replace; boundary=frame"
         )
+
+    @app.get("/save-folder")
+    def get_save_folder_route() -> Response:
+        path = get_save_folder()
+        return jsonify({"path": path, "name": Path(path).name if path else None})
+
+    @app.post("/save-folder/choose")
+    def choose_save_folder_route() -> Response:
+        chosen = _choose_save_folder_dialog()
+        if not chosen:
+            return jsonify({"error": "cancelled"}), 400
+        set_save_folder(chosen)
+        log.info("[save ] folder set to %s", chosen)
+        return jsonify({"path": chosen, "name": Path(chosen).name})
+
+    @app.delete("/save-folder")
+    def forget_save_folder_route() -> Response:
+        set_save_folder(None)
+        log.info("[save ] folder cleared")
+        return jsonify({"ok": True})
+
+    @app.post("/save-capture")
+    def save_capture_route() -> Response:
+        folder = get_save_folder()
+        if not folder or not Path(folder).is_dir():
+            return jsonify({"error": "no save folder configured"}), 409
+
+        photo = request.files.get("photo")
+        meta_raw = request.form.get("meta")
+        if photo is None or meta_raw is None:
+            return jsonify({"error": "missing photo or meta"}), 400
+        meta = json.loads(meta_raw)
+
+        ts = time.strftime("%Y-%m-%dT%H-%M-%S")
+        base_name = _sanitize_segment(f"{meta.get('work_order_number', '')}_{meta.get('field', '')}_{ts}")
+
+        folder_path = Path(folder)
+        (folder_path / f"{base_name}.jpg").write_bytes(photo.read())
+        (folder_path / f"{base_name}.json").write_text(
+            json.dumps({**meta, "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2),
+            encoding="utf-8",
+        )
+        return jsonify({"ok": True})
 
     return app
 
@@ -344,7 +514,10 @@ Examples:
 
     app = create_app(worker, frontend_origins)
     log.info("[http ] serving on http://localhost:%d  (CORS: %s)", args.port, frontend_origins)
-    log.info("[http ] GET /health    GET /snapshot    GET /stream")
+    log.info(
+        "[http ] GET /health    GET /snapshot    GET /stream    "
+        "GET /save-folder    POST /save-folder/choose    DELETE /save-folder    POST /save-capture"
+    )
     try:
         app.run(host="0.0.0.0", port=args.port, threaded=True)
     except KeyboardInterrupt:

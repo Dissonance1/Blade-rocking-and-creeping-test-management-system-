@@ -402,6 +402,10 @@ export default function BladeDetailPage() {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                           <InfoField
+                            label="Weighing Machine Reading"
+                            value={m.raw_weight_kg != null ? `${m.raw_weight_kg} kg` : null}
+                          />
+                          <InfoField
                             label="Weight"
                             value={m.weight_grams != null ? `${m.weight_grams} g` : null}
                           />

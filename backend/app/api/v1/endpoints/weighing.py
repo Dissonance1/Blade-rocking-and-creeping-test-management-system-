@@ -21,17 +21,16 @@ fans out to every worker's listeners regardless of which one received the
 push.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from app.core.security import decode_token
+from app.middleware.rate_limit import rate_limit_hardware_bridge
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -46,7 +45,8 @@ class WeightReading(BaseModel):
 
 
 @router.post("/push", status_code=200)
-async def push_weight(body: WeightReading, request: Request) -> dict[str, Any]:
+@rate_limit_hardware_bridge()
+async def push_weight(body: WeightReading, request: Request, response: Response) -> dict[str, Any]:
     """
     Receive a weight reading from the local Windows bridge script and
     publish it for every connected WebSocket client (across all workers)
@@ -54,6 +54,10 @@ async def push_weight(body: WeightReading, request: Request) -> dict[str, Any]:
 
     No auth required — this endpoint only accepts connections from localhost
     (enforced at the nginx layer; /api/v1/weighing/push is not exposed to LAN).
+
+    `response: Response` is required by the @rate_limit_hardware_bridge
+    decorator — slowapi injects rate-limit headers into it since this
+    endpoint returns a plain dict rather than a Response object.
     """
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is None:

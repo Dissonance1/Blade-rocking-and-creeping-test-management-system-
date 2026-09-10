@@ -34,6 +34,12 @@ class MeasurementCreate(BaseSchema):
         ..., description="Stage in the workflow this measurement corresponds to"
     )
 
+    raw_weight_kg: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Raw weighing-machine reading, before the weight_grams conversion factor",
+        examples=[286.79],
+    )
     weight_grams: Decimal | None = Field(
         default=None,
         gt=0,
@@ -134,6 +140,7 @@ class MeasurementResponse(BaseSchema):
     blade_id: uuid.UUID
     measurement_type: MeasurementType
 
+    raw_weight_kg: Decimal | None = None
     weight_grams: Decimal | None = None
     static_moment_gcm: Decimal | None = None
     rocking_value: Decimal | None = None

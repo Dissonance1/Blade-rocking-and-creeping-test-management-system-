@@ -47,8 +47,22 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 _MODELS_DIR = Path(__file__).resolve().parent / "models" / "ppocrv4"
 
-_SERIAL_RE = re.compile(r"[A-Z]{2,4}[-\s]?\d{4}[-\s]?\d{3,6}", re.IGNORECASE)
-_MELT_RE = re.compile(r"[A-Z]{2,5}[-\s]?[A-Z]?\d{3,6}", re.IGNORECASE)
+# Melt/heat numbers are laser-engraved as <2-4 digits><1 letter><2-4 digits>
+# — a single Cyrillic or Latin letter embedded mid-run, digits everywhere
+# else (e.g. "14И3092", "3318Г153") — never letters clustered up front like a
+# normal alphanumeric serial. Verified against 559 field-labeled ground-truth
+# melt numbers collected via the OCR training-dataset tooling: total length
+# 6-9, LPTR blades show 2-digit+letter+3/4-digit, HPTR blades show
+# 4-digit+letter+2/3/4-digit. The previous `[A-Z]{2,5}...\d{3,6}` shape
+# (letters first, then digits) never matched a real melt number, so
+# extract_melt_number always fell through to the no-match fallback path.
+_MELT_RE = re.compile(r"\d{2,4}[A-ZА-ЯЁ]\d{2,4}", re.IGNORECASE)
+# Blade serial numbers use the same engraved-stamp convention as melt
+# numbers (see above) as far as this provider has observed, but there is no
+# field-labeled ground-truth dataset for serial scans specifically to verify
+# against — this mirrors _MELT_RE on the same reasoning, not on direct
+# evidence for this field.
+_SERIAL_RE = re.compile(r"\d{2,4}[A-ZА-ЯЁ]\d{2,4}", re.IGNORECASE)
 
 # Cyrillic letters that have no Latin look-alike — a match here means the
 # character can only be Cyrillic. Excludes В/е/с/у (visually identical to
@@ -77,6 +91,114 @@ _LINE_CROP_MAX_UPSCALE = 6.0
 # highest-confidence read wins, rather than trusting one fixed fraction.
 _LINE_CROP_PAD_FRACS = (0.0, 0.15, 0.3)
 
+# ---------------------------------------------------------------------------
+# Grammar-aware correction for melt/serial numbers
+# ---------------------------------------------------------------------------
+# Anchors the full string (not just a substring, unlike _MELT_RE/_SERIAL_RE
+# which `.search()` a possibly-noisier raw fusion) — used by
+# _try_correct_to_shape below to check a single candidate line in isolation.
+_SHAPE_RE = re.compile(r"^\d{2,4}[A-ZА-ЯЁ]\d{2,4}$", re.IGNORECASE)
+
+# Empirically observed misreads on this engraved dot-punch font, derived by
+# diffing this provider's output against 559 field-labeled ground-truth
+# melt numbers (character -> the character it's most often actually masking,
+# ordered by observed frequency). The font uses European/Russian engraving
+# conventions this recognizer's training data doesn't cover — e.g. a
+# cross-barred "7" reads as "1" and vice versa, an open-top "4" reads as
+# "9"/"1"/"0", and an embossed "B" (the single most common letter on these
+# stamps) is routinely misread as "3"/"8"/"5"/"0". "/" and "*" are included
+# because a stray diagonal stroke (most often a real "1") recognizes as one
+# or the other on this font. "A" -> "Л" is a font quirk, not a lighting/
+# resolution problem: this stamp draws "Л" as a plain peaked stroke (∧)
+# rather than the standard printed Cyrillic form, which is exactly what "A"
+# looks like without its crossbar — rec_ru's training data doesn't cover
+# that stylised glyph, so it's read as the visually nearer Latin "A" every
+# time rather than being a fuzzy per-instance misread. Used only as a
+# last-resort, single-substitution repair when a read is otherwise one
+# character away from the expected digits-letter-digits shape — never
+# applied blindly.
+_LIKELY_MISREAD_OF: dict[str, list[str]] = {
+    "7": ["1", "4", "Г"],
+    "3": ["B", "5"],
+    "4": ["1", "A"],
+    "1": ["7", "Г", "И", "H"],
+    "9": ["4", "1"],
+    "8": ["B","3"],
+    "0": ["6", "9", "1", "B", "4", "8"],
+    "5": ["Г", "3"],
+    "6": ["Б"],
+    "H": ["4"],
+    "A": ["1", "Л"],
+}
+
+
+# Cyrillic capitals that are pixel-identical to a Latin letter in this font
+# (superset of _PURE_CYRILLIC's exclusions, since here we WANT to catch the
+# ambiguous ones). Melt/serial numbers are stamped on Russian-manufactured
+# nameplates, so the single embedded letter is always meant to be Cyrillic —
+# but whichever engine's charset happens to win that character slot can just
+# as easily emit the Latin code point, and ground truth itself has the same
+# problem from the label side: comparing the two labeling batches on the
+# 952-image pool shows train_data (labeled first) typed these as Latin
+# (e.g. "B": 144 vs "В": 1) while train_data_ocr_scans (labeled later, via
+# label.html's dedicated Cyrillic input) typed the same glyph as Cyrillic
+# ("В": 65 vs "B": 4) — confirmed with the user: labelers have an English
+# keyboard, so an ambiguous letter sometimes gets typed as its Latin
+# lookalike out of habit, not because the real letter varies. Not a
+# recognition problem at all, so no amount of retraining fixes it — only
+# canonicalizing the single letter post-hoc does.
+_LATIN_TO_CYRILLIC_HOMOGLYPH: dict[str, str] = {
+    "A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
+    "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х",
+}
+
+
+def _normalize_letter_script(value: str) -> str:
+    """Canonicalizes the single embedded letter of an already shape-matching
+    melt/serial number to Cyrillic (see ``_LATIN_TO_CYRILLIC_HOMOGLYPH``).
+
+    Only touches values that already match the digits-letter-digits grammar
+    — this is deliberately narrow (the ambiguity only applies to that one
+    known letter position), not a blanket Latin-to-Cyrillic pass over
+    arbitrary text.
+    """
+    if not _SHAPE_RE.match(value):
+        return value
+    for i, ch in enumerate(value):
+        cyrillic = _LATIN_TO_CYRILLIC_HOMOGLYPH.get(ch)
+        if cyrillic:
+            return value[:i] + cyrillic + value[i + 1 :]
+    return value
+
+
+def _try_correct_to_shape(text: str) -> str | None:
+    """Try a single confusion-guided substitution that makes ``text`` match
+    the expected digits-letter-digits grammar (``_SHAPE_RE``).
+
+    Returns the corrected string, or ``None`` if no single substitution from
+    the empirically observed confusion set achieves a match — deliberately
+    conservative: this nudges an already-close read into shape, it does not
+    invent an answer out of unrelated junk.
+    """
+    if _SHAPE_RE.match(text):
+        return text
+    for i, ch in enumerate(text):
+        for candidate in _LIKELY_MISREAD_OF.get(ch, []):
+            # Never cross digit<->letter here: if no candidate line detected
+            # any letter at all, the grammar's required letter would have to
+            # be fabricated out of a misread digit to force a shape match —
+            # e.g. "143092" (no letter anywhere) "fixed" into "14B092" by
+            # turning a real "3" into an invented "B" that was never actually
+            # read. Restricting to same-class substitutions (digit<->digit,
+            # letter<->letter) only ever corrects a character that's already
+            # the right *kind*, never invents the one the grammar needs.
+            if ch.isdigit() != candidate.isdigit():
+                continue
+            fixed = text[:i] + candidate + text[i + 1 :]
+            if _SHAPE_RE.match(fixed):
+                return fixed
+    return None
+
 
 class PaddleOCRProvider(OCRProvider):
     """
@@ -98,10 +220,50 @@ class PaddleOCRProvider(OCRProvider):
     # Engine init
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _disable_crashing_ir_pass() -> None:
+        """
+        Work around a PaddlePaddle 2.6.2 crash: SelfAttentionFusePass — one
+        of the IR graph-fusion passes run during predictor creation — hits a
+        compiled-in AVX-512 code path that doesn't exist on 12th/13th-gen
+        Intel consumer CPUs (Alder Lake/Raptor Lake fuse AVX-512 off in
+        silicon), crashing the whole process with SIGILL the instant any
+        PaddleOCR engine is built.
+
+        The public lever for this — ``PaddleOCR(ir_optim=False)`` — does
+        nothing: paddleocr's own predictor builder
+        (``tools/infer/utility.py::create_predictor``) hardcodes
+        ``config.switch_ir_optim(True)`` regardless of that kwarg. But the
+        same function also calls ``config.delete_pass(...)`` for a couple of
+        other passes right before that line, proving pass deletion is a live
+        API on the Config object right up until the predictor is actually
+        built. So instead of trying to turn IR optimization off, we hook
+        ``Config.switch_ir_optim`` — which paddleocr always calls just
+        before ``inference.create_predictor(config)`` — to also delete the
+        one crashing pass at that point. This drops a single graph-fusion
+        rewrite (fusion passes are speed optimizations, not behavior
+        changes); it does not touch model weights, so the fine-tuned
+        det/rec_en/rec_ru models load and score identically.
+        """
+        import paddle.inference as pi
+
+        if getattr(pi.Config, "_blade_rocking_avx512_patch", False):
+            return
+        original_switch_ir_optim = pi.Config.switch_ir_optim
+
+        def patched_switch_ir_optim(self: Any, *args: Any, **kwargs: Any) -> Any:
+            result = original_switch_ir_optim(self, *args, **kwargs)
+            self.delete_pass("self_attention_fuse_pass")
+            return result
+
+        pi.Config.switch_ir_optim = patched_switch_ir_optim
+        pi.Config._blade_rocking_avx512_patch = True
+
     @classmethod
     def _get_engines(cls) -> tuple[Any, Any]:
         """Lazily create the shared English + Cyrillic PaddleOCR engines."""
         if cls._ocr_en is None or cls._ocr_ru is None:
+            cls._disable_crashing_ir_pass()
             from paddleocr import PaddleOCR  # type: ignore[import]
 
             common: dict[str, Any] = {
@@ -334,31 +496,65 @@ class PaddleOCRProvider(OCRProvider):
 
         if not c_en and not c_ru:
             return ""
-        if c_en in _INDUSTRIAL_SYMBOLS:
-            return c_en
         # `c_ru` is "" whenever the Cyrillic read is shorter than the English
         # read at this index (the common case, since the Cyrillic engine
         # garbles digit/Latin strings into a short garbage token) — and in
         # Python `"" in any_string` is always True, so without the `c_ru and`
         # guard this branch silently deleted every trailing English character
         # instead of falling through to keep it.
+        #
+        # This must come before the industrial-symbols check below: those
+        # glyphs have no Latin lookalike by construction, so a genuine
+        # pure-Cyrillic read is a stronger signal than the English engine
+        # guessing a digit at the same slot. Checking industrial-symbols
+        # first (the previous order) let an English digit hallucination
+        # silently overrule a correctly-read Cyrillic letter — e.g. a real
+        # "Г" fused away because the English engine misread that same glyph
+        # as "1".
         if c_ru and c_ru in _PURE_CYRILLIC:
             return c_ru
+        # Mirrors the `c_ru and` guard above: `c_en` is "" whenever the
+        # English read is shorter than the Cyrillic one at this index (the
+        # English engine frequently omits a Cyrillic letter it can't
+        # represent instead of guessing a Latin substitute, so its string
+        # ends up shorter). Without the `c_en and` guard, `"" in
+        # _INDUSTRIAL_SYMBOLS` is trivially True in Python, so this branch
+        # silently discarded a correctly-read trailing Cyrillic digit
+        # instead of falling through to keep it.
+        if c_en and c_en in _INDUSTRIAL_SYMBOLS:
+            return c_en
         if re.match(r"[A-Z]", c_en):
             return c_en
         return c_ru if c_ru else c_en
 
     @classmethod
     def _fuse_chars(cls, text_en: str, text_ru: str) -> str:
+        # Per-index fusion below assumes text_en and text_ru describe the
+        # same character sequence one-to-one. That assumption breaks when
+        # the English engine omits a Cyrillic letter it can't represent
+        # instead of guessing a Latin substitute (common — verified against
+        # real melt-number reads: e.g. Cyrillic engine reads "14Г4736"
+        # perfectly, English engine reads "144736", silently skipping the
+        # letter's slot). Every English digit from that point on then
+        # actually belongs one position earlier, so index-based fusion
+        # trusts each shifted-in digit over the Cyrillic engine's correctly
+        # positioned one, corrupting an already-perfect Cyrillic read into a
+        # shorter, wrong string. If the Cyrillic engine's raw output already
+        # matches the expected melt/serial shape on its own, trust it
+        # wholesale instead of risking that corruption — merging can only
+        # help when the Cyrillic read is broken, never when it's already a
+        # clean, validly-shaped answer.
+        text_ru_upper = text_ru.upper() if text_ru else ""
+        if len(text_en) != len(text_ru) and _SHAPE_RE.match(text_ru_upper):
+            return text_ru_upper
         max_len = max(len(text_en), len(text_ru))
-        fused = "".join(
+        return "".join(
             cls._arbitrate_slot(
                 text_en[i] if i < len(text_en) else "",
                 text_ru[i] if i < len(text_ru) else "",
             )
             for i in range(max_len)
         )
-        return fused.replace("/", "*")
 
     def _select_best_mode(self, image) -> tuple[list, list, Any, str | None, float]:
         """Try each preprocessing mode, keep whichever detects the most text
@@ -437,6 +633,33 @@ class PaddleOCRProvider(OCRProvider):
             candidates.append((self._fuse_chars(refined_en, refined_ru), max(conf_en, conf_ru)))
         return candidates
 
+    @staticmethod
+    def _select_best_candidate(candidates: list[tuple[str, float]]) -> tuple[str, float]:
+        """Pick the winning fusion candidate for one line.
+
+        Confidence alone was picking a confident-but-wrong Latin/look-alike
+        letter guess over a correct Cyrillic read whenever that correct read
+        happened to come from a lower-confidence candidate — e.g. "14И3092"
+        (Cyrillic engine correctly read "И" at 0.64 confidence) losing to
+        "14B0925" (a re-cropped candidate where the English engine misread
+        the same spot as "B" at higher confidence). Preference order instead:
+
+        1. Any candidate containing a *pure*-Cyrillic character (one of
+           ``_PURE_CYRILLIC`` — glyphs with no Latin look-alike). The English
+           engine cannot produce these by accident, so this is a much
+           stronger correctness signal than raw confidence.
+        2. Any candidate matching the expected melt/serial grammar
+           (``_SHAPE_RE``) — filters out obviously malformed reads.
+        3. Otherwise, highest raw confidence (previous behavior).
+        """
+        pure_cyrillic_hits = [c for c in candidates if any(ch in _PURE_CYRILLIC for ch in c[0])]
+        if pure_cyrillic_hits:
+            return max(pure_cyrillic_hits, key=lambda c: c[1])
+        shape_hits = [c for c in candidates if _SHAPE_RE.match(c[0])]
+        if shape_hits:
+            return max(shape_hits, key=lambda c: c[1])
+        return max(candidates, key=lambda c: c[1])
+
     def _sync_fuse(self, image_bytes: bytes) -> dict:
         """
         Synchronous fusion pipeline called via ``asyncio.to_thread``.
@@ -458,7 +681,7 @@ class PaddleOCRProvider(OCRProvider):
             line_boxes = [box for box, _text, _conf in line["items"]]
             candidates = [self._fuse_boxes_as_is(line["items"], best_res_ru)]
             candidates += self._crop_candidates(line_boxes, best_processed, ocr_en, ocr_ru)
-            best_text, best_line_conf = max(candidates, key=lambda c: c[1])
+            best_text, best_line_conf = self._select_best_candidate(candidates)
             final_lines.append(best_text)
             line_confidences.append(best_line_conf)
 
@@ -524,20 +747,45 @@ class PaddleOCRProvider(OCRProvider):
         )
         return lines[best_idx].strip()
 
+    def _resolve_value(self, fused: dict, pattern_re: "re.Pattern[str]") -> tuple[str, float, bool, bool]:
+        """Resolve the final extracted value for a serial/melt scan.
+
+        Tries, in order: (1) a direct regex match against the fused text —
+        the normal case; (2) a single confusion-guided correction
+        (``_try_correct_to_shape``) on each detected line, for a read that's
+        one misread character away from the expected shape; (3) the
+        best-single-line fallback, for anything else. A value produced by
+        (1) or (2) already matches the digits-letter-digits grammar, so it
+        also gets the Latin/Cyrillic letter-script canonicalization
+        (``_normalize_letter_script``) — the fallback path skips it since
+        its shape isn't guaranteed. Returns
+        ``(value, confidence, pattern_matched, correction_applied)``.
+        """
+        match = pattern_re.search(fused["full_text"])
+        if match:
+            return _normalize_letter_script(match.group(0).upper()), 0.88, True, False
+
+        for line in fused["lines"]:
+            corrected = _try_correct_to_shape(line.strip())
+            if corrected:
+                return _normalize_letter_script(corrected.upper()), 0.75, False, True
+
+        fallback_conf = self._clamp_confidence(fused["confidence"] * 0.5)
+        return self._best_line_fallback(fused), fallback_conf, False, False
+
     async def extract_serial_number(self, image_bytes: bytes) -> OCRResult:
         t0 = time.perf_counter()
         try:
             fused = await asyncio.to_thread(self._sync_fuse, image_bytes)
-            match = _SERIAL_RE.search(fused["full_text"])
-            value = match.group(0).upper() if match else self._best_line_fallback(fused)
-            confidence = 0.88 if match else self._clamp_confidence(fused["confidence"] * 0.5)
+            value, confidence, pattern_matched, correction_applied = self._resolve_value(fused, _SERIAL_RE)
             return OCRResult(
                 raw_text=fused["full_text"],
                 confidence=confidence,
                 structured_data={
                     "value": value,
                     "candidates": fused["lines"],
-                    "pattern_matched": bool(match),
+                    "pattern_matched": pattern_matched,
+                    "correction_applied": correction_applied,
                 },
                 provider=self.provider_name,
                 processing_time_ms=round((time.perf_counter() - t0) * 1000),
@@ -550,16 +798,15 @@ class PaddleOCRProvider(OCRProvider):
         t0 = time.perf_counter()
         try:
             fused = await asyncio.to_thread(self._sync_fuse, image_bytes)
-            match = _MELT_RE.search(fused["full_text"])
-            value = match.group(0).upper() if match else self._best_line_fallback(fused)
-            confidence = 0.88 if match else self._clamp_confidence(fused["confidence"] * 0.5)
+            value, confidence, pattern_matched, correction_applied = self._resolve_value(fused, _MELT_RE)
             return OCRResult(
                 raw_text=fused["full_text"],
                 confidence=confidence,
                 structured_data={
                     "value": value,
                     "candidates": fused["lines"],
-                    "pattern_matched": bool(match),
+                    "pattern_matched": pattern_matched,
+                    "correction_applied": correction_applied,
                 },
                 provider=self.provider_name,
                 processing_time_ms=round((time.perf_counter() - t0) * 1000),

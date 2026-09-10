@@ -9,7 +9,7 @@
  */
 
 import { useRef, useState } from "react";
-import { Delete, Space, CornerDownLeft, ArrowUp, ArrowLeft, ArrowRight, X, Keyboard } from "lucide-react";
+import { Delete, Space, CornerDownLeft, ArrowLeft, ArrowRight, X, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 
@@ -28,7 +28,6 @@ interface RussianKeyboardProps {
 
 export default function RussianKeyboard({ initialValue, onConfirm, onClose }: RussianKeyboardProps) {
   const [value, setValue] = useState(initialValue);
-  const [shift, setShift] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selection = () => {
@@ -51,7 +50,7 @@ export default function RussianKeyboard({ initialValue, onConfirm, onClose }: Ru
     placeCursor(start + text.length);
   };
 
-  const press = (char: string) => insert(shift ? char.toUpperCase() : char);
+  const press = (char: string) => insert(char.toUpperCase());
   const space = () => insert(" ");
 
   const backspace = () => {
@@ -129,13 +128,8 @@ export default function RussianKeyboard({ initialValue, onConfirm, onClose }: Ru
 
           {LETTER_ROWS.map((row, i) => (
             <div key={i} className="flex gap-1.5 justify-center">
-              {i === 2 && (
-                <Key onClick={() => setShift((s) => !s)} active={shift} wide>
-                  <ArrowUp className="w-4 h-4" />
-                </Key>
-              )}
               {row.map((ch) => (
-                <Key key={ch} onClick={() => press(ch)}>{shift ? ch.toUpperCase() : ch}</Key>
+                <Key key={ch} onClick={() => press(ch)}>{ch.toUpperCase()}</Key>
               ))}
               {i === 2 && (
                 <Key onClick={backspace} wide>
