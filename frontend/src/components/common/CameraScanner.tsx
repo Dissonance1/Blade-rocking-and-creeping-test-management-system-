@@ -147,6 +147,14 @@ export default function CameraScanner({ mode, onResult, onClose }: CameraScanner
     setScanResult(null);
     setCapturedSrc(null);
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setErrorMsg(
+        "Camera access requires a secure connection (HTTPS, or http://localhost). Open this page that way, or use the OAK-1 camera instead."
+      );
+      setPhase("error");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },

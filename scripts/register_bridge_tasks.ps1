@@ -16,12 +16,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $py = "C:\Users\ADMIN\AppData\Local\Python\bin\pythonw.exe"   # windowless — python.exe would pop a visible console
+$oak1Py = "C:\blade-rocking\scripts\oak1-venv\Scripts\pythonw.exe"   # depthai (OAK-1 SDK) only lives in this dedicated venv, not in $py
 $scriptsDir = "C:\blade-rocking\scripts"
 
 function Register-BridgeTask {
-    param($Name, $ScriptArgs)
+    param($Name, $ScriptArgs, $Execute = $py)
 
-    $action = New-ScheduledTaskAction -Execute $py -Argument $ScriptArgs -WorkingDirectory $scriptsDir
+    $action = New-ScheduledTaskAction -Execute $Execute -Argument $ScriptArgs -WorkingDirectory $scriptsDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $trigger.Delay = "PT20S"   # give Bluetooth/USB stack time to settle after logon
     $settings = New-ScheduledTaskSettingsSet `
@@ -43,7 +44,7 @@ function Register-BridgeTask {
 # COM4 is unconfirmed for the Sylvac DTI gauge — if it doesn't connect,
 # re-pair the gauge in Windows Bluetooth settings and check its actual COM
 # port with: python -m serial.tools.list_ports
-Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py"
+Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py" -Execute $oak1Py
 Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server $Server"
 Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station 1 --server $Server"
 

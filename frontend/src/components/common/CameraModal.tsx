@@ -51,6 +51,12 @@ export default function CameraModal({
   const startCamera = useCallback(() => {
     setCamError(null);
     setReady(false);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamError(
+        "Camera access requires a secure connection (HTTPS, or http://localhost). Open this page that way, or use the OAK-1 camera instead."
+      );
+      return;
+    }
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
       .then((stream) => {
