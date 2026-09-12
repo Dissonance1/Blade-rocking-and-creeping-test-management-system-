@@ -40,9 +40,10 @@ depthai and paddleocr don't coexist cleanly together either):
     scripts\\ocr-venv\\Scripts\\pip install -r scripts\\hptr_ocr_requirements.txt
 
 Usage:
-    python hptr_ocr_service.py                               # port 8090, forwards to http://localhost
+    python hptr_ocr_service.py                               # port 8090, forwards to http://localhost, station "2"
     python hptr_ocr_service.py --server http://172.146.5.98  # forward to the OH PC
     python hptr_ocr_service.py --port 8091
+    python hptr_ocr_service.py --station 3                   # tag results as hardware station "3" instead of "2"
 """
 
 from __future__ import annotations
@@ -138,7 +139,7 @@ def _run_ocr(field: str, image_bytes: bytes):
 
 
 def _forward_detection(
-    server: str, session: requests.Session, auth_header: str | None, field_name: str, result
+    server: str, session: requests.Session, auth_header: str | None, field_name: str, result, station: str
 ) -> str | None:
     """POSTs the detection JSON (no image) to the OH backend so it can mint
     a scan_id for the normal attach-ocr-scan flow. Returns the scan_id, or
@@ -158,6 +159,7 @@ def _forward_detection(
                 "provider": result.provider,
                 "processing_time_ms": result.processing_time_ms,
                 "error": result.error or None,
+                "hardware_station": station,
             },
             headers=headers,
             timeout=10,
@@ -194,7 +196,7 @@ def _sync_image_later(
 
 # ─── Flask app ──────────────────────────────────────────────────────────────────
 
-def create_app(server: str, session: requests.Session, frontend_origins: list[str]) -> Flask:
+def create_app(server: str, session: requests.Session, frontend_origins: list[str], station: str) -> Flask:
     app = Flask(__name__)
     CORS(app, resources={r"/*": {"origins": frontend_origins}})
 
@@ -221,7 +223,7 @@ def create_app(server: str, session: requests.Session, frontend_origins: list[st
         )
 
         value = result.structured_data.get("value") or result.raw_text
-        scan_id = _forward_detection(server, session, auth_header, field.replace("-", "_"), result)
+        scan_id = _forward_detection(server, session, auth_header, field.replace("-", "_"), result, station)
 
         if scan_id is None:
             # OH backend unreachable — still hand the operator their OCR
@@ -237,6 +239,7 @@ def create_app(server: str, session: requests.Session, frontend_origins: list[st
                 "processing_time_ms": result.processing_time_ms,
                 "error": result.error or "OH server unreachable — scan not linked to a blade record",
                 "scan_id": "",
+                "hardware_station": station,
             })
 
         image_path = _SCAN_DIR / f"{scan_id}.jpg"
@@ -256,6 +259,7 @@ def create_app(server: str, session: requests.Session, frontend_origins: list[st
             "error": result.error or None,
             "scan_id": scan_id,
             "image_pending": True,
+            "hardware_station": station,
         })
 
     @app.post("/scan/blade-serial")
@@ -296,6 +300,16 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--station", default=os.environ.get("OCR_STATION", "2"),
+        help=(
+            "Hardware station identifier this PC's OCR results are tagged with "
+            "(e.g. '2', '3') — matches the --station value used for this PC's "
+            "weighing_bridge.py/dti_bridge.py (default: ${OCR_STATION} if set, else '2'). "
+            "The OCR_STATION env var is how docker-compose.hptr-ocr.yml configures "
+            "this without editing the command line."
+        ),
+    )
+    parser.add_argument(
         "--insecure-ssl", action="store_true",
         help="Disable TLS certificate verification against --server (self-signed LAN cert).",
     )
@@ -314,10 +328,10 @@ Examples:
     log.info("[ocr  ] loading PaddleOCR engines (script_bias=english) — this takes a few seconds …")
     threading.Thread(target=_warm_up, daemon=True).start()
 
-    app = create_app(args.server, session, frontend_origins)
+    app = create_app(args.server, session, frontend_origins, args.station)
     log.info(
-        "[http ] serving on http://localhost:%d  (forwarding to %s, CORS: %s)",
-        args.port, args.server, frontend_origins,
+        "[http ] serving on http://localhost:%d  (forwarding to %s, station=%s, CORS: %s)",
+        args.port, args.server, args.station, frontend_origins,
     )
     log.info("[http ] GET /health    POST /scan/blade-serial    POST /scan/melt-number")
     app.run(host="0.0.0.0", port=args.port, threaded=True)

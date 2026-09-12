@@ -1,5 +1,6 @@
 import api from "./api";
 import { shouldUseLocalOcr, scanViaLocalOcr } from "./localOcr";
+import { getHardwareStation } from "@/utils/hardwareStation";
 
 export interface OcrScanResult {
   value: string;
@@ -17,6 +18,13 @@ export interface OcrScanResult {
    * minted before the image existed.
    */
   image_pending?: boolean;
+  /**
+   * Which physical station produced this scan (e.g. "1", "2") — either this
+   * station's own picker value (central path) or the local OCR companion's
+   * own --station value (remote path, more authoritative). Passed through to
+   * attachScan so it lands on the Attachment record for provenance.
+   */
+  hardware_station?: string | null;
 }
 
 export const ocrService = {
@@ -36,6 +44,7 @@ export const ocrService = {
     }
     const form = new FormData();
     form.append("image", file);
+    form.append("hardware_station", getHardwareStation());
     const { data } = await api.post<OcrScanResult>("/ocr/scan/melt-number", form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
@@ -55,7 +64,8 @@ export const ocrService = {
     label: string,
     detectedText?: string | null,
     confidence?: number | null,
-    imagePending?: boolean
+    imagePending?: boolean,
+    hardwareStation?: string | null
   ): Promise<void> => {
     await api.post(`/blades/${bladeId}/attach-ocr-scan`, {
       scan_id: scanId,
@@ -63,6 +73,7 @@ export const ocrService = {
       detected_text: detectedText,
       confidence,
       image_pending: imagePending ?? false,
+      hardware_station: hardwareStation ?? null,
     });
   },
 

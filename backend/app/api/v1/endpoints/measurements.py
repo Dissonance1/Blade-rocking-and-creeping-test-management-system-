@@ -128,6 +128,7 @@ async def add_measurement(
         rocking_value=body.rocking_value,
         creep_value=body.creep_value,
         station_id=body.station_id or current_user.station_id,
+        hardware_station=body.hardware_station,
         notes=body.notes,
         measured_by_id=current_user.id,
         is_approved=False,
@@ -355,6 +356,7 @@ async def set_rocking_creep(
             creep_value=body.creep_value,
             measured_by_id=current_user.id,
             station_id=current_user.station_id,
+            hardware_station=body.hardware_station,
             is_approved=False,
         )
         db.add(measurement)
@@ -363,6 +365,8 @@ async def set_rocking_creep(
             measurement.rocking_value = body.rocking_value
         if body.creep_value is not None:
             measurement.creep_value = body.creep_value
+        if body.hardware_station is not None:
+            measurement.hardware_station = body.hardware_station
 
     await db.commit()
     await db.refresh(measurement)

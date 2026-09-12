@@ -68,6 +68,7 @@ class MeasurementRepository(BaseRepository[Measurement, MeasurementCreate, Measu
         measured_by_id: uuid.UUID,
         station_id: uuid.UUID | None,
         raw_weight_kg: float | None = None,
+        hardware_station: str | None = None,
     ) -> Measurement:
         """
         Insert or update the ``INITIAL`` measurement row for *blade_id*.
@@ -86,6 +87,7 @@ class MeasurementRepository(BaseRepository[Measurement, MeasurementCreate, Measu
                 static_moment_gcm=static_moment_gcm,
                 measured_by_id=measured_by_id,
                 station_id=station_id,
+                hardware_station=hardware_station,
             )
             .on_conflict_do_update(
                 constraint="uq_measurement_blade_type",
@@ -95,6 +97,7 @@ class MeasurementRepository(BaseRepository[Measurement, MeasurementCreate, Measu
                     "static_moment_gcm": static_moment_gcm,
                     "measured_by_id": measured_by_id,
                     "station_id": station_id,
+                    "hardware_station": hardware_station,
                 },
             )
             .returning(Measurement)

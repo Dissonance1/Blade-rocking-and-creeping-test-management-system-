@@ -26,6 +26,7 @@ import { cn } from "@/utils/cn";
 import api from "@/services/api";
 import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
 import { shouldUseLocalOcr, scanViaLocalOcr } from "@/services/localOcr";
+import { getHardwareStation } from "@/utils/hardwareStation";
 
 type CameraSource = "browser" | "oak1";
 
@@ -87,6 +88,9 @@ async function runBackendOCR(blob: Blob, mode: ScanMode): Promise<ScanResult> {
 
   const form = new FormData();
   form.append("image", blob, "scan.jpg");
+  if (mode !== "qr") {
+    form.append("hardware_station", getHardwareStation());
+  }
 
   const endpoint =
     mode === "qr"

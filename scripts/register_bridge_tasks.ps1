@@ -68,7 +68,7 @@ Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bri
 # CLAUDE.md's "Secondary Hardware Stations" section) — harmless to register
 # elsewhere, but the task will silently stay dead if scripts\ocr-venv wasn't
 # created (same failure mode as the OAK-1 task's venv, see CLAUDE.md).
-Register-BridgeTask -Name "BladeRocking-HPTROCRService"     -ScriptArgs "hptr_ocr_service.py --server $Server" -Execute $ocrPy
+Register-BridgeTask -Name "BladeRocking-HPTROCRService"     -ScriptArgs "hptr_ocr_service.py --server $Server --station $Station" -Execute $ocrPy
 
 Write-Host ""
 Write-Host "Starting all four now (instead of waiting for next logon)..."

@@ -11,6 +11,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -25,11 +27,19 @@ const ROLE_LABEL: Record<UserRole, string> = {
   QA_VIEWER: "QA Viewer",
 };
 
+/* ─── Hardware station picker ────────────────────────────────────────────── */
+// Which physical scale/DTI gauge this browser listens to (see
+// useHardwareStation / CLAUDE.md's "Secondary Hardware Stations"). A fixed
+// list is fine here — new stations are registered by hand on their PC
+// (register_bridge_tasks.ps1 -Station N) anyway, so 1-4 covers the OH PC
+// plus a few secondary PCs without needing to be dynamic.
+const STATION_OPTIONS = ["1", "2", "3", "4"];
+
 /* ─── Navbar ─────────────────────────────────────────────────────────────── */
 
 export default function Navbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void }) {
   const { user, logout } = useAuthStore();
-  const { theme, toggleTheme } = useUIStore();
+  const { theme, toggleTheme, hardwareStation, setHardwareStation } = useUIStore();
 
   const navigate = useNavigate();
 
@@ -59,6 +69,44 @@ export default function Navbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => v
       {/* Right: notification bell + theme toggle + user dropdown */}
       <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
         <NotificationsDropdown />
+
+        {/* Hardware station picker */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-11 w-11 flex-col gap-0 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-background dark:text-slate-300 dark:hover:bg-slate-600"
+              aria-label={`Hardware station ${hardwareStation} — click to change`}
+            >
+              <KTIcon iconName="setting-3" className="text-lg leading-none" />
+              <span className="text-[9px] font-bold leading-none mt-0.5">St {hardwareStation}</span>
+            </Button>
+          </DropdownMenuTrigger>
+
+          <DropdownMenuContent align="end" className="w-60 bg-white dark:bg-background border-slate-200 dark:border-slate-800 shadow-xl rounded-xl p-2">
+            <DropdownMenuLabel className="font-normal p-2">
+              <span className="font-semibold text-sm text-slate-900 dark:text-white">Hardware station</span>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Which scale / DTI gauge this browser listens to
+              </p>
+            </DropdownMenuLabel>
+
+            <DropdownMenuSeparator className="bg-slate-100 dark:bg-slate-800 my-1" />
+
+            <DropdownMenuRadioGroup value={hardwareStation} onValueChange={setHardwareStation}>
+              {STATION_OPTIONS.map((s) => (
+                <DropdownMenuRadioItem
+                  key={s}
+                  value={s}
+                  className="text-slate-700 dark:text-slate-300 focus:bg-slate-100 dark:focus:bg-slate-800 rounded-lg cursor-pointer py-2 pr-3"
+                >
+                  Station {s}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Theme toggle */}
         <Button

@@ -70,6 +70,10 @@ class WorkOrderRowUpdate(BaseSchema):
     raw_weight: float | None = Field(
         default=None, ge=0, description="Raw scale reading in kg"
     )
+    hardware_station: str | None = Field(
+        default=None,
+        description="Which physical hardware station's scale produced raw_weight (e.g. '1', '2')",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +89,7 @@ class WorkOrderRowResponse(BaseSchema):
     raw_weight: float | None = None
     weight_grams: float | None = None
     static_moment_gcm: float | None = None
+    hardware_station: str | None = None
     is_complete: bool
 
 

@@ -1,3 +1,5 @@
+import { useUIStore } from "@/store/uiStore";
+
 /**
  * Which physical hardware station (weighing scale / DTI gauge) this browser
  * should listen to. Distinguishes two independently-wired instruments that
@@ -7,13 +9,18 @@
  * this value; without it, every browser on every PC receives every PC's
  * readings.
  *
- * Read once from the URL (`?station=2`) rather than a build-time env var,
- * since one frontend build is served to every station (see CLAUDE.md) — a
- * build-time flag can't distinguish which physical PC a given browser is
- * running on. Bookmark the station-specific URL on each PC that has its own
- * scale/gauge; every other station's bookmark is unaffected since this
- * defaults to "1", matching the bridge scripts' own `--station 1` default.
+ * Backed by `useUIStore` (persisted to localStorage) so it can be changed at
+ * runtime from the station picker in the navbar, not just bootstrapped once
+ * from `?station=2` in a bookmark. The URL param still seeds/overrides the
+ * value on load (see uiStore's `merge`), so existing per-PC bookmarks keep
+ * working unchanged; the picker is what lets a PC be switched without having
+ * to edit its bookmark.
  */
+export function useHardwareStation(): string {
+  return useUIStore((s) => s.hardwareStation);
+}
+
+/** Non-reactive read, for call sites outside a React component. */
 export function getHardwareStation(): string {
-  return new URLSearchParams(window.location.search).get("station") ?? "1";
+  return useUIStore.getState().hardwareStation;
 }

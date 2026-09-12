@@ -15,7 +15,7 @@ import CameraModal from "@/components/common/CameraModal";
 import RussianKeyboard from "@/components/common/RussianKeyboard";
 import { useWeighingSocket } from "@/hooks/useWeighingSocket";
 import { useLocalSaveFolder } from "@/hooks/useLocalSaveFolder";
-import { getHardwareStation } from "@/utils/hardwareStation";
+import { useHardwareStation } from "@/utils/hardwareStation";
 import { extractApiError } from "@/services/api";
 import { ocrService } from "@/services/ocrService";
 import {
@@ -66,11 +66,12 @@ export default function BladeEntryGrid() {
   const workOrderNumber = commonInfo.work_order_number;
 
   // ── Single shared weighing-socket + camera + RU keyboard for the whole grid ──
-  // Station is fixed for the lifetime of the page load (read once from the
-  // URL, see getHardwareStation) — a PC with its own scale bookmarks
-  // ?station=2 so it only ever sees its own scale's readings, never the OH
-  // PC's (or any other station's).
-  const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket(getHardwareStation());
+  // Station comes from the station picker (navbar) / ?station= bookmark, see
+  // useHardwareStation — a PC pinned to station 2 only ever sees its own
+  // scale's readings, never the OH PC's (or any other station's). Reactive,
+  // so switching stations from the picker reconnects to the new station.
+  const hardwareStation = useHardwareStation();
+  const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket(hardwareStation);
   const localSaveFolder = useLocalSaveFolder();
   const saveCaptureLocally = localSaveFolder.saveCapture;
 
@@ -94,6 +95,7 @@ export default function BladeEntryGrid() {
           melt_number: row.melt_number,
           ocr_melt_number: row.ocr_melt_number || null,
           raw_weight: row.raw_weight ? parseFloat(row.raw_weight) : null,
+          hardware_station: hardwareStation,
         });
         applyServerRow(result);
         markRowSaved(rowIndex);
@@ -108,7 +110,7 @@ export default function BladeEntryGrid() {
         inFlightRef.current.delete(rowIndex);
       }
     },
-    [workOrderNumber, markRowSaving, markRowSaved, markRowError, applyServerRow]
+    [workOrderNumber, markRowSaving, markRowSaved, markRowError, applyServerRow, hardwareStation]
   );
 
   const scheduleSave = useCallback(
@@ -280,7 +282,8 @@ export default function BladeEntryGrid() {
               "melt_number",
               result.value,
               result.confidence,
-              result.image_pending
+              result.image_pending,
+              result.hardware_station
             )
             .catch(() => {
               // Non-fatal — the scanned value is already in the grid; losing the

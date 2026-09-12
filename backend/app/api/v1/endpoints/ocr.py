@@ -19,7 +19,7 @@ import aiofiles
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -130,6 +130,10 @@ async def scan_blade_serial(
         UploadFile,
         File(description="Image file containing the blade serial number"),
     ],
+    hardware_station: Annotated[
+        str | None,
+        Form(description="Which physical station's browser captured this image (e.g. '1', '2')"),
+    ] = None,
 ) -> dict:
     """
     Submit an image containing a blade serial number and receive the OCR-extracted value.
@@ -157,6 +161,7 @@ async def scan_blade_serial(
         scan_id=scan_id,
         value=result.structured_data.get("value"),
         confidence=result.confidence,
+        hardware_station=hardware_station,
     )
 
     return {
@@ -167,6 +172,7 @@ async def scan_blade_serial(
         "processing_time_ms": result.processing_time_ms,
         "error": result.error,
         "scan_id": scan_id,
+        "hardware_station": hardware_station,
     }
 
 
@@ -186,6 +192,10 @@ async def scan_melt_number(
         UploadFile,
         File(description="Image file containing the melt/heat number"),
     ],
+    hardware_station: Annotated[
+        str | None,
+        Form(description="Which physical station's browser captured this image (e.g. '1', '2')"),
+    ] = None,
 ) -> dict:
     """
     Submit an image containing a melt/heat number and receive the OCR-extracted value.
@@ -205,6 +215,7 @@ async def scan_melt_number(
         scan_id=scan_id,
         value=result.structured_data.get("value"),
         confidence=result.confidence,
+        hardware_station=hardware_station,
     )
 
     return {
@@ -215,6 +226,7 @@ async def scan_melt_number(
         "processing_time_ms": result.processing_time_ms,
         "error": result.error,
         "scan_id": scan_id,
+        "hardware_station": hardware_station,
     }
 
 
@@ -288,6 +300,15 @@ class RemoteDetectionIn(BaseModel):
     provider: str = "remote"
     processing_time_ms: int | None = None
     error: str | None = None
+    hardware_station: str | None = Field(
+        default=None,
+        description=(
+            "Which physical station's own OCR companion service (see "
+            "scripts/hptr_ocr_service.py --station) produced this detection, "
+            "e.g. '2'. Authoritative for the remote path — set by the "
+            "companion service itself, not trusted from the browser."
+        ),
+    )
 
 
 @router.post(
@@ -320,6 +341,7 @@ async def ingest_remote_detection(
         value=body.value,
         confidence=body.confidence,
         provider=body.provider,
+        hardware_station=body.hardware_station,
     )
     return {
         "value": body.value,
@@ -330,6 +352,7 @@ async def ingest_remote_detection(
         "error": body.error,
         "scan_id": scan_id,
         "image_pending": True,
+        "hardware_station": body.hardware_station,
     }
 
 

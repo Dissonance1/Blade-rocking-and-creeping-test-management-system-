@@ -22,7 +22,7 @@ import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 import { batchService, type BladeRockingCreepEntry } from "@/services/batchService";
 import { bladeService } from "@/services/bladeService";
 import { useDTISocket } from "@/hooks/useDTISocket";
-import { getHardwareStation } from "@/utils/hardwareStation";
+import { useHardwareStation } from "@/utils/hardwareStation";
 import { cn } from "@/utils/cn";
 
 // Acceptable Rocking range — different band per blade type.
@@ -91,10 +91,11 @@ export default function RockingCreepPage() {
   //    replay: this flow treats any "dti" message as a fresh press, so a
   //    reconnect (refresh, wifi blip, backend restart) replaying old Redis-
   //    buffered readings would silently auto-fill/save stale values. Station
-  //    is fixed for the page load (read once from the URL, see
-  //    getHardwareStation) — a PC with its own DTI gauge bookmarks
-  //    ?station=2 so it only ever sees its own gauge's readings. ───────────
-  const { lastReading, connected: dtiConnected } = useDTISocket(getHardwareStation(), { replay: false });
+  //    comes from the station picker (navbar) / ?station= bookmark, see
+  //    useHardwareStation — a PC pinned to station 2 only ever sees its own
+  //    gauge's readings. ────────────────────────────────────────────────
+  const hardwareStation = useHardwareStation();
+  const { lastReading, connected: dtiConnected } = useDTISocket(hardwareStation, { replay: false });
   const lastAppliedAtRef = useRef<number>(0);
 
   // ── Debounced auto-save while typing — onBlur/Enter alone left a gap: a
@@ -191,7 +192,9 @@ export default function RockingCreepPage() {
       rocking: number | null;
       creep: number | null;
     }) => {
-      const payload: { rocking_value?: number | null; creep_value?: number | null } = {};
+      const payload: { rocking_value?: number | null; creep_value?: number | null; hardware_station?: string | null } = {
+        hardware_station: hardwareStation,
+      };
       if (rocking !== null) payload.rocking_value = rocking;
       if (creep   !== null) payload.creep_value   = creep;
       return bladeService.setRockingCreep(bladeId, payload);

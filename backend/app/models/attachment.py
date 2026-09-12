@@ -78,6 +78,11 @@ class Attachment(UUIDPrimaryKeyMixin, Base):
     ocr_field_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ocr_detected_text: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Which physical station captured/OCR'd this scan — e.g. "1", "2". Set
+    # from the browser's hardware-station picker for a central-path scan, or
+    # from the remote OCR companion's own --station flag (see
+    # scripts/hptr_ocr_service.py) for a scan it processed locally.
+    hardware_station: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # Relationships
     blade: Mapped["Blade"] = relationship(  # type: ignore[name-defined]

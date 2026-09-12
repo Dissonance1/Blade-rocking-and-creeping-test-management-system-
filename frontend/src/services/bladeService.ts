@@ -31,7 +31,7 @@ export const bladeService = {
 
   setRockingCreep: async (
     bladeId: string,
-    payload: { rocking_value?: number | null; creep_value?: number | null }
+    payload: { rocking_value?: number | null; creep_value?: number | null; hardware_station?: string | null }
   ): Promise<Measurement> => {
     const { data } = await api.patch<Measurement>(`/blades/${bladeId}/rocking-creep`, payload);
     return data;

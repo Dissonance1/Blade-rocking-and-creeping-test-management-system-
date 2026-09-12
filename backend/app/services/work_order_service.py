@@ -72,6 +72,7 @@ def _row_response(
         raw_weight=raw_weight,
         weight_grams=weight_grams,
         static_moment_gcm=static_moment,
+        hardware_station=measurement.hardware_station if measurement is not None else None,
         is_complete=is_complete,
     )
 
@@ -207,6 +208,7 @@ class WorkOrderService:
                 static_moment_gcm=static_moment_gcm,
                 measured_by_id=user.id,
                 station_id=user.station_id,
+                hardware_station=data.hardware_station,
             )
         else:
             measurement = await self._measurement_repo.get_latest_by_blade(blade.id)

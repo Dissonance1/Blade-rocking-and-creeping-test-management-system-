@@ -65,6 +65,11 @@ class MeasurementCreate(BaseSchema):
         default=None,
         description="Station at which the measurement was taken (defaults to operator's station)",
     )
+    hardware_station: str | None = Field(
+        default=None,
+        description="Which physical hardware station's scale/gauge produced this reading (e.g. '1', '2') — see CLAUDE.md's 'Secondary Hardware Stations'",
+        examples=["1", "2"],
+    )
     notes: str | None = Field(
         default=None, max_length=4096, description="Free-text technician notes"
     )
@@ -121,6 +126,11 @@ class RockingCreepUpdate(BaseSchema):
 
     rocking_value: Decimal | None = Field(default=None, ge=0)
     creep_value: Decimal | None = Field(default=None, ge=0)
+    hardware_station: str | None = Field(
+        default=None,
+        description="Which physical hardware station's DTI gauge produced this reading (e.g. '1', '2')",
+        examples=["1", "2"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +158,7 @@ class MeasurementResponse(BaseSchema):
 
     measured_by: MeasurementApproverInfo
     station_id: uuid.UUID | None = None
+    hardware_station: str | None = None
     measured_at: datetime
     notes: str | None = None
 

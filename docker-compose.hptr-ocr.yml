@@ -29,6 +29,11 @@ services:
       # "localhost" inside this container is the container itself, not the
       # OH PC (they're different physical machines).
       OH_SERVER_URL: ${OH_SERVER_URL:?set OH_SERVER_URL to the OH PC's LAN address, e.g. http://172.146.5.98}
+      # Hardware station identifier this container's OCR results are tagged
+      # with — must match this PC's weighing_bridge.py/dti_bridge.py
+      # --station value (register_bridge_tasks.ps1 -Station). Defaults to
+      # "2" if unset.
+      OCR_STATION: ${OCR_STATION:-2}
     volumes:
       - hptr_ocr_scans:/app/scripts/hptr_ocr_scans
       - hptr_ocr_logs:/app/scripts/logs

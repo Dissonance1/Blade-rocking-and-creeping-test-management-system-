@@ -932,6 +932,7 @@ async def attach_ocr_scan(
     detected_text = body.get("detected_text")
     confidence = body.get("confidence")
     image_pending = bool(body.get("image_pending"))
+    hardware_station = body.get("hardware_station")
 
     if not scan_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scan_id is required")
@@ -968,6 +969,7 @@ async def attach_ocr_scan(
         ocr_field_name=label,
         ocr_detected_text=str(detected_text) if detected_text is not None else None,
         ocr_confidence=float(confidence) if confidence is not None else None,
+        hardware_station=str(hardware_station) if hardware_station is not None else None,
     )
     db.add(attachment)
     await db.commit()

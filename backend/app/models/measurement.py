@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -67,6 +68,13 @@ class Measurement(UUIDPrimaryKeyMixin, Base):
         ForeignKey("stations.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Which physical hardware station (weighing scale / DTI gauge PC) produced
+    # this reading — e.g. "1", "2". Distinct from station_id above, which is
+    # the workflow location (OH/Assembly); this is the hardware-bridge scope
+    # used by weighing_bridge.py/dti_bridge.py's --station flag (see
+    # CLAUDE.md's "Secondary Hardware Stations"). Nullable since older rows
+    # predate this column and central-station scans may not always send it.
+    hardware_station: Mapped[str | None] = mapped_column(String(16), nullable=True)
     measured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

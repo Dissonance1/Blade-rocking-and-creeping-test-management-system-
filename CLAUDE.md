@@ -144,7 +144,8 @@ OCR_PROVIDER=mock
 - **Work Order size:** 90 blades per Work Order, one blade type only (LPTR or HPTR). Constant: `BLADES_PER_WORK_ORDER = 90`.
 - **Hardware bridges:** `weighing_bridge.py`, `dti_bridge.py`, and `oak1_camera_service.py` are standalone processes outside Docker Compose. Register as Windows Scheduled Tasks via `scripts/register_bridge_tasks.ps1`.
 - **Soft deletes:** `User` and `Blade` use `deleted_at` timestamp. Always filter `WHERE deleted_at IS NULL` — SQLAlchemy mixins in `models/base.py` handle this automatically.
-- **Migrations:** Alembic autogenerate is used. After any model change, run `alembic revision --autogenerate` and review the generated script before applying.
+- **Migrations:** Alembic autogenerate is used. After any model change, run `alembic revision --autogenerate` and review the generated script before applying. Autogenerate currently also picks up pre-existing, unrelated schema drift (renamed `batch_events`→`work_order_events` indexes, a couple of dropped server defaults, column comments) — strip those out of any new migration you generate unless you're deliberately fixing that drift; don't apply them as a side effect of an unrelated change.
+- **Hardware-station provenance (`hardware_station` column):** `Measurement.hardware_station` and `Attachment.hardware_station` (both nullable `String(16)`, e.g. `"1"`/`"2"`) record which physical hardware station (weighing scale / DTI gauge / OCR camera PC — see "Secondary Hardware Stations" below) produced a given reading or OCR scan. Distinct from the `station_id` FK elsewhere on those same models, which is the *workflow* location (OH/Assembly) — don't confuse the two. Populated from the frontend's `useHardwareStation()` (central path) or a bridge/companion script's own `--station` flag (remote path, more authoritative since it's not trusted from the browser).
 
 ---
 
@@ -179,11 +180,15 @@ PaddleOCR inference is CPU-heavy (five preprocessing variants x two language eng
 
 This does **not** contradict "exactly one app instance and one database" above — this service has no database of its own and stores nothing durable except a working copy of images it's about to forward; the OH PC's Postgres is still the only source of truth for blade records.
 
+`hptr_ocr_service.py` takes a `--station` flag (default `"2"`) — **this must match the same `-Station` value this PC's `weighing_bridge.py`/`dti_bridge.py` were registered with** (step 3 above). It's sent as `hardware_station` on every OCR detection this service forwards (`POST /ocr/scan/ingest-detection`), and ends up persisted on the resulting `Attachment` row (`ocr.attach_ocr_scan` → `Attachment.hardware_station`) — the same column `weighing_bridge`/`dti_bridge` readings land in on `Measurement.hardware_station` when a weight or rocking/creep value is saved. This is how the OH backend can tell, after the fact, which physical station produced a given OCR scan or measurement — don't rely on Bluetooth device name or IP for that, they're not recorded. A browser using the *central* OCR endpoint directly (no local OCR companion) instead tags its own scans with whatever the station picker in the navbar (or `?station=` bookmark) is set to (see `frontend/src/utils/hardwareStation.ts`'s `useHardwareStation()`).
+
 It's the one piece of a secondary station's setup that runs cleanly in Docker instead of a native venv, since — unlike the bridges — it never touches local hardware directly, only images already captured and handed to it over HTTP:
 ```
-OH_SERVER_URL=http://172.146.5.98 docker compose -f docker-compose.hptr-ocr.yml up -d --build
+OH_SERVER_URL=http://172.146.5.98 OCR_STATION=2 docker compose -f docker-compose.hptr-ocr.yml up -d --build
 ```
-(A native-venv path also exists — `scripts\ocr-venv` + `scripts/hptr_ocr_requirements.txt`, registered via `register_bridge_tasks.ps1`'s `BladeRocking-HPTROCRService` task — for a station that can't run Docker. Same silent-failure caveat as the OAK-1 venv applies if `scripts\ocr-venv` doesn't exist at that path.)
+(`OCR_STATION` defaults to `2` if omitted — set it explicitly to match step 3's `-Station` on any PC that isn't station 2.)
+
+(A native-venv path also exists — `scripts\ocr-venv` + `scripts/hptr_ocr_requirements.txt`, registered via `register_bridge_tasks.ps1`'s `BladeRocking-HPTROCRService` task, which now passes `--station $Station` automatically (same value as step 3's weighing/DTI bridges) — for a station that can't run Docker. Same silent-failure caveat as the OAK-1 venv applies if `scripts\ocr-venv` doesn't exist at that path.)
 
 The frontend decides per-browser, at runtime, whether to use it (`GET http://localhost:8090/health`) rather than via a build-time flag, since one frontend build is served to every station (see `frontend/src/services/localOcr.ts`) — a station with the container/service running gets local OCR automatically; every other station falls straight through to the central endpoint with no configuration needed.
 

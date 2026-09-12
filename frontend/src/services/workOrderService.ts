@@ -16,6 +16,7 @@ export interface WorkOrderRowUpdatePayload {
   melt_number?: string | null;
   ocr_melt_number?: string | null;
   raw_weight?: number | null;
+  hardware_station?: string | null;
 }
 
 export interface WorkOrderRow {
@@ -27,6 +28,7 @@ export interface WorkOrderRow {
   raw_weight: number | null;
   weight_grams: number | null;
   static_moment_gcm: number | null;
+  hardware_station: string | null;
   is_complete: boolean;
 }
 
