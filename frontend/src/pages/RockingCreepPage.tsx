@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown,
   ExternalLink,
   Loader2,
   CheckCircle2,
@@ -19,6 +18,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { WorkOrderCombobox } from "@/components/common/WorkOrderCombobox";
 import { batchService, type BladeRockingCreepEntry } from "@/services/batchService";
 import { bladeService } from "@/services/bladeService";
 import { useDTISocket } from "@/hooks/useDTISocket";
@@ -442,26 +442,20 @@ export default function RockingCreepPage() {
                 Select Work Order
               </label>
               <div className="relative flex-1">
-                <select
+                <WorkOrderCombobox
                   value={selectedBatch}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     flushAutoSaves();
-                    setSelectedBatch(e.target.value);
+                    setSelectedBatch(v);
                     setRowState({});
                     setActiveTarget(null);
                   }}
-                  className="w-full appearance-none rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-background text-slate-900 dark:text-white px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
-                >
-                  <option value="">— choose a work order —</option>
-                  {batches.map((b) => (
-                    <option key={b.work_order_number} value={b.work_order_number}>
-                      {b.work_order_number}
-                      {b.part_number ? ` · ${b.part_number}` : ""}
-                      {` (${b.blade_count} blades)`}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  options={batches.map((b) => ({
+                    value: b.work_order_number,
+                    label: `${b.work_order_number}${b.part_number ? ` · ${b.part_number}` : ""} (${b.blade_count} blades)`,
+                  }))}
+                  placeholder="— choose a work order —"
+                />
               </div>
             </div>
 

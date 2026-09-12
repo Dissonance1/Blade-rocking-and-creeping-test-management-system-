@@ -342,6 +342,7 @@ async def ingest_remote_detection(
 @router.post(
     "/scan/{scan_id}/image",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
     summary="Upload the image for a previously-ingested remote OCR detection",
 )
 async def upload_scan_image(
