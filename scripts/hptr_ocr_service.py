@@ -27,6 +27,14 @@ default fusion tuning was calibrated against — see PaddleOCRProvider's
 docstring in backend/app/ocr/paddle_provider.py for exactly what that
 changes.
 
+Also loads its own, completely separate model checkpoint --
+backend/app/ocr/models/ppocrv4-hptr/ -- instead of the OH backend's
+backend/app/ocr/models/ppocrv4/. The two start out byte-identical (this
+directory was created as a straight copy) but are never the same files on
+disk: a future HPTR-only fine-tune can overwrite ppocrv4-hptr/ freely
+without this station's model ever touching, or being touched by, the OH
+model OH's backend actually loads.
+
 Same category as weighing_bridge.py / dti_bridge.py / oak1_camera_service.py
 — a standalone hardware-adjacent process, not part of Docker Compose, not
 the FastAPI backend. Requires the full repo (not just scripts/) to be
@@ -71,6 +79,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 from app.ocr.paddle_provider import PaddleOCRProvider  # noqa: E402
 
 from bridge_common import build_session as _build_session  # noqa: E402
+
+# This station's own checkpoint -- never the OH backend's
+# backend/app/ocr/models/ppocrv4/. See module docstring above.
+_HPTR_MODELS_DIR = Path(__file__).resolve().parent.parent / "backend" / "app" / "ocr" / "models" / "ppocrv4-hptr"
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -133,10 +145,10 @@ _FIELD_TO_METHOD = {
 }
 
 # One provider instance for the whole process — PaddleOCR's underlying
-# engines are already cached at the class level (see
+# engines are already cached at the class level, keyed by models_dir (see
 # PaddleOCRProvider._get_engines), so this only exists to carry
-# script_bias="english" into every call.
-_provider = PaddleOCRProvider(script_bias="english")
+# script_bias="english" and this station's own models_dir into every call.
+_provider = PaddleOCRProvider(script_bias="english", models_dir=_HPTR_MODELS_DIR)
 
 _ready_lock = threading.Lock()
 _ready = False

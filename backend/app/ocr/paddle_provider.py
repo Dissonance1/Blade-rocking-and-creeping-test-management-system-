@@ -206,9 +206,10 @@ class PaddleOCRProvider(OCRProvider):
     laser-engraved blade serial/melt markings.
 
     The underlying PaddleOCR engines take a few seconds to initialise; they
-    are created once at class level (keyed by nothing — both engines are
-    identical regardless of ``script_bias`` below) and reused for every
-    request/instance.
+    are cached per resolved ``models_dir`` (see below) at the class level and
+    reused for every request/instance that shares that directory — so the
+    OH backend (always the default directory) still pays engine-load cost
+    exactly once per process, same as before this cache became dir-aware.
 
     ``script_bias`` controls only the fusion/post-processing preference
     between the two engines' reads, not which models are loaded:
@@ -223,15 +224,26 @@ class PaddleOCRProvider(OCRProvider):
       config, not a property of PP-OCRv4 itself): prefers the English
       engine's read whenever it produced one at all, and does not force the
       ambiguous letter to Cyrillic. Used by ``scripts/hptr_ocr_service.py``.
+
+    ``models_dir`` selects which physical det/cls/rec_en/rec_ru weight files
+    to load (default: this module's bundled ``models/ppocrv4/``, i.e. the
+    single checkpoint the OH backend has always used — passing this
+    parameter is required to opt into anything else). This exists so a
+    station like HPTR can eventually be fine-tuned and deployed to its own,
+    completely separate checkpoint directory without ever touching or even
+    loading OH's weights in the same process — see
+    ``models/ppocrv4-hptr/`` and ``scripts/hptr_ocr_service.py``. The two
+    directories are never merged or copied into one another by anything in
+    this codebase; keep it that way.
     """
 
-    _ocr_en: Any = None
-    _ocr_ru: Any = None
+    _engines_by_dir: dict[str, tuple[Any, Any]] = {}
 
-    def __init__(self, script_bias: str = "cyrillic") -> None:
+    def __init__(self, script_bias: str = "cyrillic", models_dir: "str | Path | None" = None) -> None:
         if script_bias not in ("cyrillic", "english"):
             raise ValueError(f"script_bias must be 'cyrillic' or 'english', got {script_bias!r}")
         self.script_bias = script_bias
+        self.models_dir = Path(models_dir) if models_dir is not None else _MODELS_DIR
 
     @property
     def provider_name(self) -> str:
@@ -280,26 +292,31 @@ class PaddleOCRProvider(OCRProvider):
         pi.Config.switch_ir_optim = patched_switch_ir_optim
         pi.Config._blade_rocking_avx512_patch = True
 
-    @classmethod
-    def warm_up(cls) -> None:
-        """Eagerly load both PaddleOCR engines instead of waiting for the
-        first real request. Standalone companion services (e.g.
+    def warm_up(self) -> None:
+        """Eagerly load this instance's PaddleOCR engines instead of waiting
+        for the first real request. Standalone companion services (e.g.
         ``scripts/hptr_ocr_service.py``) call this at startup so an
         operator's first scan of the day isn't the one that pays the
         multi-second model-load cost.
         """
-        cls._get_engines()
+        self._get_engines()
 
-    @classmethod
-    def _get_engines(cls) -> tuple[Any, Any]:
-        """Lazily create the shared English + Cyrillic PaddleOCR engines."""
-        if cls._ocr_en is None or cls._ocr_ru is None:
-            cls._disable_crashing_ir_pass()
+    def _get_engines(self) -> tuple[Any, Any]:
+        """Lazily create (or reuse a cached) English + Cyrillic PaddleOCR
+        engine pair for this instance's ``models_dir`` — cached per
+        directory, not globally, so an HPTR instance pointed at
+        ``models/ppocrv4-hptr/`` never shares engines (or triggers a load)
+        with an OH instance using the default ``models/ppocrv4/``, even
+        within the same process."""
+        key = str(self.models_dir)
+        cached = PaddleOCRProvider._engines_by_dir.get(key)
+        if cached is None:
+            self._disable_crashing_ir_pass()
             from paddleocr import PaddleOCR  # type: ignore[import]
 
             common: dict[str, Any] = {
-                "det_model_dir": str(_MODELS_DIR / "det"),
-                "cls_model_dir": str(_MODELS_DIR / "cls"),
+                "det_model_dir": str(self.models_dir / "det"),
+                "cls_model_dir": str(self.models_dir / "cls"),
                 "use_angle_cls": True,
                 "ocr_version": "PP-OCRv4",
                 "show_log": False,
@@ -319,17 +336,19 @@ class PaddleOCRProvider(OCRProvider):
                 # before we ever see it.
                 "drop_score": 0.05,
             }
-            cls._ocr_en = PaddleOCR(
-                rec_model_dir=str(_MODELS_DIR / "rec_en"), lang="en", **common
+            ocr_en = PaddleOCR(
+                rec_model_dir=str(self.models_dir / "rec_en"), lang="en", **common
             )
-            cls._ocr_ru = PaddleOCR(
-                rec_model_dir=str(_MODELS_DIR / "rec_ru"),
-                rec_char_dict_path=str(_MODELS_DIR / "rec_ru" / "cyrillic_dict.txt"),
+            ocr_ru = PaddleOCR(
+                rec_model_dir=str(self.models_dir / "rec_ru"),
+                rec_char_dict_path=str(self.models_dir / "rec_ru" / "cyrillic_dict.txt"),
                 lang="cyrillic",
                 **common,
             )
-            logger.info("paddleocr_dual_engine_initialized", models_dir=str(_MODELS_DIR))
-        return cls._ocr_en, cls._ocr_ru
+            cached = (ocr_en, ocr_ru)
+            PaddleOCRProvider._engines_by_dir[key] = cached
+            logger.info("paddleocr_dual_engine_initialized", models_dir=key)
+        return cached
 
     # ------------------------------------------------------------------
     # Image helpers
@@ -583,24 +602,47 @@ class PaddleOCRProvider(OCRProvider):
     def _fuse_chars(self, text_en: str, text_ru: str) -> str:
         # Per-index fusion below assumes text_en and text_ru describe the
         # same character sequence one-to-one. That assumption breaks when
-        # the English engine omits a Cyrillic letter it can't represent
-        # instead of guessing a Latin substitute (common — verified against
-        # real melt-number reads: e.g. Cyrillic engine reads "14Г4736"
-        # perfectly, English engine reads "144736", silently skipping the
-        # letter's slot). Every English digit from that point on then
-        # actually belongs one position earlier, so index-based fusion
-        # trusts each shifted-in digit over the Cyrillic engine's correctly
-        # positioned one, corrupting an already-perfect Cyrillic read into a
-        # shorter, wrong string. If the Cyrillic engine's raw output already
-        # matches the expected melt/serial shape on its own, trust it
-        # wholesale instead of risking that corruption — merging can only
-        # help when the Cyrillic read is broken, never when it's already a
-        # clean, validly-shaped answer. Only applies under the cyrillic bias:
-        # under english bias we don't want to hand the whole result to the
-        # Cyrillic engine just because it happens to already fit the shape.
+        # one engine omits a character the other detected -- most often the
+        # English engine dropping a Cyrillic letter it can't represent
+        # (verified against real melt-number reads: e.g. Cyrillic engine
+        # reads "14Г4736" perfectly, English engine reads "144736", silently
+        # skipping the letter's slot), but the reverse (Cyrillic dropping a
+        # character English caught) is the same failure shape. Every
+        # character from the dropped slot onward then actually belongs one
+        # position earlier, so index-based fusion trusts each shifted-in
+        # character over the other engine's correctly positioned one,
+        # corrupting an already-usable read into a garbled, differently-wrong
+        # string on every retry (verified against the HPTR station's own
+        # production logs: the same physical blade re-scanned repeatedly
+        # produced a different bogus digit sequence each time, because the
+        # dropped-slot shift lands somewhere different depending on which
+        # preprocessing/crop candidate wins that attempt).
+        #
+        # If either engine's raw output already matches the expected
+        # melt/serial shape on its own, trust it wholesale instead of risking
+        # that corruption -- merging can only help when both reads are
+        # broken, never when one is already a clean, validly shaped answer.
+        #
+        # Deliberately scoped per bias rather than sharing one symmetric
+        # check across both: script_bias="cyrillic" (the OH backend) keeps
+        # its original, unchanged condition below byte-for-byte -- only
+        # checks the Cyrillic engine's own shape match, exactly as before
+        # this fix existed. script_bias="english" (HPTR only) gets the new
+        # two-step check (English's own shape match first, falling back to
+        # Cyrillic's) that actually fixes the shift-corruption bug. This
+        # keeps the OH station's fusion output byte-identical to before;
+        # nothing here can change what OH's model produces.
+        text_en_upper = text_en.upper() if text_en else ""
         text_ru_upper = text_ru.upper() if text_ru else ""
-        if self.script_bias == "cyrillic" and len(text_en) != len(text_ru) and _SHAPE_RE.match(text_ru_upper):
-            return text_ru_upper
+        if len(text_en) != len(text_ru):
+            if self.script_bias == "cyrillic":
+                if _SHAPE_RE.match(text_ru_upper):
+                    return text_ru_upper
+            else:
+                if _SHAPE_RE.match(text_en_upper):
+                    return text_en_upper
+                if _SHAPE_RE.match(text_ru_upper):
+                    return text_ru_upper
         max_len = max(len(text_en), len(text_ru))
         return "".join(
             self._arbitrate_slot(
@@ -813,30 +855,36 @@ class PaddleOCRProvider(OCRProvider):
         the normal case; (2) a single confusion-guided correction
         (``_try_correct_to_shape``) on each detected line, for a read that's
         one misread character away from the expected shape; (3) the
-        best-single-line fallback, for anything else. Under the cyrillic
-        bias, a value produced by (1) or (2) already matches the
-        digits-letter-digits grammar, so it also gets the Latin/Cyrillic
-        letter-script canonicalization (``_normalize_letter_script``) — the
-        fallback path skips it since its shape isn't guaranteed. Under the
-        english bias, canonicalization never runs — the "the embedded letter
-        is always meant to be Cyrillic" assumption behind it is specific to
-        the Russian-nameplate population it was tuned on, not assumed to
-        hold for this station's blades. Returns
+        best-single-line fallback, for anything else. A value produced by
+        (1) or (2) already matches the digits-letter-digits grammar, so it
+        also gets the Latin/Cyrillic letter-script canonicalization
+        (``_normalize_letter_script``) — the fallback path skips it since its
+        shape isn't guaranteed.
+
+        This canonicalization runs regardless of ``script_bias`` — it used to
+        be cyrillic-bias-only, on the assumption that english bias (HPTR)
+        stations might genuinely stamp a Latin letter instead of a Cyrillic
+        one. Checked against 399 real HPTR ground-truth melt numbers: every
+        embedded letter in the labeled data is Cyrillic (А, Б, В, Н, М, К, ...)
+        — HPTR blades come from the same Russian-nameplate manufacturing
+        convention as LPTR, not a different population that uses Latin
+        letters. Leaving canonicalization off just meant the single most
+        common near-miss pattern (the English engine correctly reads a
+        homoglyph letter as its Latin code point — e.g. А/В/Н read as A/B/H —
+        and it's never converted back) was a guaranteed one-character miss on
+        every scan where it happened — over a quarter of all HPTR scans in
+        that evaluation. Returns
         ``(value, confidence, pattern_matched, correction_applied)``.
         """
         match = pattern_re.search(fused["full_text"])
         if match:
-            value = match.group(0).upper()
-            if self.script_bias == "cyrillic":
-                value = _normalize_letter_script(value)
+            value = _normalize_letter_script(match.group(0).upper())
             return value, 0.88, True, False
 
         for line in fused["lines"]:
             corrected = _try_correct_to_shape(line.strip())
             if corrected:
-                value = corrected.upper()
-                if self.script_bias == "cyrillic":
-                    value = _normalize_letter_script(value)
+                value = _normalize_letter_script(corrected.upper())
                 return value, 0.75, False, True
 
         fallback_conf = self._clamp_confidence(fused["confidence"] * 0.5)
