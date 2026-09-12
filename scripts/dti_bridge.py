@@ -19,6 +19,13 @@ Two-station deployment (two gauges, two blades simultaneously):
     Each browser tab connects to the DTI WebSocket with ?station=1 or ?station=2
     so readings from each gauge only reach the matching measurement form.
 
+Whatever --server is given, this bridge also automatically falls back to
+the other known OH-PC address (see KNOWN_OH_ADDRESSES) if that one stops
+answering — the LAN IP and the NetBIOS hostname can fail independently of
+each other (DNS/NetBIOS hiccup vs. an IP-level routing issue), and there's
+no reason a reading should be lost just because whichever one happened to
+be passed on the command line is temporarily the one having trouble.
+
 Usage:
     python dti_bridge.py                                          # COM7, station 1, H1-H4
     python dti_bridge.py --port COM1 --station 1                 # rig 1
@@ -52,7 +59,6 @@ import requests
 import serial
 
 from bridge_common import build_session as _build_session
-from bridge_common import wait_until_reachable as _wait_until_reachable
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -67,6 +73,16 @@ logging.basicConfig(
     handlers=_handlers,
 )
 log = logging.getLogger(__name__)
+
+# ─── Known OH-PC addresses ────────────────────────────────────────────────────
+# Kept in sync with weighing_bridge.py's identical constant, oak1_camera_
+# service.py's DEFAULT_ORIGINS, and CLAUDE.md's documented addresses for the
+# OH PC — update all together if it ever changes. Always tried as a fallback
+# after whatever --server was requested (see _candidate_servers), so a DNS/
+# NetBIOS hiccup on the hostname or a routing issue on the IP doesn't
+# independently take the bridge down when the other address would still
+# have worked.
+KNOWN_OH_ADDRESSES = ["http://172.146.5.98", "http://bladerocking-1-"]
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_PORT     = "COM1"
@@ -173,37 +189,83 @@ def _read_next_value(ser: serial.Serial, port: str):
     return ser, value
 
 
-def _post_reading(session: requests.Session, push_url: str, station: str, current_pos: str, value: float) -> str:
-    """POST one reading; returns the (possibly server-advanced) position."""
-    try:
-        resp = session.post(
-            push_url,
-            json={"station": station, "position": current_pos, "value": value},
-            timeout=3,
+def _candidate_servers(server: str) -> list[str]:
+    """Requested --server first, then the other known OH-PC address(es), de-duplicated."""
+    candidates = [server]
+    for addr in KNOWN_OH_ADDRESSES:
+        if addr not in candidates:
+            candidates.append(addr)
+    return candidates
+
+
+def _wait_until_any_reachable(session: requests.Session, servers: list[str], retry_interval_s: int) -> None:
+    """Blocks (retrying forever) until at least one of ``servers`` responds to
+    /health. Whichever one answers is moved to the front of ``servers`` (in
+    place) so the rest of the run tries it first.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        for i, candidate in enumerate(servers):
+            try:
+                r = session.get(candidate.rstrip("/") + "/health", timeout=5)
+                log.info("[http ] %s reachable — status %s", candidate, r.status_code)
+                if i != 0:
+                    servers.insert(0, servers.pop(i))
+                return
+            except requests.RequestException as exc:
+                log.debug("[http ] %s unreachable: %s", candidate, exc)
+        log.warning(
+            "[http ] none of %s reachable (attempt %d) — retrying in %ds\n"
+            "  • Is the server running?  (docker compose ps)\n"
+            "  • Is the address correct?  Try http://localhost or https://<server-ip>",
+            servers, attempt, retry_interval_s,
         )
-    except requests.RequestException as exc:
-        log.warning("[http ] POST failed: %s", exc)
-        return current_pos
+        time.sleep(retry_interval_s)
 
-    if resp.status_code != 200:
-        log.warning("[http ] server returned %d: %s", resp.status_code, resp.text[:120])
-        return current_pos
 
-    log.info("[http ] ✓ accepted  value = %.4f", value)
-    try:
-        next_position = resp.json().get("next_position")
-    except ValueError:
-        next_position = None
-    return next_position or current_pos
+def _post_reading(session: requests.Session, servers: list[str], station: str, current_pos: str, value: float) -> str:
+    """Tries each of ``servers`` in order until one accepts the reading;
+    returns the (possibly server-advanced) position. Whichever server
+    succeeds is moved to the front of ``servers`` (in place) so subsequent
+    readings try it first.
+    """
+    for i, server in enumerate(servers):
+        push_url = server.rstrip("/") + PUSH_PATH
+        try:
+            resp = session.post(
+                push_url,
+                json={"station": station, "position": current_pos, "value": value},
+                timeout=3,
+            )
+        except requests.RequestException as exc:
+            log.warning("[http ] POST to %s failed: %s", server, exc)
+            continue
+
+        if resp.status_code != 200:
+            log.warning("[http ] %s returned %d: %s", server, resp.status_code, resp.text[:120])
+            continue
+
+        log.info("[http ] ✓ accepted  value = %.4f  via %s", value, server)
+        if i != 0:
+            servers.insert(0, servers.pop(i))
+        try:
+            next_position = resp.json().get("next_position")
+        except ValueError:
+            next_position = None
+        return next_position or current_pos
+
+    log.warning("[http ] reading %.4f could not be posted to any of %s", value, servers)
+    return current_pos
 
 
 def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> None:
-    push_url = server.rstrip("/") + PUSH_PATH
-    log.info("[http ] push URL → %s", push_url)
+    servers = _candidate_servers(server)
+    log.info("[http ] candidate servers (in order): %s", servers)
     log.info("[dti  ] station: %s", station)
 
     session = _build_session(insecure_ssl)
-    _wait_until_reachable(session, server, RETRY_INTERVAL_S)
+    _wait_until_any_reachable(session, servers, RETRY_INTERVAL_S)
 
     ser = _connect(port)
 
@@ -233,7 +295,7 @@ def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> Non
             last_accepted = now
 
             log.info("[dti  ] %s = %.4f mm  →  posting (station %s) …", current_pos, value, station)
-            current_pos = _post_reading(session, push_url, station, current_pos, value)
+            current_pos = _post_reading(session, servers, station, current_pos, value)
             log.info("[dti  ] ready for next reading at position %s — press DATA", current_pos)
 
     except KeyboardInterrupt:

@@ -13,10 +13,16 @@
 #   # on any PC receives every PC's scale/DTI readings indiscriminately
 #   # (weighing/DTI both scope readings by station, defaulting to "1"):
 #   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98 -Station 2
+#   # On a PC with exactly one scale physically wired to it, pin the bridge to
+#   # that scale only so the other KNOWN_SCALES entry is never picked up even
+#   # if it's in Bluetooth range (e.g. iScale-BT-91 or iScale-BT-0111):
+#   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98 -Station 2 -Scale iScale-BT-91
 
 param(
     [string]$Server = "http://localhost",  # backend address the weighing/DTI bridges and OCR service push/forward to
-    [string]$Station = "1"                 # must be unique per PC — see usage note above
+    [string]$Station = "1",                # must be unique per PC — see usage note above
+    [string]$Scale = "",                   # optional — restrict weighing_bridge.py to exactly this scale (see weighing_bridge.py --scale)
+    [string]$DtiPort = "COM4"              # the DTI gauge's actual COM port on THIS PC — verify with: python -m serial.tools.list_ports
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,14 +54,23 @@ function Register-BridgeTask {
 # (see KNOWN_SCALES in that script) rather than a hard-coded COM port, so a
 # single task covers both — no --port needed, and no action required when
 # Windows reassigns a COM letter after a re-pair. (On a PC with only one
-# scale wired in, KNOWN_SCALES auto-discovery still works unmodified — it
-# just never finds the other MAC.)
-# COM4 is unconfirmed for the Sylvac DTI gauge — if it doesn't connect,
-# re-pair the gauge in Windows Bluetooth settings and check its actual COM
-# port with: python -m serial.tools.list_ports
+# scale physically wired to it, pass -Scale to pin discovery to just that
+# one — see the usage note above — so the other MAC is never picked up even
+# if it happens to be in Bluetooth range.)
+# -DtiPort defaults to COM4, but that's just where the DTI gauge happened to
+# land on the OH PC — it's a per-PC Bluetooth pairing assignment, not a
+# constant, and can collide with a scale's own COM port on a different PC
+# (that happened on the HPTR PC: iScale-BT-91 and the DTI gauge both ended
+# up enumerated under COM4, and only one process can hold a COM port at a
+# time — the two bridges fought over it instead of either working reliably).
+# Verify the actual assignment on THIS PC before registering:
+#   python -m serial.tools.list_ports -v
+$weighingArgs = "weighing_bridge.py --server $Server --station $Station"
+if ($Scale) { $weighingArgs += " --scale $Scale" }
+
 Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py" -Execute $oak1Py
-Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --server $Server --station $Station"
-Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port COM4 --station $Station --server $Server"
+Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs $weighingArgs
+Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port $DtiPort --station $Station --server $Server"
 # Only meaningful on a station set up to run its own OCR model locally
 # instead of sending scans to the OH PC (see hptr_ocr_service.py and
 # CLAUDE.md's "Secondary Hardware Stations" section) — harmless to register

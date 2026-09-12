@@ -28,11 +28,18 @@ a single global channel — which is exactly what caused that):
     Each browser tab connects to the weighing WebSocket with ?station=1 or
     ?station=2 so readings from each scale only reach the matching form.
 
+Whatever --server is given, this bridge also automatically falls back to
+the other known OH-PC address (see KNOWN_OH_ADDRESSES) if that one stops
+answering — the LAN IP and the NetBIOS hostname can fail independently of
+each other (DNS/NetBIOS hiccup vs. an IP-level routing issue), and there's
+no reason a reading should be lost just because whichever one happened to
+be passed on the command line is temporarily the one having trouble.
+
 Usage:
     python weighing_bridge.py                          # auto-discover, server = http://localhost, station 1
     python weighing_bridge.py --port COM3              # bypass discovery, pin to one port (testing)
     python weighing_bridge.py --server https://192.168.1.50 --insecure-ssl  # remote server, self-signed cert
-    python weighing_bridge.py --station 2 --server http://172.146.5.98      # second PC's own scale
+    python weighing_bridge.py --station 2 --server http://172.146.5.98 --scale iScale-BT-91  # second PC, one fixed scale only
 
 Requirements (install once):
     pip install pyserial requests
@@ -53,7 +60,6 @@ import serial
 import serial.tools.list_ports
 
 from bridge_common import build_session as _build_session
-from bridge_common import wait_until_reachable as _wait_until_reachable
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -77,6 +83,15 @@ KNOWN_SCALES = {
     "00250201225E": "iScale-BT-0111",
 }
 
+# ─── Known OH-PC addresses ────────────────────────────────────────────────────
+# Kept in sync with oak1_camera_service.py's DEFAULT_ORIGINS and CLAUDE.md's
+# documented addresses for the OH PC — update all three together if it ever
+# changes. Always tried as a fallback after whatever --server was requested
+# (see _candidate_servers), so a DNS/NetBIOS hiccup on the hostname or a
+# routing issue on the IP doesn't independently take the bridge down when
+# the other address would still have worked.
+KNOWN_OH_ADDRESSES = ["http://172.146.5.98", "http://bladerocking-1-"]
+
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_SERVER = "http://localhost"
 PUSH_PATH      = "/api/v1/weighing/push"
@@ -92,8 +107,15 @@ _WEIGHT_RE     = re.compile(r"\d+\.?\d*")
 _STALE_CONNECTION_S = 20
 
 
-def _known_scale_ports() -> list[tuple[str, str]]:
+def _known_scale_ports(only_label: str | None = None) -> list[tuple[str, str]]:
     """Resolve each KNOWN_SCALES MAC to its current COM port, if paired/visible.
+
+    ``only_label`` (a KNOWN_SCALES value, e.g. "iScale-BT-91") restricts
+    discovery to just that one scale — for a PC with exactly one scale
+    physically wired to it, so a stray pairing/visibility of the OTHER known
+    scale (e.g. carried in from another station, or just in Bluetooth range)
+    is never picked up by mistake. ``None`` (default) preserves the original
+    OH-station behavior of discovering whichever of the two is live.
 
     Returns a list of (port, label) pairs. A MAC with no matching port isn't
     currently paired/visible to Windows and is skipped — this is normal when
@@ -103,6 +125,8 @@ def _known_scale_ports() -> list[tuple[str, str]]:
     for info in serial.tools.list_ports.comports():
         hwid = (info.hwid or "").upper()
         for mac, label in KNOWN_SCALES.items():
+            if only_label and label != only_label:
+                continue
             if mac in hwid:
                 found.append((info.device, label))
                 break
@@ -178,21 +202,22 @@ def _race_open(candidates: list[tuple[str, str]]):
     return None, None, None
 
 
-def _connect(port_override: str | None):
+def _connect(port_override: str | None, only_label: str | None = None):
     """Open a scale's port, retrying forever until it succeeds.
 
-    With no override, each attempt re-resolves KNOWN_SCALES to whichever COM
-    ports are currently paired/visible and races all of them concurrently
-    (see _race_open) — so it doesn't matter which scale is powered on, which
-    COM port Windows assigned it, or whether both happen to be on at once.
-    A failed attempt must keep retrying rather than giving up — otherwise the
+    With no override, each attempt re-resolves KNOWN_SCALES (restricted to
+    ``only_label`` if given — see _known_scale_ports) to whichever COM ports
+    are currently paired/visible and races all of them concurrently (see
+    _race_open) — so it doesn't matter which scale is powered on, which COM
+    port Windows assigned it, or whether both happen to be on at once. A
+    failed attempt must keep retrying rather than giving up — otherwise the
     bridge process exits and never notices when a scale comes on (or switches
     from one scale to the other).
     """
     attempt = 0
     while True:
         attempt += 1
-        candidates = [(port_override, "manual")] if port_override else _known_scale_ports()
+        candidates = [(port_override, "manual")] if port_override else _known_scale_ports(only_label)
         if not candidates:
             log.warning(
                 "[serial] no known scale currently paired/visible (attempt %d) — "
@@ -219,7 +244,9 @@ def _connect(port_override: str | None):
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight, last_data_at: float):
+def _read_next_weight(
+    ser: serial.Serial, port_override: str | None, only_label: str | None, last_weight, last_data_at: float
+):
     """Read and parse one line from the scale.
 
     Returns ``(ser, weight, last_data_at)`` — ``ser`` is a freshly reconnected
@@ -238,7 +265,7 @@ def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight
         except Exception:
             pass
         time.sleep(5)
-        return _connect(port_override), None, time.monotonic()
+        return _connect(port_override, only_label), None, time.monotonic()
 
     if not raw:
         if time.monotonic() - last_data_at > _STALE_CONNECTION_S:
@@ -250,7 +277,7 @@ def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight
                 ser.close()
             except Exception:
                 pass
-            return _connect(port_override), None, time.monotonic()
+            return _connect(port_override, only_label), None, time.monotonic()
         time.sleep(0.05)
         return ser, None, last_data_at
 
@@ -265,28 +292,81 @@ def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight
     return ser, weight, last_data_at
 
 
-def _post_weight(session: requests.Session, push_url: str, weight: float, station: str) -> None:
-    try:
-        resp = session.post(push_url, json={"value": weight, "station": station}, timeout=3)
-        if resp.status_code == 200:
-            log.info("[http ] ✓ accepted (%.4f)", weight)
-        else:
-            log.warning("[http ] server returned %d: %s", resp.status_code, resp.text[:120])
-    except requests.RequestException as exc:
-        log.warning("[http ] POST failed: %s", exc)
+def _candidate_servers(server: str) -> list[str]:
+    """Requested --server first, then the other known OH-PC address(es), de-duplicated."""
+    candidates = [server]
+    for addr in KNOWN_OH_ADDRESSES:
+        if addr not in candidates:
+            candidates.append(addr)
+    return candidates
 
 
-def run(port_override: str | None, server: str, station: str, insecure_ssl: bool = False) -> None:
-    push_url = server.rstrip("/") + PUSH_PATH
-    log.info("[http ] push URL → %s (station %s)", push_url, station)
+def _wait_until_any_reachable(session: requests.Session, servers: list[str], retry_interval_s: int) -> None:
+    """Blocks (retrying forever) until at least one of ``servers`` responds to
+    /health. Whichever one answers is moved to the front of ``servers`` (in
+    place) so the rest of the run tries it first.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        for i, candidate in enumerate(servers):
+            try:
+                r = session.get(candidate.rstrip("/") + "/health", timeout=5)
+                log.info("[http ] %s reachable — status %s", candidate, r.status_code)
+                if i != 0:
+                    servers.insert(0, servers.pop(i))
+                return
+            except requests.RequestException as exc:
+                log.debug("[http ] %s unreachable: %s", candidate, exc)
+        log.warning(
+            "[http ] none of %s reachable (attempt %d) — retrying in %ds\n"
+            "  • Is the server running?  (docker compose ps)\n"
+            "  • Is the address correct?  Try http://localhost or https://<server-ip>",
+            servers, attempt, retry_interval_s,
+        )
+        time.sleep(retry_interval_s)
 
-    # Verify the server is reachable before opening the serial port — retry
-    # forever rather than exiting, since the backend may come up after this
-    # bridge is started.
+
+def _post_weight(session: requests.Session, servers: list[str], weight: float, station: str) -> None:
+    """Tries each of ``servers`` in order until one accepts the reading.
+    Whichever one succeeds is moved to the front of ``servers`` (in place) so
+    subsequent readings try it first — sticky to whichever address is
+    actually working right now, without needing to know that in advance.
+    """
+    for i, server in enumerate(servers):
+        push_url = server.rstrip("/") + PUSH_PATH
+        try:
+            resp = session.post(push_url, json={"value": weight, "station": station}, timeout=3)
+            if resp.status_code == 200:
+                log.info("[http ] ✓ accepted (%.4f) via %s", weight, server)
+                if i != 0:
+                    servers.insert(0, servers.pop(i))
+                return
+            log.warning("[http ] %s returned %d: %s", server, resp.status_code, resp.text[:120])
+        except requests.RequestException as exc:
+            log.warning("[http ] POST to %s failed: %s", server, exc)
+    log.warning("[http ] weight %.4f could not be posted to any of %s", weight, servers)
+
+
+def run(
+    port_override: str | None,
+    server: str,
+    station: str,
+    insecure_ssl: bool = False,
+    only_scale: str | None = None,
+) -> None:
+    servers = _candidate_servers(server)
+    log.info("[http ] candidate servers (station %s, in order): %s", station, servers)
+    if only_scale:
+        log.info("[serial] restricted to %s only — every other known scale is ignored", only_scale)
+
+    # Verify at least one server is reachable before opening the serial port
+    # — retry forever rather than exiting, since the backend may come up
+    # after this bridge is started.
     session = _build_session(insecure_ssl)
-    _wait_until_reachable(session, server, RETRY_INTERVAL_S)
+    _wait_until_any_reachable(session, servers, RETRY_INTERVAL_S)
 
-    ser = _connect(port_override)
+    ser = _connect(port_override, only_scale)
 
     last_weight = None
     last_data_at = time.monotonic()
@@ -294,13 +374,13 @@ def run(port_override: str | None, server: str, station: str, insecure_ssl: bool
 
     try:
         while True:
-            ser, weight, last_data_at = _read_next_weight(ser, port_override, last_weight, last_data_at)
+            ser, weight, last_data_at = _read_next_weight(ser, port_override, only_scale, last_weight, last_data_at)
             if weight is None:
                 continue
 
             last_weight = weight
             log.info("[scale] %.4f  →  posting …", weight)
-            _post_weight(session, push_url, weight, station)
+            _post_weight(session, servers, weight, station)
 
     except KeyboardInterrupt:
         log.info("Stopped.")
@@ -360,8 +440,20 @@ To list available COM ports:
             "by default."
         ),
     )
+    parser.add_argument(
+        "--scale", default=None, choices=sorted(KNOWN_SCALES.values()),
+        help=(
+            "Restrict auto-discovery to only this scale (ignored if --port is "
+            "also given). Use this on a PC with exactly one scale physically "
+            "wired to it, so the other known scale is never picked up even if "
+            "it happens to be paired/visible/in Bluetooth range (e.g. carried "
+            "in from another station). Default: no restriction — discover "
+            "whichever known scale is live, the OH PC's own two-scale-sharing "
+            "behavior."
+        ),
+    )
     args = parser.parse_args()
-    run(args.port, args.server, args.station, args.insecure_ssl)
+    run(args.port, args.server, args.station, args.insecure_ssl, args.scale)
 
 
 if __name__ == "__main__":
