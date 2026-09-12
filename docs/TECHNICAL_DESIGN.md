@@ -1097,12 +1097,12 @@ The OAK-1 service is optional — both stations work without it; the browser web
 
 ### 10.1 Weighing Scale (scripts/weighing_bridge.py)
 
-**Model: Adam Equipment iScale i-04, resolution 0.1 g — two units share the OH
-station (iScale-BT-91, iScale-BT-0111), only one powered on at a time**
+**Model: Adam Equipment iScale i-04, resolution 0.1 g — iScale-BT-91 on the OH
+station; the other unit (iScale-BT-0111) has moved to the HPTR PC**
 
 | Parameter | Value |
 |-----------|-------|
-| Port discovery | Auto — resolves `KNOWN_SCALES` (Bluetooth MAC → name) to whichever COM port Windows currently has it on; `--port` overrides for manual/testing use |
+| Port discovery | Fixed — pinned to a specific COM port via `--port` (default `COM3` on the OH PC); no Bluetooth MAC auto-discovery, so only the scale actually wired to that port can ever connect |
 | Baud rates tried | 9600, 4800, 2400, 19200, 38400 (auto-detect) |
 | Data bits | 8 |
 | Parity | None |

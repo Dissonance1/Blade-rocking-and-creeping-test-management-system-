@@ -4,26 +4,20 @@ Weighing machine bridge — run this on Windows (NOT in Docker/WSL).
 Reads weight from a serial COM port and POSTs each reading to the
 Blade Rocking backend so every open browser tab auto-fills the weight field.
 
-Scales (this deployment):
-    Two Adam Equipment iScale i-04, 0.1 g resolution, each connected via an
-    RS-232-to-Bluetooth SPP adapter. Normally only one is powered on at a
-    time. Windows assigns whichever COM port is free at pairing time, and
-    that assignment can shift after a re-pair — so this bridge auto-discovers
-    the live scale by its stable Bluetooth MAC address (see KNOWN_SCALES)
-    rather than a hard-coded COM port. Whichever scale is actually powered on
-    gets picked up automatically; no need to know or care which COM it landed
-    on. If both happen to be on at once, whichever answers first wins (see
-    _race_open) — both still post under this one process's --station, with
-    no identity distinguishing the two scales from each other, so don't rely
-    on both being live at the same time for two different blades.
+Scale (this deployment):
+    Adam Equipment iScale i-04, 0.1 g resolution, connected via an
+    RS-232-to-Bluetooth SPP adapter, fixed at COM3 on this PC (iScale-BT-91).
+    The other scale that used to share this PC (iScale-BT-0111) has moved to
+    the HPTR PC — this bridge only ever opens the port it's told to, so it
+    can never pick up that other scale even if it happens to be in
+    Bluetooth range.
 
 Two-PC deployment (e.g. the OH PC's own scale plus a second PC's own scale,
 see CLAUDE.md's "Secondary Hardware Stations"): each PC's bridge must use a
 different --station, or every browser tab on either PC receives both scales'
-readings indiscriminately (there used to be no station concept at all here —
-a single global channel — which is exactly what caused that):
-    OH PC:      python weighing_bridge.py --station 1
-    Second PC:  python weighing_bridge.py --station 2 --server http://<OH PC>
+readings indiscriminately:
+    OH PC:      python weighing_bridge.py --port COM3 --station 1
+    Second PC:  python weighing_bridge.py --port COM3 --station 2 --server http://<OH PC>
 
     Each browser tab connects to the weighing WebSocket with ?station=1 or
     ?station=2 so readings from each scale only reach the matching form.
@@ -36,10 +30,10 @@ no reason a reading should be lost just because whichever one happened to
 be passed on the command line is temporarily the one having trouble.
 
 Usage:
-    python weighing_bridge.py                          # auto-discover, server = http://localhost, station 1
-    python weighing_bridge.py --port COM3              # bypass discovery, pin to one port (testing)
+    python weighing_bridge.py                          # COM3, server = http://localhost, station 1
+    python weighing_bridge.py --port COM6              # different port
     python weighing_bridge.py --server https://192.168.1.50 --insecure-ssl  # remote server, self-signed cert
-    python weighing_bridge.py --station 2 --server http://172.146.5.98 --scale iScale-BT-91  # second PC, one fixed scale only
+    python weighing_bridge.py --station 2 --server http://172.146.5.98      # second PC
 
 Requirements (install once):
     pip install pyserial requests
@@ -51,13 +45,11 @@ import argparse
 import logging
 import re
 import sys
-import threading
 import time
 from pathlib import Path
 
 import requests
 import serial
-import serial.tools.list_ports
 
 from bridge_common import build_session as _build_session
 
@@ -75,62 +67,30 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─── Known scales ─────────────────────────────────────────────────────────────
-# Bluetooth MAC (no separators, as it appears in the Windows serial port hwid)
-# → friendly name, for the two scales paired to this OH station PC.
-KNOWN_SCALES = {
-    "0025020126B1": "iScale-BT-91",
-    "00250201225E": "iScale-BT-0111",
-}
-
 # ─── Known OH-PC addresses ────────────────────────────────────────────────────
-# Kept in sync with oak1_camera_service.py's DEFAULT_ORIGINS and CLAUDE.md's
-# documented addresses for the OH PC — update all three together if it ever
-# changes. Always tried as a fallback after whatever --server was requested
-# (see _candidate_servers), so a DNS/NetBIOS hiccup on the hostname or a
-# routing issue on the IP doesn't independently take the bridge down when
-# the other address would still have worked.
+# Kept in sync with dti_bridge.py's identical constant, oak1_camera_service.py's
+# DEFAULT_ORIGINS, and CLAUDE.md's documented addresses for the OH PC — update
+# all together if it ever changes. Always tried as a fallback after whatever
+# --server was requested (see _candidate_servers), so a DNS/NetBIOS hiccup on
+# the hostname or a routing issue on the IP doesn't independently take the
+# bridge down when the other address would still have worked.
 KNOWN_OH_ADDRESSES = ["http://172.146.5.98", "http://bladerocking-1-"]
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_SERVER = "http://localhost"
-PUSH_PATH      = "/api/v1/weighing/push"
-BAUD_RATES     = [9600, 4800, 2400, 19200, 38400]
+DEFAULT_PORT     = "COM3"
+DEFAULT_SERVER   = "http://localhost"
+PUSH_PATH        = "/api/v1/weighing/push"
+BAUD_RATES       = [9600, 4800, 2400, 19200, 38400]
 RETRY_INTERVAL_S = 5
-_WEIGHT_RE     = re.compile(r"\d+\.?\d*")
+_WEIGHT_RE       = re.compile(r"\d+\.?\d*")
 
 # A Bluetooth SPP virtual COM port often doesn't raise SerialException when the
 # scale is powered off or walks out of range — reads just keep timing out and
 # returning nothing, forever, on a connection that's actually dead. If no byte
-# at all has arrived in this long, treat the connection as stale and re-run
-# discovery rather than waiting on a port nothing will ever answer on again.
+# at all has arrived in this long, treat the connection as stale and reopen
+# the port rather than waiting on a connection nothing will ever answer on
+# again.
 _STALE_CONNECTION_S = 20
-
-
-def _known_scale_ports(only_label: str | None = None) -> list[tuple[str, str]]:
-    """Resolve each KNOWN_SCALES MAC to its current COM port, if paired/visible.
-
-    ``only_label`` (a KNOWN_SCALES value, e.g. "iScale-BT-91") restricts
-    discovery to just that one scale — for a PC with exactly one scale
-    physically wired to it, so a stray pairing/visibility of the OTHER known
-    scale (e.g. carried in from another station, or just in Bluetooth range)
-    is never picked up by mistake. ``None`` (default) preserves the original
-    OH-station behavior of discovering whichever of the two is live.
-
-    Returns a list of (port, label) pairs. A MAC with no matching port isn't
-    currently paired/visible to Windows and is skipped — this is normal when
-    that scale is simply powered off.
-    """
-    found = []
-    for info in serial.tools.list_ports.comports():
-        hwid = (info.hwid or "").upper()
-        for mac, label in KNOWN_SCALES.items():
-            if only_label and label != only_label:
-                continue
-            if mac in hwid:
-                found.append((info.device, label))
-                break
-    return found
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -161,92 +121,28 @@ def _open_port(port: str, baud: int):
     return None
 
 
-def _race_open(candidates: list[tuple[str, str]]):
-    """Try every candidate port concurrently; whichever answers first wins.
-
-    Both scales can be powered on at once. Probing candidates one at a time
-    would always favor whichever port happens to be enumerated first (in
-    practice, the lower COM number) — not what "whichever is on" should mean.
-    Racing them in parallel threads makes it genuinely first-come-first-served:
-    whichever scale actually starts sending data first is the one used. The
-    loser's port (if it also answers, just slightly later) is closed
-    immediately rather than left open.
-
-    Returns ``(ser, label, port)`` for the winner, or ``(None, None, None)``
-    if nothing answered.
-    """
-    winner: dict = {}
-    lock = threading.Lock()
-
-    def _probe(port: str, label: str) -> None:
-        for baud in BAUD_RATES:
-            if winner:
-                return
-            ser = _open_port(port, baud)
-            if ser:
-                with lock:
-                    if "ser" not in winner:
-                        winner.update(ser=ser, label=label, port=port)
-                    else:
-                        ser.close()
-                return
-
-    threads = [threading.Thread(target=_probe, args=(port, label), daemon=True) for port, label in candidates]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    if "ser" in winner:
-        return winner["ser"], winner["label"], winner["port"]
-    return None, None, None
-
-
-def _connect(port_override: str | None, only_label: str | None = None):
-    """Open a scale's port, retrying forever until it succeeds.
-
-    With no override, each attempt re-resolves KNOWN_SCALES (restricted to
-    ``only_label`` if given — see _known_scale_ports) to whichever COM ports
-    are currently paired/visible and races all of them concurrently (see
-    _race_open) — so it doesn't matter which scale is powered on, which COM
-    port Windows assigned it, or whether both happen to be on at once. A
-    failed attempt must keep retrying rather than giving up — otherwise the
-    bridge process exits and never notices when a scale comes on (or switches
-    from one scale to the other).
-    """
+def _connect(port: str) -> serial.Serial:
+    """Open the scale's port, retrying forever until it succeeds."""
     attempt = 0
     while True:
         attempt += 1
-        candidates = [(port_override, "manual")] if port_override else _known_scale_ports(only_label)
-        if not candidates:
-            log.warning(
-                "[serial] no known scale currently paired/visible (attempt %d) — "
-                "retrying in %ds. Is a scale powered on?", attempt, RETRY_INTERVAL_S,
-            )
-            time.sleep(RETRY_INTERVAL_S)
-            continue
-
-        log.info("[serial] racing %d candidate port(s), attempt %d …", len(candidates), attempt)
-        ser, label, port = _race_open(candidates)
-        if ser:
-            log.info("[serial] %s is active on %s (first to respond)", label, port)
-            return ser
-
+        log.info("[serial] opening %s (attempt %d) …", port, attempt)
+        for baud in BAUD_RATES:
+            ser = _open_port(port, baud)
+            if ser:
+                return ser
         log.warning(
-            "[serial] no known scale responded — retrying in %ds.\n"
-            "  • Is a scale plugged in and powered on?\n"
-            "  • Is it paired in Windows Bluetooth settings?\n"
+            "[serial] could not open %s — retrying in %ds.\n"
+            "  • Is the scale plugged in / paired and powered on?\n"
             "  • Is another application (e.g. the scale software) using the port?",
-            RETRY_INTERVAL_S,
+            port, RETRY_INTERVAL_S,
         )
         time.sleep(RETRY_INTERVAL_S)
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def _read_next_weight(
-    ser: serial.Serial, port_override: str | None, only_label: str | None, last_weight, last_data_at: float
-):
+def _read_next_weight(ser: serial.Serial, port: str, last_weight, last_data_at: float):
     """Read and parse one line from the scale.
 
     Returns ``(ser, weight, last_data_at)`` — ``ser`` is a freshly reconnected
@@ -265,19 +161,19 @@ def _read_next_weight(
         except Exception:
             pass
         time.sleep(5)
-        return _connect(port_override, only_label), None, time.monotonic()
+        return _connect(port), None, time.monotonic()
 
     if not raw:
         if time.monotonic() - last_data_at > _STALE_CONNECTION_S:
             log.warning(
                 "[serial] no data for %ds — scale likely powered off or out of "
-                "range; re-scanning for a live scale …", _STALE_CONNECTION_S,
+                "range; reconnecting …", _STALE_CONNECTION_S,
             )
             try:
                 ser.close()
             except Exception:
                 pass
-            return _connect(port_override, only_label), None, time.monotonic()
+            return _connect(port), None, time.monotonic()
         time.sleep(0.05)
         return ser, None, last_data_at
 
@@ -348,17 +244,9 @@ def _post_weight(session: requests.Session, servers: list[str], weight: float, s
     log.warning("[http ] weight %.4f could not be posted to any of %s", weight, servers)
 
 
-def run(
-    port_override: str | None,
-    server: str,
-    station: str,
-    insecure_ssl: bool = False,
-    only_scale: str | None = None,
-) -> None:
+def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> None:
     servers = _candidate_servers(server)
     log.info("[http ] candidate servers (station %s, in order): %s", station, servers)
-    if only_scale:
-        log.info("[serial] restricted to %s only — every other known scale is ignored", only_scale)
 
     # Verify at least one server is reachable before opening the serial port
     # — retry forever rather than exiting, since the backend may come up
@@ -366,7 +254,7 @@ def run(
     session = _build_session(insecure_ssl)
     _wait_until_any_reachable(session, servers, RETRY_INTERVAL_S)
 
-    ser = _connect(port_override, only_scale)
+    ser = _connect(port)
 
     last_weight = None
     last_data_at = time.monotonic()
@@ -374,7 +262,7 @@ def run(
 
     try:
         while True:
-            ser, weight, last_data_at = _read_next_weight(ser, port_override, only_scale, last_weight, last_data_at)
+            ser, weight, last_data_at = _read_next_weight(ser, port, last_weight, last_data_at)
             if weight is None:
                 continue
 
@@ -401,8 +289,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python weighing_bridge.py                     # auto-discover a known scale
-  python weighing_bridge.py --port COM3         # pin to one port (bypass discovery)
+  python weighing_bridge.py                     # COM3, station 1
+  python weighing_bridge.py --port COM6         # different port
   python weighing_bridge.py --port COM6 --server https://192.168.1.50 --insecure-ssl
 
 To list available COM ports:
@@ -410,13 +298,8 @@ To list available COM ports:
 """,
     )
     parser.add_argument(
-        "--port", default=None,
-        help=(
-            "Manually pin to a specific Windows COM port, bypassing "
-            "auto-discovery by Bluetooth device name. Rarely needed — by "
-            "default, whichever scale in KNOWN_SCALES is powered on is "
-            "found automatically."
-        ),
+        "--port", default=DEFAULT_PORT,
+        help=f"Windows COM port name (default: {DEFAULT_PORT})",
     )
     parser.add_argument(
         "--server", default=DEFAULT_SERVER,
@@ -440,20 +323,8 @@ To list available COM ports:
             "by default."
         ),
     )
-    parser.add_argument(
-        "--scale", default=None, choices=sorted(KNOWN_SCALES.values()),
-        help=(
-            "Restrict auto-discovery to only this scale (ignored if --port is "
-            "also given). Use this on a PC with exactly one scale physically "
-            "wired to it, so the other known scale is never picked up even if "
-            "it happens to be paired/visible/in Bluetooth range (e.g. carried "
-            "in from another station). Default: no restriction — discover "
-            "whichever known scale is live, the OH PC's own two-scale-sharing "
-            "behavior."
-        ),
-    )
     args = parser.parse_args()
-    run(args.port, args.server, args.station, args.insecure_ssl, args.scale)
+    run(args.port, args.server, args.station, args.insecure_ssl)
 
 
 if __name__ == "__main__":

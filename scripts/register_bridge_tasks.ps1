@@ -13,15 +13,14 @@
 #   # on any PC receives every PC's scale/DTI readings indiscriminately
 #   # (weighing/DTI both scope readings by station, defaulting to "1"):
 #   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98 -Station 2
-#   # On a PC with exactly one scale physically wired to it, pin the bridge to
-#   # that scale only so the other KNOWN_SCALES entry is never picked up even
-#   # if it's in Bluetooth range (e.g. iScale-BT-91 or iScale-BT-0111):
-#   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -Server http://172.146.5.98 -Station 2 -Scale iScale-BT-91
+#   # If the scale or DTI gauge landed on a different COM port on this PC than
+#   # the defaults below, verify with: python -m serial.tools.list_ports
+#   powershell -ExecutionPolicy Bypass -File register_bridge_tasks.ps1 -WeighingPort COM3 -DtiPort COM4
 
 param(
     [string]$Server = "http://localhost",  # backend address the weighing/DTI bridges and OCR service push/forward to
     [string]$Station = "1",                # must be unique per PC — see usage note above
-    [string]$Scale = "",                   # optional — restrict weighing_bridge.py to exactly this scale (see weighing_bridge.py --scale)
+    [string]$WeighingPort = "COM3",        # the scale's actual COM port on THIS PC — verify with: python -m serial.tools.list_ports
     [string]$DtiPort = "COM4"              # the DTI gauge's actual COM port on THIS PC — verify with: python -m serial.tools.list_ports
 )
 
@@ -48,28 +47,21 @@ function Register-BridgeTask {
     Write-Host "Registered: $Name"
 }
 
-# Two iScale scales share the OH station (iScale-BT-91, MAC 0025020126B1, and
-# iScale-BT-0111, MAC 00250201225E) but only one is ever powered on at a time.
-# weighing_bridge.py auto-discovers whichever one is live by Bluetooth MAC
-# (see KNOWN_SCALES in that script) rather than a hard-coded COM port, so a
-# single task covers both — no --port needed, and no action required when
-# Windows reassigns a COM letter after a re-pair. (On a PC with only one
-# scale physically wired to it, pass -Scale to pin discovery to just that
-# one — see the usage note above — so the other MAC is never picked up even
-# if it happens to be in Bluetooth range.)
-# -DtiPort defaults to COM4, but that's just where the DTI gauge happened to
-# land on the OH PC — it's a per-PC Bluetooth pairing assignment, not a
-# constant, and can collide with a scale's own COM port on a different PC
+# This PC has exactly one scale wired to it (iScale-BT-91, pinned to
+# -WeighingPort) — weighing_bridge.py just opens that one COM port directly,
+# no Bluetooth MAC discovery involved, so nothing else (e.g. iScale-BT-0111,
+# now moved to the HPTR PC) can ever be picked up here even if it's in
+# Bluetooth range.
+# -WeighingPort/-DtiPort default to COM3/COM4, but those are just where the
+# scale/gauge happened to land on the OH PC — it's a per-PC Bluetooth
+# pairing assignment, not a constant, and can collide on a different PC
 # (that happened on the HPTR PC: iScale-BT-91 and the DTI gauge both ended
 # up enumerated under COM4, and only one process can hold a COM port at a
 # time — the two bridges fought over it instead of either working reliably).
 # Verify the actual assignment on THIS PC before registering:
 #   python -m serial.tools.list_ports -v
-$weighingArgs = "weighing_bridge.py --server $Server --station $Station"
-if ($Scale) { $weighingArgs += " --scale $Scale" }
-
 Register-BridgeTask -Name "BladeRocking-OAK1CameraService" -ScriptArgs "oak1_camera_service.py" -Execute $oak1Py
-Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs $weighingArgs
+Register-BridgeTask -Name "BladeRocking-WeighingBridge"     -ScriptArgs "weighing_bridge.py --port $WeighingPort --station $Station --server $Server"
 Register-BridgeTask -Name "BladeRocking-DTIBridge"          -ScriptArgs "dti_bridge.py --port $DtiPort --station $Station --server $Server"
 # Only meaningful on a station set up to run its own OCR model locally
 # instead of sending scans to the OH PC (see hptr_ocr_service.py and
