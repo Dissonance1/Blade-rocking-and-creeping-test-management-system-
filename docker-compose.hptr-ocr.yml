@@ -1,0 +1,38 @@
+# Local OCR companion service for a secondary station (e.g. the HPTR PC).
+#
+# Runs ONLY scripts/hptr_ocr_service.py in a container — it still does NOT
+# run the backend, Postgres, or frontend on this PC (see CLAUDE.md's
+# "Secondary Hardware Stations" section: there remains exactly one app
+# instance and one database, on the OH PC). This container just moves where
+# OCR *inference* physically runs, so the OH PC's backend isn't doing this
+# station's OCR work on top of its own.
+#
+# Usage (on the secondary station, from the repo root):
+#   OH_SERVER_URL=http://172.146.5.98 docker compose -f docker-compose.hptr-ocr.yml up -d --build
+#
+# Then point the frontend at it (this station's .env, or wherever
+# VITE_LOCAL_OCR_SERVICE_URL is set for the browser build/config used here):
+#   VITE_LOCAL_OCR_SERVICE_URL=http://localhost:8090
+
+services:
+  hptr-ocr:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.hptr-ocr
+    container_name: hptr-ocr-service
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      # The OH PC's LAN address — same value used for weighing/DTI bridges
+      # and register_bridge_tasks.ps1's -Server. Must be set explicitly:
+      # "localhost" inside this container is the container itself, not the
+      # OH PC (they're different physical machines).
+      OH_SERVER_URL: ${OH_SERVER_URL:?set OH_SERVER_URL to the OH PC's LAN address, e.g. http://172.146.5.98}
+    volumes:
+      - hptr_ocr_scans:/app/scripts/hptr_ocr_scans
+      - hptr_ocr_logs:/app/scripts/logs
+
+volumes:
+  hptr_ocr_scans:
+  hptr_ocr_logs:

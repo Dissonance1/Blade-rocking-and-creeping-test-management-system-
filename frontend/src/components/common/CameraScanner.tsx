@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import api from "@/services/api";
 import { checkOak1Health, captureOak1Snapshot, getOak1StreamUrl } from "@/services/oak1Camera";
+import { shouldUseLocalOcr, scanViaLocalOcr } from "@/services/localOcr";
 
 type CameraSource = "browser" | "oak1";
 
@@ -71,6 +72,19 @@ function hasBarcodeDetector(): boolean {
 // ─── Post image blob to backend OCR endpoint ─────────────────────────────────
 
 async function runBackendOCR(blob: Blob, mode: ScanMode): Promise<ScanResult> {
+  // Prefer this station's own OCR companion service for serial/melt scans
+  // when one answers locally (see localOcr.ts) — keeps this station's OCR
+  // load off the OH backend. QR decoding (pyzbar) is cheap and stays
+  // central. Falls through to the central endpoint below on any failure.
+  if (mode !== "qr" && (await shouldUseLocalOcr())) {
+    try {
+      const local = await scanViaLocalOcr(blob, mode === "melt" ? "melt-number" : "blade-serial");
+      return { value: local.value, confidence: local.confidence, provider: local.provider };
+    } catch {
+      // fall through to the central endpoint
+    }
+  }
+
   const form = new FormData();
   form.append("image", blob, "scan.jpg");
 

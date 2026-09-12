@@ -19,6 +19,7 @@ import aiofiles
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -93,6 +94,24 @@ async def _save_scan_image(content: bytes, content_type: str) -> tuple[str, str]
         await fh.write(content)
 
     return scan_id, filename
+
+
+async def _save_scan_image_at(scan_id: str, content: bytes, content_type: str) -> str:
+    """Like ``_save_scan_image`` but writes to a caller-supplied ``scan_id``
+    instead of minting a new one — used to backfill the image for a scan_id
+    that ``/scan/ingest-detection`` already handed out without one.
+    Overwrites if called again for the same scan_id. Returns the filename.
+    """
+    ext = _ext_for_mime(content_type)
+    filename = f"{scan_id}.{ext}"
+
+    scan_dir = Path(settings.ocr_scan_dir)
+    scan_dir.mkdir(parents=True, exist_ok=True)
+
+    async with aiofiles.open(scan_dir / filename, "wb") as fh:
+        await fh.write(content)
+
+    return filename
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +271,98 @@ async def scan_qr(
     )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# POST /scan/ingest-detection — record an OCR result computed by a remote
+# companion OCR service (e.g. scripts/hptr_ocr_service.py) instead of this
+# process running the model itself
+# ---------------------------------------------------------------------------
+
+
+class RemoteDetectionIn(BaseModel):
+    field_name: str
+    value: str | None = None
+    confidence: float = 0.0
+    raw_text: str = ""
+    provider: str = "remote"
+    processing_time_ms: int | None = None
+    error: str | None = None
+
+
+@router.post(
+    "/scan/ingest-detection",
+    status_code=status.HTTP_200_OK,
+    summary="Record an OCR detection computed by a remote companion OCR service",
+)
+async def ingest_remote_detection(
+    current_user: Annotated[Any, Depends(get_current_user)],
+    body: RemoteDetectionIn,
+) -> dict:
+    """
+    A secondary station's own OCR companion service (see
+    ``scripts/hptr_ocr_service.py``) has already run PaddleOCR locally —
+    this just mints a ``scan_id`` so the caller can go straight into the
+    normal ``POST /blades/{blade_id}/attach-ocr-scan`` flow exactly as if
+    ``POST /scan/melt-number``/``blade-serial`` had run here.
+
+    No image is received or saved by this call — the companion service
+    uploads the actual captured image asynchronously afterward via
+    ``POST /scan/{scan_id}/image``, so this returns immediately without
+    waiting on a file transfer from the other station.
+    """
+    scan_id = str(uuid_lib.uuid4())
+    logger.info(
+        "ocr_remote_detection_ingested",
+        user_id=str(current_user.id),
+        scan_id=scan_id,
+        field_name=body.field_name,
+        value=body.value,
+        confidence=body.confidence,
+        provider=body.provider,
+    )
+    return {
+        "value": body.value,
+        "confidence": body.confidence,
+        "raw_text": body.raw_text,
+        "provider": body.provider,
+        "processing_time_ms": body.processing_time_ms,
+        "error": body.error,
+        "scan_id": scan_id,
+        "image_pending": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /scan/{scan_id}/image — backfill the image for a scan_id minted by
+# /scan/ingest-detection, once the remote station has it ready to send
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/scan/{scan_id}/image",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Upload the image for a previously-ingested remote OCR detection",
+)
+async def upload_scan_image(
+    scan_id: str,
+    current_user: Annotated[Any, Depends(get_current_user)],
+    image: Annotated[UploadFile, File(description="The captured image for this scan_id")],
+) -> None:
+    """
+    Backfills the on-disk image for a ``scan_id`` minted by
+    ``POST /scan/ingest-detection``. Safe to call after
+    ``POST /blades/{blade_id}/attach-ocr-scan`` already linked that
+    ``scan_id`` to a blade — the attachment's ``file_path`` already points at
+    this exact location, so once this lands the attachment's image becomes
+    viewable (``GET /scan/{scan_id}``) and exportable (training-dataset ZIP)
+    with no further linking needed.
+    """
+    content = await image.read()
+    _validate_upload(image, content)
+    await _save_scan_image_at(scan_id, content, image.content_type or _DEFAULT_MIME)
+
+    logger.info("ocr_remote_scan_image_synced", user_id=str(current_user.id), scan_id=scan_id)
 
 
 # ---------------------------------------------------------------------------

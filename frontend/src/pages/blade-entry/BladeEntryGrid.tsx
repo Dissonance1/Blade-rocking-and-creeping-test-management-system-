@@ -15,6 +15,7 @@ import CameraModal from "@/components/common/CameraModal";
 import RussianKeyboard from "@/components/common/RussianKeyboard";
 import { useWeighingSocket } from "@/hooks/useWeighingSocket";
 import { useLocalSaveFolder } from "@/hooks/useLocalSaveFolder";
+import { getHardwareStation } from "@/utils/hardwareStation";
 import { extractApiError } from "@/services/api";
 import { ocrService } from "@/services/ocrService";
 import {
@@ -65,7 +66,11 @@ export default function BladeEntryGrid() {
   const workOrderNumber = commonInfo.work_order_number;
 
   // ── Single shared weighing-socket + camera + RU keyboard for the whole grid ──
-  const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket();
+  // Station is fixed for the lifetime of the page load (read once from the
+  // URL, see getHardwareStation) — a PC with its own scale bookmarks
+  // ?station=2 so it only ever sees its own scale's readings, never the OH
+  // PC's (or any other station's).
+  const { currentReading, status: scaleStatus, clearReading } = useWeighingSocket(getHardwareStation());
   const localSaveFolder = useLocalSaveFolder();
   const saveCaptureLocally = localSaveFolder.saveCapture;
 
@@ -264,9 +269,19 @@ export default function BladeEntryGrid() {
         }
         const readyToSave = applyOcrResult(rowIndex, result.value);
         const bladeId = useBladeEntryStore.getState().rows[rowIndex]?.blade_id;
-        if (bladeId) {
+        // result.scan_id is empty when a local OCR companion service ran
+        // the scan but couldn't reach the OH backend at all (see
+        // ocrService.ts / localOcr.ts) — nothing to attach in that case.
+        if (bladeId && result.scan_id) {
           ocrService
-            .attachScan(bladeId, result.scan_id, "melt_number", result.value, result.confidence)
+            .attachScan(
+              bladeId,
+              result.scan_id,
+              "melt_number",
+              result.value,
+              result.confidence,
+              result.image_pending
+            )
             .catch(() => {
               // Non-fatal — the scanned value is already in the grid; losing the
               // image link shouldn't block data entry.

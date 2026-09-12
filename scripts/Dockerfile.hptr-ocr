@@ -1,0 +1,49 @@
+# =============================================================================
+# Local OCR companion service (scripts/hptr_ocr_service.py)
+#
+# Unlike the weighing/DTI/OAK-1 bridges, this service touches no hardware
+# directly — it only receives an already-captured JPEG over HTTP and runs
+# PaddleOCR on it — so it containerizes cleanly instead of needing a native
+# Windows venv. Build context must be the REPO ROOT (this needs both
+# scripts/ and backend/app/ocr/, model weights under models/ppocrv4
+# included, which have no other backend dependency — see
+# backend/app/ocr/paddle_provider.py):
+#
+#   docker compose -f docker-compose.hptr-ocr.yml up -d --build
+# =============================================================================
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# libglib2.0-0/libgl1/libgomp1 — same opencv/paddlepaddle runtime libs the
+# main backend image installs (see backend/Dockerfile); curl for the
+# healthcheck below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libglib2.0-0 libgl1 libgomp1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/hptr_ocr_requirements.txt .
+RUN pip install --upgrade pip && pip install -r hptr_ocr_requirements.txt
+
+# Only app/ocr (no FastAPI/SQLAlchemy/Pydantic) plus its bundled model
+# weights — see backend/app/ocr/paddle_provider.py's docstring for why this
+# subtree has no other backend dependency and needs no network at runtime.
+COPY backend/app/__init__.py backend/app/__init__.py
+COPY backend/app/ocr backend/app/ocr
+COPY scripts/hptr_ocr_service.py scripts/bridge_common.py scripts/
+
+WORKDIR /app/scripts
+
+EXPOSE 8090
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:8090/health || exit 1
+
+# Runs as root — acceptable for a private factory LAN deployment, same as
+# the main backend image; the network boundary provides the isolation.
+CMD ["python", "hptr_ocr_service.py"]

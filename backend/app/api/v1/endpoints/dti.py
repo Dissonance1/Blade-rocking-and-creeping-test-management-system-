@@ -128,8 +128,12 @@ async def push_dti(body: DtiReading, request: Request, response: Response) -> di
     Response includes next_position so the bridge always cycles the right number
     of positions without needing --positions configured manually.
 
-    No auth required — this endpoint only accepts connections from localhost
-    (enforced at the nginx layer; /api/v1/dti/push is not exposed to LAN).
+    No auth required — nginx.conf has no IP restriction on this path (it has
+    to accept pushes from a second PC's bridge over the LAN, not just
+    localhost — see CLAUDE.md's "Secondary Hardware Stations"). Trusted as
+    an internal, bridge-only endpoint on the private factory LAN, the same
+    trust boundary the rest of this deployment relies on (see "Security" in
+    docs/TECHNICAL_DESIGN.md).
 
     `response: Response` is required by the @rate_limit_hardware_bridge
     decorator — slowapi injects rate-limit headers into it since this

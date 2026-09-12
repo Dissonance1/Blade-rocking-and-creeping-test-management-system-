@@ -1,4 +1,5 @@
 import api from "./api";
+import { shouldUseLocalOcr, scanViaLocalOcr } from "./localOcr";
 
 export interface OcrScanResult {
   value: string;
@@ -8,10 +9,31 @@ export interface OcrScanResult {
   processing_time_ms?: number | null;
   error?: string | null;
   scan_id: string;
+  /**
+   * True when this scan came from a local OCR companion service (see
+   * localOcr.ts / scripts/hptr_ocr_service.py) whose image hasn't reached
+   * the OH backend yet — it uploads in the background shortly after. Passed
+   * through to attachScan so the OH backend doesn't 404 on a scan_id it
+   * minted before the image existed.
+   */
+  image_pending?: boolean;
 }
 
 export const ocrService = {
   scanMelt: async (file: File): Promise<OcrScanResult> => {
+    // Prefer this station's own OCR companion service when one answers
+    // locally (see localOcr.ts) — keeps this station's OCR load off the OH
+    // backend. Falls back to the central endpoint below on any failure (no
+    // local service on this machine, unreachable, still warming up, etc.)
+    // so a scan never fails outright just because the local service had a
+    // bad moment.
+    if (await shouldUseLocalOcr()) {
+      try {
+        return await scanViaLocalOcr(file, "melt-number");
+      } catch {
+        // fall through to the central endpoint
+      }
+    }
     const form = new FormData();
     form.append("image", file);
     const { data } = await api.post<OcrScanResult>("/ocr/scan/melt-number", form, {
@@ -32,13 +54,15 @@ export const ocrService = {
     scanId: string,
     label: string,
     detectedText?: string | null,
-    confidence?: number | null
+    confidence?: number | null,
+    imagePending?: boolean
   ): Promise<void> => {
     await api.post(`/blades/${bladeId}/attach-ocr-scan`, {
       scan_id: scanId,
       label,
       detected_text: detectedText,
       confidence,
+      image_pending: imagePending ?? false,
     });
   },
 

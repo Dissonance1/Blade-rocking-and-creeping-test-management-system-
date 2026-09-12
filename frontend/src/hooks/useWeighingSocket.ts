@@ -19,6 +19,11 @@ interface WsMessage {
  * iScale i-04 bridge. Single shared socket — mount this once per page (e.g.
  * at the grid-shell level), not once per row.
  *
+ * `station` (default "1") must match the originating weighing_bridge.py
+ * instance's own `--station` value (see getHardwareStation()) — the backend
+ * scopes broadcasts by station so a second PC's own scale doesn't also show
+ * up on this one's browser, and vice versa.
+ *
  * Returns:
  *  - currentReading: latest captured reading (null until first measurement, or after clearReading()/while locked)
  *  - status: connection lifecycle state, with automatic reconnect on drop
@@ -27,7 +32,7 @@ interface WsMessage {
  *    operator can hold a value steady before it's applied to a row
  *  - clearReading: reset currentReading to null (call after a row has consumed a reading)
  */
-export function useWeighingSocket() {
+export function useWeighingSocket(station: string = "1") {
   const [currentReading, setCurrentReading] = useState<WeightReading | null>(null);
   const [status, setStatus] = useState<ScaleStatus>("idle");
   const [locked, setLocked] = useState(false);
@@ -46,7 +51,7 @@ export function useWeighingSocket() {
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host;
-    const url = `${protocol}//${host}/api/v1/weighing/ws?token=${accessToken}`;
+    const url = `${protocol}//${host}/api/v1/weighing/ws?token=${accessToken}&station=${station}`;
 
     let alive = true;
     let ws: WebSocket;
@@ -112,7 +117,7 @@ export function useWeighingSocket() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [accessToken]);
+  }, [accessToken, station]);
 
   const clearReading = useCallback(() => setCurrentReading(null), []);
 

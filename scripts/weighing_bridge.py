@@ -13,14 +13,26 @@ Scales (this deployment):
     rather than a hard-coded COM port. Whichever scale is actually powered on
     gets picked up automatically; no need to know or care which COM it landed
     on. If both happen to be on at once, whichever answers first wins (see
-    _race_open) — the readings still all funnel into one global weighing
-    channel with no per-scale identity, so don't rely on both being live at
-    the same time for two different blades.
+    _race_open) — both still post under this one process's --station, with
+    no identity distinguishing the two scales from each other, so don't rely
+    on both being live at the same time for two different blades.
+
+Two-PC deployment (e.g. the OH PC's own scale plus a second PC's own scale,
+see CLAUDE.md's "Secondary Hardware Stations"): each PC's bridge must use a
+different --station, or every browser tab on either PC receives both scales'
+readings indiscriminately (there used to be no station concept at all here —
+a single global channel — which is exactly what caused that):
+    OH PC:      python weighing_bridge.py --station 1
+    Second PC:  python weighing_bridge.py --station 2 --server http://<OH PC>
+
+    Each browser tab connects to the weighing WebSocket with ?station=1 or
+    ?station=2 so readings from each scale only reach the matching form.
 
 Usage:
-    python weighing_bridge.py                          # auto-discover, server = http://localhost
+    python weighing_bridge.py                          # auto-discover, server = http://localhost, station 1
     python weighing_bridge.py --port COM3              # bypass discovery, pin to one port (testing)
     python weighing_bridge.py --server https://192.168.1.50 --insecure-ssl  # remote server, self-signed cert
+    python weighing_bridge.py --station 2 --server http://172.146.5.98      # second PC's own scale
 
 Requirements (install once):
     pip install pyserial requests
@@ -253,9 +265,9 @@ def _read_next_weight(ser: serial.Serial, port_override: str | None, last_weight
     return ser, weight, last_data_at
 
 
-def _post_weight(session: requests.Session, push_url: str, weight: float) -> None:
+def _post_weight(session: requests.Session, push_url: str, weight: float, station: str) -> None:
     try:
-        resp = session.post(push_url, json={"value": weight}, timeout=3)
+        resp = session.post(push_url, json={"value": weight, "station": station}, timeout=3)
         if resp.status_code == 200:
             log.info("[http ] ✓ accepted (%.4f)", weight)
         else:
@@ -264,9 +276,9 @@ def _post_weight(session: requests.Session, push_url: str, weight: float) -> Non
         log.warning("[http ] POST failed: %s", exc)
 
 
-def run(port_override: str | None, server: str, insecure_ssl: bool = False) -> None:
+def run(port_override: str | None, server: str, station: str, insecure_ssl: bool = False) -> None:
     push_url = server.rstrip("/") + PUSH_PATH
-    log.info("[http ] push URL → %s", push_url)
+    log.info("[http ] push URL → %s (station %s)", push_url, station)
 
     # Verify the server is reachable before opening the serial port — retry
     # forever rather than exiting, since the backend may come up after this
@@ -288,7 +300,7 @@ def run(port_override: str | None, server: str, insecure_ssl: bool = False) -> N
 
             last_weight = weight
             log.info("[scale] %.4f  →  posting …", weight)
-            _post_weight(session, push_url, weight)
+            _post_weight(session, push_url, weight, station)
 
     except KeyboardInterrupt:
         log.info("Stopped.")
@@ -331,6 +343,16 @@ To list available COM ports:
         help=f"Server base URL (default: {DEFAULT_SERVER})",
     )
     parser.add_argument(
+        "--station", default="1",
+        help=(
+            "Station identifier for this scale (default: 1). Use a different "
+            "value on each PC that runs its own weighing bridge against the "
+            "same central backend — otherwise every browser tab, on either "
+            "PC, receives both scales' readings. The browser's measurement "
+            "form must connect with the matching ?station= value."
+        ),
+    )
+    parser.add_argument(
         "--insecure-ssl", action="store_true",
         help=(
             "Disable TLS certificate verification. Only needed when --server "
@@ -339,7 +361,7 @@ To list available COM ports:
         ),
     )
     args = parser.parse_args()
-    run(args.port, args.server, args.insecure_ssl)
+    run(args.port, args.server, args.station, args.insecure_ssl)
 
 
 if __name__ == "__main__":

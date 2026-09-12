@@ -22,10 +22,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { batchService, type BladeRockingCreepEntry } from "@/services/batchService";
 import { bladeService } from "@/services/bladeService";
 import { useDTISocket } from "@/hooks/useDTISocket";
+import { getHardwareStation } from "@/utils/hardwareStation";
 import { cn } from "@/utils/cn";
-
-// Only one DTI gauge is connected for Rocking & Creep entry — a fixed station id.
-const DTI_STATION = "1";
 
 // Acceptable Rocking range — different band per blade type.
 const HPTR_ROCKING_MIN = 0.5;
@@ -92,8 +90,11 @@ export default function RockingCreepPage() {
   // ── DTI gauge — one physical button press = one captured value. Must skip
   //    replay: this flow treats any "dti" message as a fresh press, so a
   //    reconnect (refresh, wifi blip, backend restart) replaying old Redis-
-  //    buffered readings would silently auto-fill/save stale values. ────────
-  const { lastReading, connected: dtiConnected } = useDTISocket(DTI_STATION, { replay: false });
+  //    buffered readings would silently auto-fill/save stale values. Station
+  //    is fixed for the page load (read once from the URL, see
+  //    getHardwareStation) — a PC with its own DTI gauge bookmarks
+  //    ?station=2 so it only ever sees its own gauge's readings. ───────────
+  const { lastReading, connected: dtiConnected } = useDTISocket(getHardwareStation(), { replay: false });
   const lastAppliedAtRef = useRef<number>(0);
 
   // ── Debounced auto-save while typing — onBlur/Enter alone left a gap: a

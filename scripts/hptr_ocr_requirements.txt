@@ -1,0 +1,23 @@
+# Local OCR companion service (scripts/hptr_ocr_service.py).
+#
+# Native install (own venv, separate from backend/requirements.txt and from
+# the OAK-1 service's oak1-venv):
+#   python -m venv scripts\ocr-venv
+#   scripts\ocr-venv\Scripts\pip install -r scripts\hptr_ocr_requirements.txt
+#
+# Or run it in Docker instead (no venv/paddlepaddle-on-Windows install at
+# all) — see scripts/Dockerfile.hptr-ocr and docker-compose.hptr-ocr.yml.
+#
+# Versions mirror backend/requirements.txt so this station's OCR behaves
+# identically to the central backend's, aside from the deliberate
+# script_bias="english" difference documented in
+# backend/app/ocr/paddle_provider.py. No pyzbar here — this service only
+# exposes /scan/blade-serial and /scan/melt-number, never QR decoding.
+paddlepaddle==2.6.2
+paddleocr==2.9.1
+opencv-contrib-python-headless==4.10.0.84
+numpy>=1.23.5,<2.0.0
+structlog==24.4.0
+flask==3.0.3
+flask-cors==4.0.1
+requests==2.32.3

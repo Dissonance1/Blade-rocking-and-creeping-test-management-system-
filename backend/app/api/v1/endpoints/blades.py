@@ -911,9 +911,17 @@ async def attach_ocr_scan(
       later edits the field. Not re-derived server-side — the caller already
       has it from the scan response.
     - ``confidence`` (optional): the scan endpoint's ``confidence`` (0-1).
+    - ``image_pending`` (optional, default ``false``): set by a remote OCR
+      companion service (see ``POST /ocr/scan/ingest-detection``) whose
+      image hasn't landed on this server yet — it uploads asynchronously via
+      ``POST /ocr/scan/{scan_id}/image`` shortly after. When set, a missing
+      scan file is not an error; the attachment is created pointing at
+      where that image will land (always ``.jpg`` — the only format the
+      remote companion services produce) instead of 404ing.
 
     Raises:
-        HTTP 404 — blade or scan file not found.
+        HTTP 404 — blade not found, or scan file not found and
+        ``image_pending`` was not set.
     """
     from app.models.attachment import Attachment
 
@@ -923,6 +931,7 @@ async def attach_ocr_scan(
     label = body.get("label", "ocr_scan")
     detected_text = body.get("detected_text")
     confidence = body.get("confidence")
+    image_pending = bool(body.get("image_pending"))
 
     if not scan_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scan_id is required")
@@ -937,7 +946,7 @@ async def attach_ocr_scan(
             found_ext = ext
             break
 
-    if found_path is None:
+    if found_path is None and not image_pending:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"OCR scan '{scan_id}' not found on server",
@@ -952,7 +961,7 @@ async def attach_ocr_scan(
         filename=f"{scan_id}.{found_ext}",
         original_filename=original_filename,
         file_path=relative_path,
-        file_size_bytes=found_path.stat().st_size,
+        file_size_bytes=found_path.stat().st_size if found_path is not None else None,
         mime_type=mime_map.get(found_ext, "image/jpeg"),
         uploaded_by_id=current_user.id,
         attachment_type=AttachmentType.OCR_SCAN,

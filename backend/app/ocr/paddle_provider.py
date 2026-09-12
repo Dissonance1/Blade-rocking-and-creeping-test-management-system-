@@ -205,12 +205,33 @@ class PaddleOCRProvider(OCRProvider):
     Dual-language (English + Cyrillic) PP-OCRv4 provider tuned for
     laser-engraved blade serial/melt markings.
 
-    The underlying PaddleOCR engines take a few seconds to initialise;
-    they are created once at class level and reused for every request.
+    The underlying PaddleOCR engines take a few seconds to initialise; they
+    are created once at class level (keyed by nothing — both engines are
+    identical regardless of ``script_bias`` below) and reused for every
+    request/instance.
+
+    ``script_bias`` controls only the fusion/post-processing preference
+    between the two engines' reads, not which models are loaded:
+
+    * ``"cyrillic"`` (default) — the original tuning, verified against a
+      559-sample LPTR/HPTR ground-truth set that skewed toward Cyrillic
+      letters on the engraved stamps: prefers a pure-Cyrillic read whenever
+      one is found, and canonicalizes the single ambiguous embedded letter
+      to Cyrillic. This is what the central OH-station backend uses.
+    * ``"english"`` — for a station whose blade population reads more
+      Latin/English than the sample the default was tuned on (per-station
+      config, not a property of PP-OCRv4 itself): prefers the English
+      engine's read whenever it produced one at all, and does not force the
+      ambiguous letter to Cyrillic. Used by ``scripts/hptr_ocr_service.py``.
     """
 
     _ocr_en: Any = None
     _ocr_ru: Any = None
+
+    def __init__(self, script_bias: str = "cyrillic") -> None:
+        if script_bias not in ("cyrillic", "english"):
+            raise ValueError(f"script_bias must be 'cyrillic' or 'english', got {script_bias!r}")
+        self.script_bias = script_bias
 
     @property
     def provider_name(self) -> str:
@@ -258,6 +279,16 @@ class PaddleOCRProvider(OCRProvider):
 
         pi.Config.switch_ir_optim = patched_switch_ir_optim
         pi.Config._blade_rocking_avx512_patch = True
+
+    @classmethod
+    def warm_up(cls) -> None:
+        """Eagerly load both PaddleOCR engines instead of waiting for the
+        first real request. Standalone companion services (e.g.
+        ``scripts/hptr_ocr_service.py``) call this at startup so an
+        operator's first scan of the day isn't the one that pays the
+        multi-second model-load cost.
+        """
+        cls._get_engines()
 
     @classmethod
     def _get_engines(cls) -> tuple[Any, Any]:
@@ -489,13 +520,26 @@ class PaddleOCRProvider(OCRProvider):
             line["items"].sort(key=lambda item: item[0][0][0])
         return lines
 
-    @staticmethod
-    def _arbitrate_slot(c_en: str, c_ru: str) -> str:
+    def _arbitrate_slot(self, c_en: str, c_ru: str) -> str:
         c_en = c_en.upper() if c_en else ""
         c_ru = c_ru.upper() if c_ru else ""
 
         if not c_en and not c_ru:
             return ""
+
+        if self.script_bias == "english":
+            # This station's blades read more Latin/English than the
+            # default tuning below assumes, so prefer whatever the English
+            # engine produced at this slot outright — only a pure-Cyrillic
+            # glyph (one the English engine cannot hallucinate, since it has
+            # no Latin code point at all) or an empty English read falls
+            # through to the Cyrillic engine.
+            if c_ru and c_ru in _PURE_CYRILLIC:
+                return c_ru
+            return c_en if c_en else c_ru
+
+        # cyrillic bias (default) below.
+        #
         # `c_ru` is "" whenever the Cyrillic read is shorter than the English
         # read at this index (the common case, since the Cyrillic engine
         # garbles digit/Latin strings into a short garbage token) — and in
@@ -527,8 +571,7 @@ class PaddleOCRProvider(OCRProvider):
             return c_en
         return c_ru if c_ru else c_en
 
-    @classmethod
-    def _fuse_chars(cls, text_en: str, text_ru: str) -> str:
+    def _fuse_chars(self, text_en: str, text_ru: str) -> str:
         # Per-index fusion below assumes text_en and text_ru describe the
         # same character sequence one-to-one. That assumption breaks when
         # the English engine omits a Cyrillic letter it can't represent
@@ -543,13 +586,15 @@ class PaddleOCRProvider(OCRProvider):
         # matches the expected melt/serial shape on its own, trust it
         # wholesale instead of risking that corruption — merging can only
         # help when the Cyrillic read is broken, never when it's already a
-        # clean, validly-shaped answer.
+        # clean, validly-shaped answer. Only applies under the cyrillic bias:
+        # under english bias we don't want to hand the whole result to the
+        # Cyrillic engine just because it happens to already fit the shape.
         text_ru_upper = text_ru.upper() if text_ru else ""
-        if len(text_en) != len(text_ru) and _SHAPE_RE.match(text_ru_upper):
+        if self.script_bias == "cyrillic" and len(text_en) != len(text_ru) and _SHAPE_RE.match(text_ru_upper):
             return text_ru_upper
         max_len = max(len(text_en), len(text_ru))
         return "".join(
-            cls._arbitrate_slot(
+            self._arbitrate_slot(
                 text_en[i] if i < len(text_en) else "",
                 text_ru[i] if i < len(text_ru) else "",
             )
@@ -633,8 +678,7 @@ class PaddleOCRProvider(OCRProvider):
             candidates.append((self._fuse_chars(refined_en, refined_ru), max(conf_en, conf_ru)))
         return candidates
 
-    @staticmethod
-    def _select_best_candidate(candidates: list[tuple[str, float]]) -> tuple[str, float]:
+    def _select_best_candidate(self, candidates: list[tuple[str, float]]) -> tuple[str, float]:
         """Pick the winning fusion candidate for one line.
 
         Confidence alone was picking a confident-but-wrong Latin/look-alike
@@ -642,7 +686,8 @@ class PaddleOCRProvider(OCRProvider):
         happened to come from a lower-confidence candidate — e.g. "14И3092"
         (Cyrillic engine correctly read "И" at 0.64 confidence) losing to
         "14B0925" (a re-cropped candidate where the English engine misread
-        the same spot as "B" at higher confidence). Preference order instead:
+        the same spot as "B" at higher confidence). Under the cyrillic bias
+        (default), preference order is instead:
 
         1. Any candidate containing a *pure*-Cyrillic character (one of
            ``_PURE_CYRILLIC`` — glyphs with no Latin look-alike). The English
@@ -651,10 +696,15 @@ class PaddleOCRProvider(OCRProvider):
         2. Any candidate matching the expected melt/serial grammar
            (``_SHAPE_RE``) — filters out obviously malformed reads.
         3. Otherwise, highest raw confidence (previous behavior).
+
+        Under the english bias, step 1 is skipped — a pure-Cyrillic glyph is
+        no longer treated as an automatic winner, since this station's
+        blades aren't expected to lean Cyrillic in the first place.
         """
-        pure_cyrillic_hits = [c for c in candidates if any(ch in _PURE_CYRILLIC for ch in c[0])]
-        if pure_cyrillic_hits:
-            return max(pure_cyrillic_hits, key=lambda c: c[1])
+        if self.script_bias == "cyrillic":
+            pure_cyrillic_hits = [c for c in candidates if any(ch in _PURE_CYRILLIC for ch in c[0])]
+            if pure_cyrillic_hits:
+                return max(pure_cyrillic_hits, key=lambda c: c[1])
         shape_hits = [c for c in candidates if _SHAPE_RE.match(c[0])]
         if shape_hits:
             return max(shape_hits, key=lambda c: c[1])
@@ -754,21 +804,31 @@ class PaddleOCRProvider(OCRProvider):
         the normal case; (2) a single confusion-guided correction
         (``_try_correct_to_shape``) on each detected line, for a read that's
         one misread character away from the expected shape; (3) the
-        best-single-line fallback, for anything else. A value produced by
-        (1) or (2) already matches the digits-letter-digits grammar, so it
-        also gets the Latin/Cyrillic letter-script canonicalization
-        (``_normalize_letter_script``) — the fallback path skips it since
-        its shape isn't guaranteed. Returns
+        best-single-line fallback, for anything else. Under the cyrillic
+        bias, a value produced by (1) or (2) already matches the
+        digits-letter-digits grammar, so it also gets the Latin/Cyrillic
+        letter-script canonicalization (``_normalize_letter_script``) — the
+        fallback path skips it since its shape isn't guaranteed. Under the
+        english bias, canonicalization never runs — the "the embedded letter
+        is always meant to be Cyrillic" assumption behind it is specific to
+        the Russian-nameplate population it was tuned on, not assumed to
+        hold for this station's blades. Returns
         ``(value, confidence, pattern_matched, correction_applied)``.
         """
         match = pattern_re.search(fused["full_text"])
         if match:
-            return _normalize_letter_script(match.group(0).upper()), 0.88, True, False
+            value = match.group(0).upper()
+            if self.script_bias == "cyrillic":
+                value = _normalize_letter_script(value)
+            return value, 0.88, True, False
 
         for line in fused["lines"]:
             corrected = _try_correct_to_shape(line.strip())
             if corrected:
-                return _normalize_letter_script(corrected.upper()), 0.75, False, True
+                value = corrected.upper()
+                if self.script_bias == "cyrillic":
+                    value = _normalize_letter_script(value)
+                return value, 0.75, False, True
 
         fallback_conf = self._clamp_confidence(fused["confidence"] * 0.5)
         return self._best_line_fallback(fused), fallback_conf, False, False

@@ -4,12 +4,25 @@ Weighing machine endpoints.
 POST /weighing/push  — receive a weight reading from the Windows-side bridge script
 WS   /weighing/ws   — stream live weight readings to connected browser clients
 
-Architecture:
-  weighing_machine.py (Windows, reads COM6)
-    → POST /api/v1/weighing/push  {"value": 123.45}
-    → backend publishes to a Redis channel
-    → every uvicorn worker's open WebSocket connections receive it
-    → browser auto-fills weight field
+Architecture (mirrors dti.py's station scoping):
+  Station 1 (e.g. the OH PC's own scale): weighing_bridge.py --station 1
+    → POST /api/v1/weighing/push  {"station": "1", "value": 123.45}
+    → backend routes only to WS subscribers for station "1"
+
+  Station 2 (e.g. a second PC's own scale, see CLAUDE.md's "Secondary
+  Hardware Stations"): weighing_bridge.py --station 2 --server <OH PC>
+    → POST /api/v1/weighing/push  {"station": "2", "value": 123.45}
+    → backend routes only to WS subscribers for station "2"
+
+  Browser connects: ws://.../weighing/ws?token=<jwt>&station=2
+    → only receives readings from the scale on station 2
+
+  Omitting station defaults to "1" for backwards compatibility with
+  single-scale setups — this used to be a single global channel with no
+  station concept at all, which silently broke the moment a second PC's
+  weighing bridge started pushing to the same central backend: every
+  browser, regardless of which PC it was open on, received every scale's
+  readings.
 
 Broadcast goes through Redis pub/sub rather than an in-memory set: the
 backend runs multiple uvicorn worker processes (see backend/Dockerfile,
@@ -27,7 +40,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.security import decode_token
 from app.middleware.rate_limit import rate_limit_hardware_bridge
@@ -35,13 +48,18 @@ from app.middleware.rate_limit import rate_limit_hardware_bridge
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
-_CHANNEL = "weighing:broadcast"
+_CHANNEL_FMT = "weighing:broadcast:{station}"
 
 
 # ─── POST /push ───────────────────────────────────────────────────────────────
 
 class WeightReading(BaseModel):
     value: float
+    station: str = Field(
+        default="1",
+        description="Station identifier matching the PC/rig this scale is attached to (e.g. '1', '2'). Defaults to '1'.",
+        examples=["1", "2"],
+    )
 
 
 @router.post("/push", status_code=200)
@@ -49,11 +67,12 @@ class WeightReading(BaseModel):
 async def push_weight(body: WeightReading, request: Request, response: Response) -> dict[str, Any]:
     """
     Receive a weight reading from the local Windows bridge script and
-    publish it for every connected WebSocket client (across all workers)
-    to pick up immediately.
+    publish it only to WebSocket clients subscribed to the same station
+    (across all workers).
 
-    No auth required — this endpoint only accepts connections from localhost
-    (enforced at the nginx layer; /api/v1/weighing/push is not exposed to LAN).
+    No auth required — trusted the same way the DTI push endpoint is (see
+    dti.py): both are internal, bridge-only endpoints on the private LAN,
+    not something a browser calls.
 
     `response: Response` is required by the @rate_limit_hardware_bridge
     decorator — slowapi injects rate-limit headers into it since this
@@ -61,12 +80,12 @@ async def push_weight(body: WeightReading, request: Request, response: Response)
     """
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is None:
-        logger.warning("weight_push_dropped", reason="redis_unavailable", value=body.value)
-        return {"ok": False, "value": body.value}
+        logger.warning("weight_push_dropped", reason="redis_unavailable", value=body.value, station=body.station)
+        return {"ok": False, "value": body.value, "station": body.station}
 
-    await redis_client.publish(_CHANNEL, json.dumps({"value": body.value}))
-    logger.debug("weight_pushed", value=body.value)
-    return {"ok": True, "value": body.value}
+    await redis_client.publish(_CHANNEL_FMT.format(station=body.station), json.dumps({"value": body.value}))
+    logger.debug("weight_pushed", value=body.value, station=body.station)
+    return {"ok": True, "value": body.value, "station": body.station}
 
 
 # ─── WS /ws ───────────────────────────────────────────────────────────────────
@@ -96,14 +115,17 @@ async def _ws_receive(websocket: WebSocket) -> None:
 @router.websocket("/ws")
 async def weighing_ws(websocket: WebSocket) -> None:
     """
-    Stream live weight readings to the browser.
+    Stream live weight readings to the browser for a specific station.
 
     Auth: pass ?token=<access_token> (same pattern as notifications WS).
+    Station: pass ?station=1 or ?station=2 to match the scale's bridge
+             --station value. Defaults to "1" if omitted (backwards-
+             compatible with single-scale setups).
 
     Messages sent to client:
-      {"type": "status", "status": "connected"}   — on open
-      {"type": "weight", "value": 123.45}          — each new reading
-      {"type": "ping"}                             — keepalive every 30 s
+      {"type": "status", "status": "connected", "station": "1"}  — on open
+      {"type": "weight", "value": 123.45}                        — each new reading
+      {"type": "ping"}                                           — keepalive every 30 s
     """
     token: str | None = websocket.query_params.get("token")
     if not token:
@@ -114,16 +136,18 @@ async def weighing_ws(websocket: WebSocket) -> None:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 
+    station: str = websocket.query_params.get("station", "1")
+
     redis_client = getattr(websocket.app.state, "redis", None)
     if redis_client is None:
         await websocket.close(code=1011, reason="Broadcast backend unavailable")
         return
 
     await websocket.accept()
-    await websocket.send_json({"type": "status", "status": "connected"})
+    await websocket.send_json({"type": "status", "status": "connected", "station": station})
 
     pubsub = redis_client.pubsub()
-    await pubsub.subscribe(_CHANNEL)
+    await pubsub.subscribe(_CHANNEL_FMT.format(station=station))
 
     try:
         await asyncio.gather(
@@ -135,6 +159,6 @@ async def weighing_ws(websocket: WebSocket) -> None:
     except Exception as exc:
         logger.warning("weighing_ws_error", error=str(exc))
     finally:
-        await pubsub.unsubscribe(_CHANNEL)
+        await pubsub.unsubscribe(_CHANNEL_FMT.format(station=station))
         await pubsub.aclose()
-        logger.debug("weighing_ws_closed")
+        logger.debug("weighing_ws_closed", station=station)
