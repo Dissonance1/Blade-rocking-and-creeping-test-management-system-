@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -96,6 +97,35 @@ DEFAULT_ORIGINS = [
 
 _SCAN_DIR = Path(__file__).resolve().parent / "hptr_ocr_scans"
 _SCAN_DIR.mkdir(exist_ok=True)
+
+# Local ground-truth-in-waiting log — one JSON line per scan, written on
+# this station's own disk regardless of whether _forward_detection succeeds.
+# Exists so a scan's detected value/confidence is never lost to an OH
+# connectivity outage the way an unlinked image alone would be (previously
+# only the raw .jpg was kept, with nothing recording what was actually
+# detected on it): this file pairs every image with its OCR read, exactly
+# what's needed to later confirm/correct it into real ground truth, whether
+# or not the OH-side attach-ocr-scan flow ever got the scan_id it needs.
+_DETECTIONS_LOG = _SCAN_DIR / "detections.jsonl"
+_detections_lock = threading.Lock()
+
+
+def _record_detection_locally(
+    image_filename: str, field: str, result, scan_id: str | None, station: str
+) -> None:
+    record = {
+        "timestamp": time.time(),
+        "image_file": image_filename,
+        "field": field,
+        "value": result.structured_data.get("value") or result.raw_text,
+        "raw_text": result.raw_text,
+        "confidence": result.confidence,
+        "provider": result.provider,
+        "scan_id": scan_id or "",
+        "hardware_station": station,
+    }
+    with _detections_lock, _DETECTIONS_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 _FIELD_TO_METHOD = {
     "blade-serial": "extract_serial_number",
@@ -230,7 +260,9 @@ def create_app(server: str, session: requests.Session, frontend_origins: list[st
             # result so data entry isn't blocked. No scan_id means the
             # caller has nothing to attach an image to; the captured image
             # is still kept locally in _SCAN_DIR either way.
-            (_SCAN_DIR / f"unlinked_{int(time.time() * 1000)}.jpg").write_bytes(image_bytes)
+            unlinked_name = f"unlinked_{int(time.time() * 1000)}.jpg"
+            (_SCAN_DIR / unlinked_name).write_bytes(image_bytes)
+            _record_detection_locally(unlinked_name, field, result, None, station)
             return jsonify({
                 "value": value,
                 "confidence": result.confidence,
@@ -244,6 +276,7 @@ def create_app(server: str, session: requests.Session, frontend_origins: list[st
 
         image_path = _SCAN_DIR / f"{scan_id}.jpg"
         image_path.write_bytes(image_bytes)
+        _record_detection_locally(image_path.name, field, result, scan_id, station)
         threading.Thread(
             target=_sync_image_later,
             args=(server, session, auth_header, scan_id, image_path),

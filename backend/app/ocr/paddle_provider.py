@@ -534,7 +534,16 @@ class PaddleOCRProvider(OCRProvider):
             # glyph (one the English engine cannot hallucinate, since it has
             # no Latin code point at all) or an empty English read falls
             # through to the Cyrillic engine.
-            if c_ru and c_ru in _PURE_CYRILLIC:
+            #
+            # "Г" is excluded from that override: confirmed against this
+            # station's own ground truth, an embossed "E" on this engraved
+            # font (missing/faint middle+bottom bar) is read by the Cyrillic
+            # engine as "Г" almost every time. Same category as the "Л"
+            # reads as "A" quirk documented above (_LIKELY_MISREAD_OF) — a
+            # font-specific misread, not a genuine ambiguous glyph — so "Г"
+            # must not be treated as an unfakeable Cyrillic signal here the
+            # way every other pure-Cyrillic letter still is.
+            if c_ru and c_ru in _PURE_CYRILLIC and c_ru != "Г":
                 return c_ru
             return c_en if c_en else c_ru
 
