@@ -770,6 +770,9 @@ class PaddleOCRProvider(OCRProvider):
         image = self._upscale_frame(self._to_bgr_array(image_bytes))
         ocr_en, ocr_ru = self._get_engines()
 
+        if self.script_bias == "english":
+            return self._sync_fuse_multi_mode(image, ocr_en, ocr_ru)
+
         best_res_en, best_res_ru, best_processed, best_mode, best_confidence = (
             self._select_best_mode(image)
         )
@@ -800,6 +803,93 @@ class PaddleOCRProvider(OCRProvider):
             "line_confidences": line_confidences,
             "confidence": best_confidence,
             "preprocessing_mode": best_mode,
+        }
+
+    def _sync_fuse_multi_mode(self, image, ocr_en, ocr_ru) -> dict:
+        """HPTR-only (script_bias="english") variant of the fusion pipeline
+        above -- never called under cyrillic bias, which keeps using the
+        original single-mode path unmodified.
+
+        ``_select_best_mode`` picks one preprocessing mode by a coarse score
+        (box count x100 + avg confidence) that can tie almost exactly
+        between modes (observed deltas as small as 0.04 in practice) --
+        verified against a real HPTR miss where the DISCARDED "raw" mode's
+        English read ("1B25553", nearly the correct "1825553" missing only
+        the untranscribable letter) was far closer to the true value than
+        the "sharp" mode that narrowly won on score alone and produced a
+        much worse read. Rather than commit to a single mode upfront and
+        only refine within it, this runs every preprocessing mode, takes
+        each mode's own most-likely line (same ranking used elsewhere in
+        this codebase for picking the real line out of spurious detections:
+        most boxes, confidence as tie-break), gathers that line's usual
+        as-is + re-cropped candidates, and pools every mode's candidates
+        into one list for the existing ``_select_best_candidate`` shape/
+        confidence hierarchy to choose from -- same selection logic as
+        before, just given a richer candidate pool instead of only the one
+        "winning" mode's.
+
+        Costs more than the single-mode path: detection already ran for all
+        5 modes before (to compute the mode score), but the per-line
+        recognition-only refinement (``_crop_candidates``, 3 paddings x 2
+        engines) now also runs for every mode instead of only the winner.
+        """
+        import numpy as np
+
+        pooled_candidates: list[tuple[str, float]] = []
+        best_overall_mode: str | None = None
+        best_overall_conf = 0.0
+
+        for mode in ("raw", "gray", "green", "red", "sharp"):
+            processed = self._preprocess(image, mode)
+            res_en, res_ru = self._run_ocr(processed)
+            if not res_en and not res_ru:
+                continue
+
+            lines_en = self._group_by_lines(res_en)
+            if not lines_en:
+                continue
+            line = max(
+                lines_en,
+                key=lambda ln: (len(ln["items"]), sum(c for _b, _t, c in ln["items"])),
+            )
+            line_boxes = [box for box, _text, _conf in line["items"]]
+
+            pooled_candidates.append(self._fuse_boxes_as_is(line["items"], res_ru))
+            pooled_candidates += self._crop_candidates(line_boxes, processed, ocr_en, ocr_ru)
+
+            avg_conf = 0.0
+            if res_en:
+                avg_conf = max(avg_conf, float(np.mean([item[1][1] for item in res_en])))
+            if res_ru:
+                avg_conf = max(avg_conf, float(np.mean([item[1][1] for item in res_ru])))
+            if avg_conf > best_overall_conf:
+                best_overall_conf = avg_conf
+                best_overall_mode = mode
+
+        if not pooled_candidates:
+            return {
+                "full_text": "",
+                "lines": [],
+                "line_confidences": [],
+                "confidence": 0.0,
+                "preprocessing_mode": None,
+            }
+
+        best_text, best_line_conf = self._select_best_candidate(pooled_candidates)
+        logger.debug(
+            "paddleocr_dual_fusion_multi_mode",
+            winning_mode_hint=best_overall_mode,
+            candidates=len(pooled_candidates),
+            result=best_text,
+            confidence=best_line_conf,
+        )
+
+        return {
+            "full_text": best_text,
+            "lines": [best_text],
+            "line_confidences": [best_line_conf],
+            "confidence": best_overall_conf,
+            "preprocessing_mode": best_overall_mode,
         }
 
     # ------------------------------------------------------------------
