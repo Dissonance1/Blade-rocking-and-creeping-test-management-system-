@@ -175,6 +175,8 @@ The OH PC's LAN address/hostname is not a magic constant — if it ever changes,
 
 Camera capture only works over a secure context: `https://`, or literally `http://localhost`/`127.0.0.1` — a plain-HTTP LAN hostname/IP (e.g. `http://bladerocking-1-`, `http://172.146.5.98`) is *not* secure in the browser's eyes, so `navigator.mediaDevices` is `undefined` there and the browser-webcam fallback in `CameraModal.tsx`/`CameraScanner.tsx` can never work on any station accessed that way — this is a browser restriction, not something fixable in this app's code. That's exactly why every station is expected to have its own OAK-1 (or another local capture path) rather than relying on the in-browser webcam: OAK-1 capture goes through `oak1_camera_service.py`'s plain HTTP fetch on `localhost`, which isn't subject to this restriction at all.
 
+For a station that must use the in-browser webcam fallback anyway (no OAK-1 attached), Chrome/Edge's `OverrideSecurityRestrictionsOnInsecureOrigin` enterprise policy can whitelist specific plain-HTTP origins as secure contexts. Run `scripts/allow_insecure_camera_origin.ps1` (elevated PowerShell, on the station PC) to set it for the OH PC's LAN address/hostname; it defaults to the same two origins as `CORS_ORIGINS` in `.env.oh` and `DEFAULT_ORIGINS` in `oak1_camera_service.py` — keep all three in sync if the OH PC's address ever changes. Requires a full browser restart to take effect; verify at `chrome://policy` / `edge://policy`.
+
 OCR inference itself (PaddleOCR) always runs centrally in the OH PC's backend container — a secondary PC's camera only captures and uploads images over the network; it never needs PaddleOCR installed locally.
 
 ---

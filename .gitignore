@@ -146,3 +146,6 @@ backend/finetune/*.jpg
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/
+
+# ─── OAK1 camera service runtime state (machine-specific save-folder path) ──
+scripts/oak1_save_folder.json
