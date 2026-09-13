@@ -119,6 +119,7 @@ backend/finetune/train_data_combined/
 backend/finetune/train_data_ocr_scans/
 backend/finetune/train_data_v2/
 backend/finetune/train_data_v3/
+backend/finetune/train_data_hptr_72797/
 backend/finetune/det_train_data_char/
 backend/finetune/output/
 
@@ -143,6 +144,7 @@ backend/finetune/*.jpg
 # above: real photos, not source, never tracked.
 /ocr_scans/
 /labels.json
+/labels.json.bak_*
 
 # ─── OAK1 camera SDK runtime cache (device firmware/blob cache) ────────────
 scripts/.cache/
