@@ -270,31 +270,124 @@ export default function RockingCreepPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
 
-  // ── Apply each new DTI gauge reading to whichever cell is active ────────────
-  // The gauge is shared between the Rocking and Creep fixtures, so each
-  // capture is saved on its own the moment it arrives — it never waits for
-  // the other column, which may be filled already, later, or never (HPTR).
+  // ── Apply a captured reading to whichever cell is active ────────────────────
+  // Shared by both capture paths (WebSocket DTI bridge below, and the HID
+  // keystroke guard further down) — the gauge is shared between the Rocking
+  // and Creep fixtures, so each capture is saved on its own the moment it
+  // arrives, never waiting for the other column (filled already, later, or
+  // never, for HPTR).
+  const activeTargetRef = useRef<ActiveTarget | null>(null);
+  useEffect(() => {
+    activeTargetRef.current = activeTarget;
+  }, [activeTarget]);
+
+  const applyReading = useCallback(
+    (rawValue: number) => {
+      const target = activeTargetRef.current;
+      if (!target) {
+        toast.error("No active Rocking/Creep field — click a field first.");
+        return;
+      }
+      const entry = entries.find((e) => e.blade_id === target.bladeId);
+      if (!entry) return; // target no longer editable — ignore
+
+      const value = Number(rawValue.toFixed(4));
+      const { bladeId, field } = target;
+      const existingRow = rowState[bladeId] ?? EMPTY_ROW;
+      const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
+      setRowState((prev) => patchRow(prev, bladeId, { [field]: String(value), saved: false }));
+
+      const rockingNum = updatedRow.rocking !== "" ? parseFloat(updatedRow.rocking) : null;
+      const creepNum   = updatedRow.creep   !== "" ? parseFloat(updatedRow.creep)   : null;
+      saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
+      advanceTarget(entry, field);
+    },
+    [entries, rowState, saveMutation, advanceTarget]
+  );
+
   useEffect(() => {
     if (!lastReading || !activeTarget) return;
     const capturedAt = lastReading.capturedAt.getTime();
     if (capturedAt === lastAppliedAtRef.current) return; // already applied this reading
     lastAppliedAtRef.current = capturedAt;
-
-    const entry = entries.find((e) => e.blade_id === activeTarget.bladeId);
-    if (!entry) return; // target no longer editable — ignore
-
-    const value = Number(lastReading.value.toFixed(4));
-    const { bladeId, field } = activeTarget;
-    const existingRow = rowState[bladeId] ?? EMPTY_ROW;
-    const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
-    setRowState((prev) => patchRow(prev, bladeId, { [field]: String(value), saved: false }));
-
-    const rockingNum = updatedRow.rocking !== "" ? parseFloat(updatedRow.rocking) : null;
-    const creepNum   = updatedRow.creep   !== "" ? parseFloat(updatedRow.creep)   : null;
-    saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
-    advanceTarget(entry, field);
+    applyReading(lastReading.value);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastReading]);
+
+  // ── HID gauge capture (Bluetooth keyboard-emulation mode) ───────────────────
+  // A gauge paired as a plain Bluetooth HID keyboard types its reading as raw
+  // keystrokes into whatever has OS/browser focus — there's no data channel
+  // to filter by station or field. To stop a reading landing in the wrong
+  // place (e.g. the work-order search box) if the operator forgot to click a
+  // Rocking/Creep cell first, this captures document-wide and routes any
+  // fast burst of digit/sign/dot characters typed OUTSIDE a registered
+  // Rocking/Creep input to the current activeTarget instead — same
+  // destination a WebSocket-delivered reading would land on. A burst is
+  // detected by inter-keystroke timing (<35ms): real human typing is
+  // reliably slower, so normal typing elsewhere (e.g. the work-order search)
+  // is unaffected. This can only protect within this browser tab — it can't
+  // stop a reading typing into a different application/window entirely; that
+  // requires OS focus to be on this tab when the gauge sends.
+  const HID_FAST_KEY_MS = 35;
+  const HID_BURST_GAP_MS = 120;
+  const hidBufferRef = useRef("");
+  const hidLastKeyAtRef = useRef(0);
+  const hidBurstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushHidBuffer = useCallback(() => {
+    const raw = hidBufferRef.current;
+    hidBufferRef.current = "";
+    if (hidBurstTimerRef.current) {
+      clearTimeout(hidBurstTimerRef.current);
+      hidBurstTimerRef.current = null;
+    }
+    if (!raw) return;
+    const value = parseFloat(raw);
+    if (isNaN(value)) return;
+    applyReading(value);
+  }, [applyReading]);
+
+  useEffect(() => {
+    const isOurInput = (el: Element | null) => {
+      if (!el) return false;
+      for (const input of inputRefs.current.values()) {
+        if (input === el) return true;
+      }
+      return false;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isOurInput(document.activeElement)) return; // native typing handles this normally
+
+      const now = performance.now();
+      const dt = now - hidLastKeyAtRef.current;
+      hidLastKeyAtRef.current = now;
+
+      const isBurstChar = /^[0-9+\-.]$/.test(e.key);
+      const isEnter = e.key === "Enter";
+      const midBurst = hidBufferRef.current.length > 0;
+
+      if (isEnter && midBurst) {
+        e.preventDefault();
+        e.stopPropagation();
+        flushHidBuffer();
+        return;
+      }
+      if (isBurstChar && (midBurst || dt < HID_FAST_KEY_MS)) {
+        e.preventDefault();
+        e.stopPropagation();
+        hidBufferRef.current += e.key;
+        if (hidBurstTimerRef.current) clearTimeout(hidBurstTimerRef.current);
+        hidBurstTimerRef.current = setTimeout(flushHidBuffer, HID_BURST_GAP_MS);
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (hidBurstTimerRef.current) clearTimeout(hidBurstTimerRef.current);
+    };
+  }, [flushHidBuffer]);
 
   // ── Move real keyboard focus whenever the active target advances (DTI
   //    capture or Enter-to-confirm below) — activeTarget only drove the
