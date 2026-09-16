@@ -18,6 +18,7 @@ from sqlalchemy import (
     Column,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -171,12 +172,11 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     __tablename__ = "users"
 
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
-    )
-    username: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False, index=True
-    )
+    # Uniqueness is enforced by the partial indexes below (scoped to
+    # deleted_at IS NULL), not a plain column constraint — a soft-deleted
+    # user must free up their email/username for reuse.
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -211,6 +211,18 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __table_args__ = (
         Index("ix_users_email_active", "email", "is_active"),
         Index("ix_users_deleted_at", "deleted_at"),
+        Index(
+            "ix_users_email_unique_active",
+            "email",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_users_username_unique_active",
+            "username",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     @property
