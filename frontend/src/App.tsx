@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import AppRouter from "@/routes/index";
 import { useUIStore } from "@/store/uiStore";
+import { useHidGaugeAppGuard } from "@/hooks/useHidGaugeAppGuard";
 
 /**
  * Root application component.
@@ -13,6 +14,10 @@ import { useUIStore } from "@/store/uiStore";
  */
 export default function App() {
   const theme = useUIStore((s) => s.theme);
+
+  // Block a Bluetooth-HID-paired DTI gauge's keystrokes everywhere except
+  // the Rocking & Creep page (login included) — see useHidGaugeAppGuard.
+  useHidGaugeAppGuard();
 
   /* Sync theme class whenever the theme value changes */
   useEffect(() => {

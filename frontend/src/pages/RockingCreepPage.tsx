@@ -291,7 +291,7 @@ export default function RockingCreepPage() {
       const entry = entries.find((e) => e.blade_id === target.bladeId);
       if (!entry) return; // target no longer editable — ignore
 
-      const value = Number(rawValue.toFixed(4));
+      const value = Number(rawValue.toFixed(2));
       const { bladeId, field } = target;
       const existingRow = rowState[bladeId] ?? EMPTY_ROW;
       const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
@@ -348,17 +348,17 @@ export default function RockingCreepPage() {
   }, [applyReading]);
 
   useEffect(() => {
-    const isOurInput = (el: Element | null) => {
-      if (!el) return false;
-      for (const input of inputRefs.current.values()) {
-        if (input === el) return true;
-      }
-      return false;
-    };
-
+    // Deliberately does NOT special-case focus being on one of our own
+    // Rocking/Creep inputs: the app already auto-focuses the active target
+    // field (see the activeTarget effect above), so the gauge's burst often
+    // lands there natively — but letting that happen bypassed applyReading
+    // entirely, typing the raw "+0000.99" string straight into the field
+    // instead of the rounded 0.00 value. Routing every burst through the
+    // same capture → round → apply pipeline regardless of focus keeps the
+    // displayed value always correctly formatted. Manual human typing is
+    // untouched either way, since it's never fast enough to trigger the
+    // burst-timing check below.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isOurInput(document.activeElement)) return; // native typing handles this normally
-
       const now = performance.now();
       const dt = now - hidLastKeyAtRef.current;
       hidLastKeyAtRef.current = now;
@@ -767,9 +767,9 @@ export default function RockingCreepPage() {
                             <Input
                               ref={(el) => registerInputRef(entry.blade_id, "rocking", el)}
                               type="number"
-                              step="0.0001"
+                              step="0.01"
                               min={0}
-                              placeholder="0.0000"
+                              placeholder="0.00"
                               value={row.rocking}
                               onChange={(e) => {
                                 setRowState((prev) =>
@@ -808,9 +808,9 @@ export default function RockingCreepPage() {
                             <Input
                               ref={(el) => registerInputRef(entry.blade_id, "creep", el)}
                               type="number"
-                              step="0.0001"
+                              step="0.01"
                               min={0}
-                              placeholder="0.0000"
+                              placeholder="0.00"
                               value={row.creep}
                               onChange={(e) => {
                                 setRowState((prev) =>
