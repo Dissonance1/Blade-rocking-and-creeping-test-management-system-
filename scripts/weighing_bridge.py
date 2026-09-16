@@ -82,6 +82,11 @@ DEFAULT_SERVER   = "http://localhost"
 PUSH_PATH        = "/api/v1/weighing/push"
 BAUD_RATES       = [9600, 4800, 2400, 19200, 38400]
 RETRY_INTERVAL_S = 5
+# Separate, faster interval for the server-reachability check specifically —
+# a /health GET is cheap, so there's no reason to wait as long as the serial
+# port retry (which is hitting real hardware/Bluetooth and shouldn't be
+# hammered) to notice the server/network came back.
+HTTP_RETRY_INTERVAL_S = 1
 _WEIGHT_RE       = re.compile(r"\d+\.?\d*")
 
 # A Bluetooth SPP virtual COM port often doesn't raise SerialException when the
@@ -90,7 +95,15 @@ _WEIGHT_RE       = re.compile(r"\d+\.?\d*")
 # at all has arrived in this long, treat the connection as stale and reopen
 # the port rather than waiting on a connection nothing will ever answer on
 # again.
-_STALE_CONNECTION_S = 20
+#
+# Was 20s, which was shorter than this scale's own idle behavior: it only
+# pushes on a weight change/settle, so an empty, undisturbed scale can go
+# quiet for 20s+ on its own (observed a legitimate ~19s gap right before a
+# ~22s one that then falsely tripped this). Closing a BT SPP port on a false
+# positive is expensive — re-establishing the RFCOMM session can take minutes
+# or hang — so this needs real headroom above normal idle silence, not just
+# above one read interval.
+_STALE_CONNECTION_S = 120
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -252,7 +265,7 @@ def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> Non
     # — retry forever rather than exiting, since the backend may come up
     # after this bridge is started.
     session = _build_session(insecure_ssl)
-    _wait_until_any_reachable(session, servers, RETRY_INTERVAL_S)
+    _wait_until_any_reachable(session, servers, HTTP_RETRY_INTERVAL_S)
 
     ser = _connect(port)
 

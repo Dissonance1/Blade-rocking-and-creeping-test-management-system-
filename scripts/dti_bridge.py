@@ -92,6 +92,11 @@ PUSH_PATH        = "/api/v1/dti/push"
 POSITIONS_PATH   = "/api/v1/dti/positions"
 BAUD_RATES       = [9600, 4800, 2400, 19200, 38400]
 RETRY_INTERVAL_S = 5
+# Separate, faster interval for the server-reachability check specifically —
+# a /health GET is cheap, so there's no reason to wait as long as the serial
+# port retry (which is hitting real hardware and shouldn't be hammered) to
+# notice the server/network came back.
+HTTP_RETRY_INTERVAL_S = 1
 
 # Many DTI gauges output: "+012.345\r\n" or "12.345\r\n" or "  12.345 mm\r\n"
 _DTI_RE = re.compile(r"[+-]?\d+\.?\d*")
@@ -265,7 +270,7 @@ def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> Non
     log.info("[dti  ] station: %s", station)
 
     session = _build_session(insecure_ssl)
-    _wait_until_any_reachable(session, servers, RETRY_INTERVAL_S)
+    _wait_until_any_reachable(session, servers, HTTP_RETRY_INTERVAL_S)
 
     ser = _connect(port)
 
