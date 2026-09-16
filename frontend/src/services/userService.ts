@@ -53,17 +53,15 @@ export const userService = {
   },
 
   create: async (payload: CreateUserPayload): Promise<User> => {
-    const { data } = await api.post<BackendUserListItem>("/users/", payload);
-    const user = normaliseUser(data);
-    // Assign initial roles if specified (body must be a raw JSON array)
-    if (payload.roles?.length) {
-      try {
-        await api.post(`/users/${user.id}/roles`, payload.roles);
-      } catch {
-        // Role assignment failure is non-fatal; user was created successfully
-      }
-    }
-    return user;
+    // Backend's create-user schema field is `role_names`, not `roles` —
+    // assigning roles in this same call keeps creation atomic instead of
+    // relying on a second, separately-failable request.
+    const { roles, ...rest } = payload;
+    const { data } = await api.post<BackendUserListItem>("/users/", {
+      ...rest,
+      role_names: roles ?? [],
+    });
+    return normaliseUser(data);
   },
 
   update: async (id: string, payload: UpdateUserPayload): Promise<User> => {

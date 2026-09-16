@@ -50,6 +50,10 @@ async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> Any:
         select(User)
         .where(User.id == user_id, User.deleted_at.is_(None))
         .options(selectinload(User.user_roles).selectinload(UserRoleModel.role))
+        # Force a fresh load of relationships onto an already-identity-mapped
+        # instance (e.g. a `user` fetched earlier in the same request before
+        # roles were added) instead of silently keeping its stale collection.
+        .execution_options(populate_existing=True)
     )
     user = result.scalar_one_or_none()
     if user is None:
@@ -138,8 +142,10 @@ async def create_user(
     await db.flush()
 
     # Assign roles
+    # UserCreate inherits BaseSchema's `use_enum_values=True`, so items here
+    # are already plain strings (the enum's value), not RoleName members.
     for role_name in body.role_names:
-        role = await _get_role_by_name(role_name.value, db)
+        role = await _get_role_by_name(role_name, db)
         user_role = UserRole(
             user_id=user.id,
             role_id=role.id,
