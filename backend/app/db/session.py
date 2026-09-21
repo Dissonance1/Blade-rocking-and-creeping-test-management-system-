@@ -30,6 +30,11 @@ _engine_kwargs: dict = {
         "server_settings": {
             "application_name": settings.APP_NAME,
             "jit": "off",           # Disable JIT for short OLTP queries.
+            # Safety net: a session left "idle in transaction" (e.g. a
+            # request that opened a transaction then hung downstream and
+            # never committed/rolled back) leaks that connection forever
+            # otherwise — kill it after 2 min instead of starving the pool.
+            "idle_in_transaction_session_timeout": "120000",
         },
         "command_timeout": 60,
     },

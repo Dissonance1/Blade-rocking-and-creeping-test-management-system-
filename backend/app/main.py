@@ -15,6 +15,7 @@ Startup sequence
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
@@ -24,10 +25,11 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: F401 – kept for type ref
 
 from app.core.config import settings
-from app.db.session import init_db
+from app.db.session import engine, init_db
 
 logger = structlog.get_logger(__name__)
 
@@ -134,8 +136,30 @@ async def engine_workflow_transition_error_handler(
     )
 
 
+async def _ping_database() -> None:
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
 async def health_check() -> dict[str, Any]:
-    """Return application liveness / readiness information."""
+    """Return application liveness / readiness information.
+
+    Actually checks out a connection and pings the database — a static
+    "ok" would leave Docker's healthcheck (and oh_autoheal) blind to a
+    starved connection pool, which is exactly what let a prior DB pool
+    exhaustion go unnoticed until every request, including login, timed
+    out. Bounded to 3s so a slow/exhausted pool fails fast rather than
+    hanging the healthcheck itself.
+    """
+    try:
+        await asyncio.wait_for(_ping_database(), timeout=3)
+    except Exception as exc:
+        logger.error("health_check_db_unreachable", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unreachable",
+        )
+
     return {
         "status": "ok",
         "version": settings.APP_VERSION,
