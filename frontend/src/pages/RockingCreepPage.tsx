@@ -329,7 +329,15 @@ export default function RockingCreepPage() {
   // stop a reading typing into a different application/window entirely; that
   // requires OS focus to be on this tab when the gauge sends.
   const HID_FAST_KEY_MS = 35;
-  const HID_BURST_GAP_MS = 120;
+  // BLE HID-over-GATT delivery (this gauge's transport) is connection-interval
+  // driven, not a steady stream — gaps well over 120ms between characters
+  // WITHIN one transmission are normal, especially right after a reconnect.
+  // Too short a gap here caused a single reading to flush mid-transmission
+  // (e.g. "0000" then ".131" as two separate bursts), each auto-applying AND
+  // advancing the target row — one gauge reading silently became two saved
+  // rows. 400ms comfortably covers a full ~8-10 char reading's worst-case
+  // jitter while staying far below any realistic human keystroke pause.
+  const HID_BURST_GAP_MS = 400;
   const hidBufferRef = useRef("");
   const hidLastKeyAtRef = useRef(0);
   const hidBurstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

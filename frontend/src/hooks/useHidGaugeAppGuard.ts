@@ -19,6 +19,12 @@ import { useEffect, useRef } from "react";
 // a different application/window entirely; that requires OS focus to be on
 // this tab when the gauge sends.
 const HID_FAST_KEY_MS = 35;
+// Keep in sync with RockingCreepPage's HID_BURST_GAP_MS: BLE HID-over-GATT
+// delivery can have 100ms+ gaps between characters within one transmission
+// (connection-interval jitter, worse right after a reconnect). Too short a
+// gap here lets midBurstRef reset before a slow-arriving tail character of
+// the same reading, so it leaks through unguarded on whatever page has focus.
+const HID_BURST_GAP_MS = 400;
 const ROCKING_CREEP_PATH = "/rocking-creep";
 
 export function useHidGaugeAppGuard() {
@@ -44,7 +50,7 @@ export function useHidGaugeAppGuard() {
         if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
         burstTimerRef.current = setTimeout(() => {
           midBurstRef.current = false;
-        }, 120);
+        }, HID_BURST_GAP_MS);
       }
     };
 
