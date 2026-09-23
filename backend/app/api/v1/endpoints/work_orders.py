@@ -15,6 +15,7 @@ POST /work-orders/{work_order_number}/reset-hptr-slots          — undo a saved
 POST /work-orders/{work_order_number}/reset-lptr-slots          — undo a saved LPTR slot allocation, redo from scratch
 GET  /work-orders/{work_order_number}/rocking-creep              — blades with slot numbers + rocking/creep values
 POST /work-orders/{work_order_number}/complete-rocking-creep    — confirm Rocking & Creep entry complete for a work order
+POST /work-orders/{work_order_number}/reset-rocking-creep       — clear all Rocking/Creep values in a work order
 POST /work-orders/{work_order_number}/receive                   — Assembly marks work order received
 POST /work-orders/{work_order_number}/accept                    — Assembly accepts work order
 POST /work-orders/{work_order_number}/modify                    — Assembly corrects blade-level fields
@@ -2701,11 +2702,6 @@ async def get_work_order_rocking_creep(
 # ---------------------------------------------------------------------------
 
 
-@router.post(
-    "/{work_order_number}/complete-rocking-creep",
-    status_code=status.HTTP_200_OK,
-    summary="Confirm Rocking & Creep entry is complete for a work order",
-)
 def _find_blades_missing_rocking_creep(blades: list, meas_map: dict) -> tuple[list[str], bool]:
     """Serials still missing a required Rocking (and Creep, for LPTR) value,
     plus whether any LPTR blade is present (for the error message wording)."""
@@ -2722,6 +2718,11 @@ def _find_blades_missing_rocking_creep(blades: list, meas_map: dict) -> tuple[li
     return missing_serials, any_lptr
 
 
+@router.post(
+    "/{work_order_number}/complete-rocking-creep",
+    status_code=status.HTTP_200_OK,
+    summary="Confirm Rocking & Creep entry is complete for a work order",
+)
 async def complete_rocking_creep(
     work_order_number: str,
     current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
@@ -3384,3 +3385,65 @@ async def update_work_order_header(
         blades_updated=blade_result.rowcount,
         message=f"Work Order {final_number} updated ({blade_result.rowcount} blade(s))",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /{work_order_number}/reset-rocking-creep
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{work_order_number}/reset-rocking-creep",
+    status_code=status.HTTP_200_OK,
+    summary="Clear every Rocking & Creep value in a work order, redo entry from scratch",
+)
+async def reset_rocking_creep(
+    work_order_number: str,
+    current_user: Annotated[Any, Depends(require_roles("OH_OPERATOR", "SUPER_ADMIN"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """
+    Null out rocking_value/creep_value on every measurement of every blade in
+    *work_order_number*. Refused once the work order's Rocking & Creep entry
+    has been marked complete (Saved) — that's a closed record.
+    """
+    from sqlalchemy import update
+
+    from app.models.blade import Blade
+    from app.models.measurement import Measurement
+    from app.models.work_order import WorkOrder
+
+    work_order = (
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.work_order_number == work_order_number)
+        )
+    ).scalar_one_or_none()
+    if work_order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work Order '{work_order_number}' not found",
+        )
+    if work_order.is_rocking_creep_complete:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Rocking & Creep for '{work_order_number}' is already saved — cannot reset.",
+        )
+
+    blade_ids = select(Blade.id).where(
+        Blade.work_order_number == work_order_number,
+        Blade.deleted_at.is_(None),
+    )
+    result = await db.execute(
+        update(Measurement)
+        .where(Measurement.blade_id.in_(blade_ids))
+        .values(rocking_value=None, creep_value=None)
+    )
+    await db.commit()
+
+    logger.info(
+        "work_order_rocking_creep_reset",
+        work_order=work_order_number,
+        measurements=result.rowcount,
+        user_id=str(current_user.id),
+    )
+    return {"work_order_number": work_order_number, "measurements_reset": result.rowcount}

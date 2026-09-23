@@ -252,6 +252,14 @@ export const batchService = {
     return data;
   },
 
+  /** Clears every Rocking/Creep value in the work order — redo entry from scratch. */
+  resetRockingCreep: async (
+    batchNumber: string
+  ): Promise<{ work_order_number: string; measurements_reset: number }> => {
+    const { data } = await api.post(`/work-orders/${batchNumber}/reset-rocking-creep`, {});
+    return data;
+  },
+
   /**
    * Physical balancing testing confirmed the set is balanced — transitions
    * every HPTR blade in the batch to BALANCING_COMPLETED. Once complete,

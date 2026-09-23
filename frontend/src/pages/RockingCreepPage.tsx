@@ -11,6 +11,8 @@ import {
   Wifi,
   WifiOff,
   Crosshair,
+  RotateCcw,
+  Save,
 } from "lucide-react";
 import { RockingCreepIcon } from "@/components/common/CustomIcons";
 import { toast } from "sonner";
@@ -507,6 +509,31 @@ export default function RockingCreepPage() {
     },
   });
 
+  const resetMutation = useMutation({
+    mutationFn: () => batchService.resetRockingCreep(selectedBatch),
+    onSuccess: () => {
+      toast.success(`All Rocking & Creep values cleared for ${selectedBatch}`);
+      setRowState({});
+      setActiveTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["rocking-creep", selectedBatch] });
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.detail ?? "Failed to reset");
+    },
+  });
+
+  const handleReset = useCallback(() => {
+    if (!window.confirm(
+      `Reset ALL Rocking and Creep values for ${selectedBatch}?
+
+Every entered value in this work order will be erased. This cannot be undone.`
+    )) return;
+    // Drop pending debounced saves so they don't re-write values after the reset.
+    for (const timer of autoSaveTimersRef.current.values()) clearTimeout(timer);
+    autoSaveTimersRef.current.clear();
+    resetMutation.mutate();
+  }, [selectedBatch, resetMutation]);
+
   // Blade type + status breakdown for the header — a work order mixes LPTR
   // and HPTR blades, and status can differ row to row, so there is no single
   // "the" type/status to show; a per-value count summary is the honest one.
@@ -594,21 +621,20 @@ export default function RockingCreepPage() {
                     Next capture → {activeEntry.serial_number} ({activeTarget?.field === "creep" ? "Creep" : "Rocking"})
                   </span>
                 )}
-                {allEntriesComplete && (
-                  <Button
-                    size="sm"
-                    onClick={() => completeMutation.mutate()}
-                    disabled={completeMutation.isPending}
-                    className="bg-emerald-500 hover:bg-emerald-600 text-white"
-                  >
-                    {completeMutation.isPending ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-                    )}
-                    Complete Rocking &amp; Creep
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReset}
+                  disabled={resetMutation.isPending}
+                  className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-900/20"
+                >
+                  {resetMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Reset All
+                </Button>
               </div>
             )}
           </div>
@@ -883,6 +909,25 @@ export default function RockingCreepPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-3 px-4 py-4 border-t border-slate-100 dark:border-slate-700/50">
+              {!allEntriesComplete && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Enter Rocking{lptrCount > 0 ? " and Creep" : ""} for all {totalCount} blades to save
+                </span>
+              )}
+              <Button
+                onClick={() => completeMutation.mutate()}
+                disabled={!allEntriesComplete || completeMutation.isPending}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white"
+              >
+                {completeMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4 mr-1.5" />
+                )}
+                Save
+              </Button>
             </div>
           </CardContent>
         </Card>
