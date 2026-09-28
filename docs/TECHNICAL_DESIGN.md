@@ -1,11 +1,9 @@
 # Technical Design Document
 ## Blade Rocking & Creep Test Management System
 
-**Version:** 1.1  
+**Version:** 1.0  
 **Owner:** Meridian Data Labs  
 **Contact:** amit@meridiandatalabs.com
-
-> **v1.1:** Reconciled against a direct source-code review. Corrected several areas that had drifted from the actual implementation: report generation runs via FastAPI `BackgroundTasks`, not Celery (§9); OCR is split into per-field endpoints (§11); slot-assignment math is computed client-side and validated/persisted server-side for both LPTR and HPTR, `total_slots` defaults to 90 (§6); the state-machine transition table (§5), Work Orders endpoint list (§7), and Frontend Routes (§17) now match the current code exactly. Also folded in the single-server deployment correction and the LPTR/OCR/OAK-1 fixes already present in the prior pass.
 
 ---
 
@@ -1230,6 +1228,8 @@ Both `/snapshot` and `/stream` accept a `?blade_type=LPTR\|HPTR` query param. LP
 
 `BladeEntryPage` and `CameraScanner` call `checkOak1Health()` when the camera modal opens. If the OAK-1 is reachable a **source toggle button** appears in the modal header (Cpu icon = OAK-1 / Video icon = browser webcam). OAK-1 preview renders as an `<img>` element pointed at the MJPEG stream; the browser webcam uses a `<video>` element with `getUserMedia()`. Capture follows the selected source and produces a JPEG blob fed into the existing OCR upload path — the backend sees no difference between sources.
 
+**Insecure-context guard on the browser-webcam fallback:** `navigator.mediaDevices` is `undefined` outside a secure context (`https://`, or literally `http://localhost`/`127.0.0.1`) — a plain-HTTP LAN hostname or IP (e.g. `http://bladerocking-1-`, `http://172.146.5.98`) does not count as secure to the browser. Calling `getUserMedia()` there used to throw synchronously past the existing try/catch and crash the whole app. `CameraModal.tsx` and `CameraScanner.tsx` now check `navigator.mediaDevices?.getUserMedia` up front and show a friendly in-modal error ("Camera access requires a secure connection...") instead. This is a browser restriction, not something fixable app-side — it's exactly why every station is expected to have its own OAK-1 (or another local capture path): OAK-1 capture goes through `oak1_camera_service.py`'s plain HTTP fetch on `localhost`, which isn't subject to the secure-context restriction at all.
+
 Frontend reads the base URL from `VITE_OAK1_SERVICE_URL` env var (default `http://localhost:8089`).
 
 **Note:** Chromium treats `http://localhost` as a secure-context exception, so HTTPS-page → HTTP-companion mixed content is allowed in Chrome/Edge. This is an intentional shop-floor constraint (known browser on a fixed machine).
@@ -1291,6 +1291,22 @@ Independent of the server-side attachment upload, `BladeEntryGrid` can mirror ev
 
 ---
 
+### 10.5 Secondary Hardware Stations
+
+A second PC with its own hardware attached (e.g. an HPTR station elsewhere in 701 Hanger) can push readings into the same central OH app/database instead of running its own stack — the same principle as the OH/Assembly split (§2): one app instance, one database, `blade_type`/`EXTRA_TRANSITIONS_BY_TYPE` already tells LPTR and HPTR work apart server-side. The second PC does **not** run `docker compose`, build the app, or run its own Postgres.
+
+**Setup on the second PC:**
+1. Copy over `scripts/` (`weighing_bridge.py`, `dti_bridge.py`, `oak1_camera_service.py`, `register_bridge_tasks.ps1`, `oak1_requirements.txt`) — cloning the whole repo is simplest.
+2. `weighing_bridge.py` / `dti_bridge.py` use the plain system Python. `oak1_camera_service.py` needs its **own dedicated venv** (`scripts\oak1-venv`) — `depthai` doesn't coexist cleanly with the other bridge scripts' dependencies.
+3. Register the bridges with `-Server` pointed at the OH PC instead of localhost: `register_bridge_tasks.ps1 -Server http://<oh-pc-ip>` (`-Server` defaults to `http://localhost`). `register_bridge_tasks.ps1` points the OAK-1 scheduled task at `scripts\oak1-venv\Scripts\pythonw.exe` specifically (`$oak1Py` in the script) — if that venv isn't created at that exact path, the task registers but the process crashes immediately on `import depthai` and stays silently dead. The OAK-1 camera service itself never takes a `-Server` value — it always talks to its own `localhost:8089`.
+4. Operators on that PC open a browser to the OH PC's LAN IP or NetBIOS hostname and log in with the appropriate role — same RBAC model as Assembly (§2).
+
+OCR inference (PaddleOCR) always runs centrally in the OH PC's backend container; a secondary PC's camera only captures and uploads images over the network and never needs PaddleOCR installed locally. If the OH PC's LAN address/hostname ever changes, it must be updated in `CORS_ORIGINS` and in `oak1_camera_service.py`'s `DEFAULT_ORIGINS`, and every secondary PC's bridge registration re-run with the new address.
+
+See `CLAUDE.md`'s "Secondary Hardware Stations" section for the operational runbook; §10.3 above for the OAK-1 secure-context note on why the browser-webcam fallback can't work on a plain-HTTP LAN hostname.
+
+---
+
 ## 11. OCR Integration
 
 ### Provider Registry (backend/app/ocr/registry.py)
@@ -1348,26 +1364,34 @@ The backend receives the image as raw bytes; preprocessing decodes via `cv2.imde
 
 #### Character-level fusion
 
-Both English and Cyrillic recognisers run on the selected preprocessed image. Results are fused **character by character** using deterministic rules:
+Both English and Cyrillic recognisers run on the selected preprocessed image. Results are fused **character by character** using deterministic rules, `_arbitrate_slot(c_en, c_ru)`, in this order:
 
 ```
 For each character position (aligned by region/line):
-  If character is a pure Cyrillic letter  → take Cyrillic reading
-  If character is a digit / symbol / Latin → take English reading
-  If readings disagree and no clear rule applies → take English reading
+  If Cyrillic engine read a genuine pure-Cyrillic letter here → take Cyrillic reading
+  If English engine read a digit / symbol / Latin here        → take English reading
+  If readings disagree and no clear rule applies              → take English reading
 ```
 
 Character classification uses two pre-defined sets:
-- `_PURE_CYRILLIC` — Cyrillic-only Unicode codepoints (А–Я, а–я, Ё, ё, etc.)
+- `_PURE_CYRILLIC` — Cyrillic-only Unicode codepoints (А–Я, а–я, Ё, ё, etc.), i.e. glyphs with no Latin lookalike
 - `_INDUSTRIAL_SYMBOLS` — digits, Latin letters, and common stamp characters (`-`, `/`, `\`, space, etc.)
 
 This approach handles markings like `SN-М1034-Б` where the melt number contains Cyrillic suffixes mixed with alphanumeric prefixes.
 
-`_arbitrate_slot` guards the Cyrillic-preference rule with `c_ru in _PURE_CYRILLIC`; an empty `c_ru` string previously satisfied this check (an empty string is a substring of everything in Python), which silently truncated the fused result at the first position past the end of a short/garbled Cyrillic read. The check now requires a non-empty match.
+**Check-order fix (pure-Cyrillic before industrial-symbols):** the industrial-symbols check used to run first, so an English-engine digit hallucination at a slot the Cyrillic engine had correctly read as a letter (e.g. a real `Г` misread by the English engine as `1`) silently won and the correct Cyrillic letter was discarded outright — the reverse of the intended precedence, since a pure-Cyrillic hit can't be a false positive from the industrial-symbols direction (those glyphs have no Latin lookalike by construction). The order above is now the enforced order.
+
+**Empty-string guard, both sides:** `_arbitrate_slot` guards the Cyrillic-preference rule with `c_ru and c_ru in _PURE_CYRILLIC`, and symmetrically guards the industrial-symbols rule with `c_en and c_en in _INDUSTRIAL_SYMBOLS`. Without the `and` guard, an empty string is trivially "in" every string in Python, so whichever side's read was shorter at a given index (the Cyrillic engine garbling a digit/Latin run into a short token is the common case; the English engine skipping a Cyrillic letter it can't represent is the less common one) had its trailing/shifted character silently dropped instead of falling through to keep the other engine's read.
+
+**Length-mismatch fallback to a clean Cyrillic read:** per-index fusion assumes `text_en` and `text_ru` describe the same sequence one-to-one — an assumption that breaks whenever the English engine omits a Cyrillic letter entirely instead of guessing a Latin substitute, shortening its string relative to the Cyrillic engine's. When that happens, every English digit from that point on is shifted one slot early, so per-index fusion trusts the shifted-in English digits over the correctly-positioned Cyrillic ones — corrupting an already-perfect Cyrillic read (e.g. Cyrillic engine reads `14Г4736` correctly; English reads `144736`; naive fusion corrupts the result). `_fuse_chars` now checks this case up front: if `len(text_en) != len(text_ru)` and the Cyrillic engine's raw output already matches the digits-letter-digits grammar (`_SHAPE_RE`) on its own, it's trusted wholesale instead of being merged character-by-character.
+
+**Latin/Cyrillic homoglyph canonicalization:** the single embedded letter in a melt/serial number (digit-letter-digit shape) is sometimes a Latin/Cyrillic homoglyph — `A`/`А`, `B`/`В`, `C`/`С`, `E`/`Е`, `H`/`Н`, `K`/`К`, `M`/`М`, `O`/`О`, `P`/`Р`, `T`/`Т`, `X`/`Х` — pixel-identical glyphs at different Unicode codepoints, so whichever engine's charset happens to win that slot can emit either one. These are Russian-manufactured nameplates, so the real letter is always Cyrillic. `_normalize_letter_script` (via `_LATIN_TO_CYRILLIC_HOMOGLYPH`) canonicalizes that one letter position to Cyrillic, applied in `_resolve_value` only once a value already matches the digits-letter-digits grammar (from a direct pattern match or the confusion-guided correction below) — deliberately narrow, not a blanket Latin→Cyrillic pass over arbitrary text. Ground-truth labels for the eval/training set were also corrected to the same convention (368 of 952 labels changed; originals backed up).
 
 **Confusion-aware correction:** `_try_correct_to_shape` applies a single confusion-guided substitution when the fused string is one character away from matching the melt-number grammar above, against a table of commonly-confused character pairs for this dot-punch engraved font, rather than rejecting a near-miss outright.
 
 **Candidate scoring floor:** `drop_score` (the minimum detection-region confidence kept for fusion) defaulted to 0.5, which discarded nearly every read of this font — real scores routinely land 0.2–0.4 even when the character is correct. Lowered to 0.05 so candidates reach the fusion logic instead of being dropped before it runs; this was the direct cause of melt-number OCR frequently returning empty output.
+
+**Combined impact of the four fusion/homoglyph fixes above** (check-order, empty-string guard, homoglyph canonicalization, length-mismatch fallback), measured on the same 952-image real-photo pool throughout, using cached EN/RU model predictions (recognition itself is unaffected by any of these — they're all post-processing/fusion-logic changes): exact match 222/952 (23.3%) → 413/952 (43.4%), zero regressions across the combined set.
 
 **Fallback line selection:** `extract_melt_number` / `extract_serial_number` previously fell back to the full underscore-joined text of *every* detected line when the melt/serial regex didn't match. A frame with a spurious extra "line" (background texture, an unrelated part of the blade) was common, and concatenating it onto an otherwise-good single-line read corrupted it (e.g. a real `18A7` became `18A7_ИГE`). The fallback now picks the single best line instead, ranked by length first and confidence as tie-break.
 
@@ -1427,6 +1451,8 @@ pyzbar==0.1.9                                # QR/barcode decode fallback
 |--------|---------|----------|
 | Excel (.xlsx) | openpyxl | Data export, further analysis |
 | PDF | ReportLab / WeasyPrint | Print-quality traceability reports |
+
+**Cyrillic font support in PDFs:** ReportLab's built-in `Helvetica`/`Helvetica-Bold` are the original Adobe base-14 Type1 fonts (WinAnsiEncoding only, no Cyrillic glyphs), so any melt number containing a Cyrillic letter (routine — see [Section 11](#11-ocr-integration)) rendered as a missing-glyph box in the blade and Work Order PDF reports. `backend/app/reports/generator.py` now bundles DejaVu Sans (regular + bold, full Cyrillic coverage) as a real font file under `backend/app/reports/fonts/` — rather than relying on it being present only as a side effect of matplotlib being installed — registers it with ReportLab via `_register_unicode_fonts()`, and uses it (`DejaVuSans` / `DejaVuSans-Bold`) in place of every `Helvetica`/`Helvetica-Bold` reference in the PDF generation paths.
 
 ### Report Filters
 

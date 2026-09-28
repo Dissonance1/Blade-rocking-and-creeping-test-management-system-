@@ -24,7 +24,7 @@ const HID_FAST_KEY_MS = 35;
 // (connection-interval jitter, worse right after a reconnect). Too short a
 // gap here lets midBurstRef reset before a slow-arriving tail character of
 // the same reading, so it leaks through unguarded on whatever page has focus.
-const HID_BURST_GAP_MS = 400;
+const HID_BURST_GAP_MS = 1000;
 const ROCKING_CREEP_PATH = "/rocking-creep";
 
 export function useHidGaugeAppGuard() {

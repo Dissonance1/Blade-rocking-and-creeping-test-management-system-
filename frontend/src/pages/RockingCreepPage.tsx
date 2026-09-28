@@ -295,6 +295,10 @@ export default function RockingCreepPage() {
 
       const value = Number(rawValue.toFixed(2));
       const { bladeId, field } = target;
+      // The HID burst's first character can land natively in the focused
+      // input before the burst is detected, arming a debounced auto-save of
+      // that stray char — cancel it; this save supersedes it.
+      clearAutoSaveTimer(bladeId);
       const existingRow = rowState[bladeId] ?? EMPTY_ROW;
       const updatedRow: RowState = { ...existingRow, [field]: String(value), saved: false };
       setRowState((prev) => patchRow(prev, bladeId, { [field]: String(value), saved: false }));
@@ -304,7 +308,7 @@ export default function RockingCreepPage() {
       saveMutation.mutate({ bladeId, rocking: rockingNum, creep: creepNum });
       advanceTarget(entry, field);
     },
-    [entries, rowState, saveMutation, advanceTarget]
+    [entries, rowState, saveMutation, advanceTarget, clearAutoSaveTimer]
   );
 
   useEffect(() => {
@@ -337,11 +341,17 @@ export default function RockingCreepPage() {
   // Too short a gap here caused a single reading to flush mid-transmission
   // (e.g. "0000" then ".131" as two separate bursts), each auto-applying AND
   // advancing the target row — one gauge reading silently became two saved
-  // rows. 400ms comfortably covers a full ~8-10 char reading's worst-case
-  // jitter while staying far below any realistic human keystroke pause.
-  const HID_BURST_GAP_MS = 400;
+  // rows. 400ms still split readings on the HPTR station's BLE link, so this
+  // is now only the fallback — the gauge's trailing Enter flushes a reading
+  // immediately; the timer covers a gauge configured without one.
+  const HID_BURST_GAP_MS = 1000;
   const hidBufferRef = useRef("");
   const hidLastKeyAtRef = useRef(0);
+  // Previous keystroke if it was a burst char — a burst is only recognised
+  // on its SECOND fast key, so the first one ("0", "+", or a significant
+  // digit) has already gone through natively and must be recovered here.
+  const hidPrevKeyRef = useRef("");
+  const hidLastFlushAtRef = useRef(0);
   const hidBurstTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flushHidBuffer = useCallback(() => {
@@ -352,6 +362,7 @@ export default function RockingCreepPage() {
       hidBurstTimerRef.current = null;
     }
     if (!raw) return;
+    hidLastFlushAtRef.current = performance.now();
     const value = parseFloat(raw);
     if (isNaN(value)) return;
     applyReading(value);
@@ -376,6 +387,8 @@ export default function RockingCreepPage() {
       const isBurstChar = /^[0-9+\-.]$/.test(e.key);
       const isEnter = e.key === "Enter";
       const midBurst = hidBufferRef.current.length > 0;
+      const prevKey = hidPrevKeyRef.current;
+      hidPrevKeyRef.current = isBurstChar ? e.key : "";
 
       if (isEnter && midBurst) {
         e.preventDefault();
@@ -383,9 +396,19 @@ export default function RockingCreepPage() {
         flushHidBuffer();
         return;
       }
+      // Gauge's trailing Enter arriving after the fallback timer already
+      // flushed and advanced — letting it through would hit handleFieldEnter
+      // and skip a second row.
+      if (isEnter && now - hidLastFlushAtRef.current < HID_BURST_GAP_MS) {
+        e.preventDefault();
+        e.stopPropagation();
+        hidLastFlushAtRef.current = 0;
+        return;
+      }
       if (isBurstChar && (midBurst || dt < HID_FAST_KEY_MS)) {
         e.preventDefault();
         e.stopPropagation();
+        if (!midBurst) hidBufferRef.current = prevKey; // recover the leaked first char
         hidBufferRef.current += e.key;
         if (hidBurstTimerRef.current) clearTimeout(hidBurstTimerRef.current);
         hidBurstTimerRef.current = setTimeout(flushHidBuffer, HID_BURST_GAP_MS);
