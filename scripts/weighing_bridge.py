@@ -6,11 +6,14 @@ Blade Rocking backend so every open browser tab auto-fills the weight field.
 
 Scale (this deployment):
     Adam Equipment iScale i-04, 0.1 g resolution, connected via an
-    RS-232-to-Bluetooth SPP adapter, fixed at COM3 on this PC (iScale-BT-91).
-    The other scale that used to share this PC (iScale-BT-0111) has moved to
-    the HPTR PC — this bridge only ever opens the port it's told to, so it
-    can never pick up that other scale even if it happens to be in
-    Bluetooth range.
+    RS-232-to-Bluetooth SPP adapter, normally at COM3 on this PC
+    (iScale-BT-91) but falls back to COM5 (see KNOWN_FALLBACK_PORTS) if COM3
+    won't open — that Bluetooth SPP COM assignment isn't a fixed constant and
+    has drifted before with no change on the scale's end at all. The other
+    scale that used to share this PC (iScale-BT-0111) has moved to the HPTR
+    PC — this bridge only ever opens --port or a known fallback, so it can
+    never pick up that other scale even if it happens to be in Bluetooth
+    range.
 
 Two-PC deployment (e.g. the OH PC's own scale plus a second PC's own scale,
 see CLAUDE.md's "Secondary Hardware Stations"): each PC's bridge must use a
@@ -76,6 +79,19 @@ log = logging.getLogger(__name__)
 # bridge down when the other address would still have worked.
 KNOWN_OH_ADDRESSES = ["http://172.146.5.98", "http://bladerocking-1-"]
 
+# A Bluetooth SPP COM port assignment isn't a fixed constant — Windows can
+# reassign which COM number a paired device lands on (observed: pairing/
+# repairing a *different* Bluetooth device, e.g. the DTI gauge, shifted
+# iScale-BT-91 off COM3 and onto COM5 with no change on the scale's end at
+# all). Rather than silently sitting dead on a stale port until someone
+# notices and passes --port manually, --port's port is always tried first and
+# these are tried next, same idea as KNOWN_OH_ADDRESSES above. Update if the
+# scale's actual port drifts again — check with:
+#   python -m serial.tools.list_ports -v
+# (look for the entry whose hwid ends in the scale's Bluetooth MAC, not just
+# whichever COM number happens to open).
+KNOWN_FALLBACK_PORTS = ["COM5"]
+
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_PORT     = "COM3"
 DEFAULT_SERVER   = "http://localhost"
@@ -134,28 +150,47 @@ def _open_port(port: str, baud: int):
     return None
 
 
-def _connect(port: str) -> serial.Serial:
-    """Open the scale's port, retrying forever until it succeeds."""
+def _candidate_ports(port: str) -> list[str]:
+    """Requested --port first, then the known fallback port(s), de-duplicated."""
+    candidates = [port]
+    for p in KNOWN_FALLBACK_PORTS:
+        if p not in candidates:
+            candidates.append(p)
+    return candidates
+
+
+def _connect(ports: list[str]) -> serial.Serial:
+    """Open the scale on any of ``ports``, retrying forever until one succeeds.
+
+    Whichever port succeeds is moved to the front of ``ports`` (in place) so
+    subsequent reconnects try it first — same idea as _post_weight's server
+    promotion, since whichever COM number is actually live can drift (see
+    KNOWN_FALLBACK_PORTS).
+    """
     attempt = 0
     while True:
         attempt += 1
-        log.info("[serial] opening %s (attempt %d) …", port, attempt)
-        for baud in BAUD_RATES:
-            ser = _open_port(port, baud)
-            if ser:
-                return ser
+        for i, port in enumerate(ports):
+            log.info("[serial] opening %s (attempt %d) …", port, attempt)
+            for baud in BAUD_RATES:
+                ser = _open_port(port, baud)
+                if ser:
+                    if i != 0:
+                        ports.insert(0, ports.pop(i))
+                    return ser
         log.warning(
-            "[serial] could not open %s — retrying in %ds.\n"
+            "[serial] could not open any of %s — retrying in %ds.\n"
             "  • Is the scale plugged in / paired and powered on?\n"
-            "  • Is another application (e.g. the scale software) using the port?",
-            port, RETRY_INTERVAL_S,
+            "  • Is another application (e.g. the scale software) using the port?\n"
+            "  • Bluetooth SPP port assignment can drift — check with: python -m serial.tools.list_ports -v",
+            ports, RETRY_INTERVAL_S,
         )
         time.sleep(RETRY_INTERVAL_S)
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
-def _read_next_weight(ser: serial.Serial, port: str, last_weight, last_data_at: float):
+def _read_next_weight(ser: serial.Serial, ports: list[str], last_weight, last_data_at: float):
     """Read and parse one line from the scale.
 
     Returns ``(ser, weight, last_data_at)`` — ``ser`` is a freshly reconnected
@@ -174,7 +209,7 @@ def _read_next_weight(ser: serial.Serial, port: str, last_weight, last_data_at: 
         except Exception:
             pass
         time.sleep(5)
-        return _connect(port), None, time.monotonic()
+        return _connect(ports), None, time.monotonic()
 
     if not raw:
         if time.monotonic() - last_data_at > _STALE_CONNECTION_S:
@@ -186,7 +221,7 @@ def _read_next_weight(ser: serial.Serial, port: str, last_weight, last_data_at: 
                 ser.close()
             except Exception:
                 pass
-            return _connect(port), None, time.monotonic()
+            return _connect(ports), None, time.monotonic()
         time.sleep(0.05)
         return ser, None, last_data_at
 
@@ -267,7 +302,9 @@ def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> Non
     session = _build_session(insecure_ssl)
     _wait_until_any_reachable(session, servers, HTTP_RETRY_INTERVAL_S)
 
-    ser = _connect(port)
+    ports = _candidate_ports(port)
+    log.info("[serial] candidate ports (in order): %s", ports)
+    ser = _connect(ports)
 
     last_weight = None
     last_data_at = time.monotonic()
@@ -275,7 +312,7 @@ def run(port: str, server: str, station: str, insecure_ssl: bool = False) -> Non
 
     try:
         while True:
-            ser, weight, last_data_at = _read_next_weight(ser, port, last_weight, last_data_at)
+            ser, weight, last_data_at = _read_next_weight(ser, ports, last_weight, last_data_at)
             if weight is None:
                 continue
 
