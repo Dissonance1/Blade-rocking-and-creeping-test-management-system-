@@ -866,7 +866,6 @@ Every entered value in this work order will be erased. This cannot be undone.`
                               ref={(el) => registerInputRef(entry.blade_id, "creep", el)}
                               type="number"
                               step="0.01"
-                              min={0}
                               placeholder="0.00"
                               value={row.creep}
                               onChange={(e) => {

@@ -125,7 +125,8 @@ class RockingCreepUpdate(BaseSchema):
     """
 
     rocking_value: Decimal | None = Field(default=None, ge=0)
-    creep_value: Decimal | None = Field(default=None, ge=0)
+    # Creep can legitimately read negative on the DTI gauge; Rocking can't.
+    creep_value: Decimal | None = Field(default=None)
     hardware_station: str | None = Field(
         default=None,
         description="Which physical hardware station's DTI gauge produced this reading (e.g. '1', '2')",
